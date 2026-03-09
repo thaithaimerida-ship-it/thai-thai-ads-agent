@@ -1,0 +1,43 @@
+{
+  "client_name": "Acme Corp",
+  "date_range": "2023-10-01 to 2023-10-31",
+  "campaigns": [
+    {
+      "campaign_id": "1001",
+      "campaign_name": "Search - Brand",
+      "status": "Enabled",
+      "metrics": {
+        "impressions": 150000,
+        "clicks": 15000,
+        "ctr": 10.0,
+        "cpc": 0.50,
+        "cost": 7500.0,
+        "conversions": 1000,
+        "cost_per_conversion": 7.50,
+        "conversion_rate": 6.67,
+        "roas": 5.0
+      }
+    },
+    {
+      "campaign_id": "1002",
+      "campaign_name": "Performance Max - Core Products",
+      "status": "Enabled",
+      "metrics": {
+        "impressions": 500000,
+        "clicks": 20000,
+        "ctr": 4.0,
+        "cpc": 0.75,
+        "cost": 15000.0,
+        "conversions": 1500,
+        "cost_per_conversion": 10.00,
+        "conversion_rate": 7.5,
+        "roas": 4.5
+      }
+    }
+  ],
+  "overall_metrics": {
+    "total_spend": 22500.0,
+    "total_conversions": 2500,
+    "overall_roas": 4.67
+  }
+}

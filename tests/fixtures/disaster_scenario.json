@@ -1,0 +1,43 @@
+{
+  "client_name": "Acme Corp",
+  "date_range": "2023-10-01 to 2023-10-31",
+  "campaigns": [
+    {
+      "campaign_id": "2001",
+      "campaign_name": "Search - Generic Unoptimized",
+      "status": "Enabled",
+      "metrics": {
+        "impressions": 50000,
+        "clicks": 2000,
+        "ctr": 4.0,
+        "cpc": 5.50,
+        "cost": 11000.0,
+        "conversions": 2,
+        "cost_per_conversion": 5500.0,
+        "conversion_rate": 0.1,
+        "roas": 0.05
+      }
+    },
+    {
+      "campaign_id": "2002",
+      "campaign_name": "Display - Broad Audience",
+      "status": "Enabled",
+      "metrics": {
+        "impressions": 1000000,
+        "clicks": 15000,
+        "ctr": 1.5,
+        "cpc": 1.10,
+        "cost": 16500.0,
+        "conversions": 0,
+        "cost_per_conversion": 0.0,
+        "conversion_rate": 0.0,
+        "roas": 0.0
+      }
+    }
+  ],
+  "overall_metrics": {
+    "total_spend": 27500.0,
+    "total_conversions": 2,
+    "overall_roas": 0.02
+  }
+}

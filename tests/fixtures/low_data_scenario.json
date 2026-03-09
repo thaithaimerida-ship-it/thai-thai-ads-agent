@@ -1,0 +1,27 @@
+{
+  "client_name": "Startup Inc",
+  "date_range": "2023-10-25 to 2023-10-31",
+  "campaigns": [
+    {
+      "campaign_id": "3001",
+      "campaign_name": "Search - Alpha Launch",
+      "status": "Enabled",
+      "metrics": {
+        "impressions": 500,
+        "clicks": 15,
+        "ctr": 3.0,
+        "cpc": 2.00,
+        "cost": 30.0,
+        "conversions": 0,
+        "cost_per_conversion": 0.0,
+        "conversion_rate": 0.0,
+        "roas": 0.0
+      }
+    }
+  ],
+  "overall_metrics": {
+    "total_spend": 30.0,
+    "total_conversions": 0,
+    "overall_roas": 0.0
+  }
+}
