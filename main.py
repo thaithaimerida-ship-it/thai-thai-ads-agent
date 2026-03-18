@@ -16,16 +16,35 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Importaciones del sistema existente
-from engine.ads_client import (
-    get_ads_client, 
-    fetch_campaign_data, 
-    fetch_keyword_data, 
-    fetch_search_term_data,
-    add_negative_keyword
-)
-from engine.normalizer import normalize_google_ads_data
-from engine.ga4_client import fetch_ga4_events_detailed
+# ============================================================================
+# IMPORTACIONES LAZY - Solo cuando se necesiten
+# ============================================================================
+
+def get_engine_modules():
+    """Importa módulos del engine solo cuando se necesiten para evitar crashes al inicio"""
+    try:
+        from engine.ads_client import (
+            get_ads_client, 
+            fetch_campaign_data, 
+            fetch_keyword_data, 
+            fetch_search_term_data,
+            add_negative_keyword
+        )
+        from engine.normalizer import normalize_google_ads_data
+        from engine.ga4_client import fetch_ga4_events_detailed
+        
+        return {
+            "get_ads_client": get_ads_client,
+            "fetch_campaign_data": fetch_campaign_data,
+            "fetch_keyword_data": fetch_keyword_data,
+            "fetch_search_term_data": fetch_search_term_data,
+            "add_negative_keyword": add_negative_keyword,
+            "normalize_google_ads_data": normalize_google_ads_data,
+            "fetch_ga4_events_detailed": fetch_ga4_events_detailed
+        }
+    except ImportError as e:
+        print(f"⚠️ Warning: Could not import engine modules: {e}")
+        return None
 
 app = FastAPI(
     title="Thai Thai Ads Mission Control",
@@ -549,19 +568,24 @@ async def mission_control_data():
     Integra las 7 skills
     """
     try:
-        client = get_ads_client()
+        # Importar módulos del engine de forma lazy
+        engine = get_engine_modules()
+        if not engine:
+            raise Exception("Engine modules not available - check imports")
+        
         target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
         
-        campaigns = fetch_campaign_data(client, target_id)
-        keywords = fetch_keyword_data(client, target_id)
-        search_terms = fetch_search_term_data(client, target_id)
+        client = engine["get_ads_client"]()
+        campaigns = engine["fetch_campaign_data"](client, target_id)
+        keywords = engine["fetch_keyword_data"](client, target_id)
+        search_terms = engine["fetch_search_term_data"](client, target_id)
         
         try:
-            ga4_data = fetch_ga4_events_detailed(days=7)
+            ga4_data = engine["fetch_ga4_events_detailed"](days=7)
         except:
             ga4_data = {"events_by_hour": {}}
         
-        normalized = normalize_google_ads_data(campaigns, keywords, search_terms)
+        normalized = engine["normalize_google_ads_data"](campaigns, keywords, search_terms)
         
         # SKILL 1: Waste Detector
         waste_data = detect_waste(campaigns, keywords, search_terms)
@@ -638,14 +662,25 @@ async def mission_control_data():
         }
         
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"ERROR in /mission-control: {error_details}")
+        return {
+            "status": "error", 
+            "message": str(e),
+            "details": error_details
+        }
 
 @app.post("/approve-proposals")
 async def approve_proposals(request: ApproveProposalRequest):
     """Ejecuta propuestas aprobadas"""
     try:
-        client = get_ads_client()
+        engine = get_engine_modules()
+        if not engine:
+            raise Exception("Engine modules not available")
+        
         target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        client = engine["get_ads_client"]()
         
         results = []
         for decision_id in request.decision_ids:
@@ -668,10 +703,13 @@ async def approve_proposals(request: ApproveProposalRequest):
 async def execute_kill_switch():
     """KILL SWITCH: Pausa campañas críticas (CPA >$25)"""
     try:
-        client = get_ads_client()
-        target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        engine = get_engine_modules()
+        if not engine:
+            raise Exception("Engine modules not available")
         
-        campaigns = fetch_campaign_data(client, target_id)
+        target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        client = engine["get_ads_client"]()
+        campaigns = engine["fetch_campaign_data"](client, target_id)
         
         paused = []
         for camp in campaigns:
@@ -713,13 +751,13 @@ async def startup_event():
     print("✅ Skill #6: Budget Allocator")
     print("✅ Skill #7: Ad Performance Optimizer")
     print("=" * 70)
-    print(f"📡 Servidor: http://localhost:8000")
-    print(f"📚 Docs: http://localhost:8000/docs")
-    print(f"🎯 Mission Control: http://localhost:8000/mission-control")
+    port = int(os.environ.get("PORT", 8080))
+    print(f"📡 Servidor: http://0.0.0.0:{port}")
+    print(f"📚 Docs: http://0.0.0.0:{port}/docs")
+    print(f"🎯 Mission Control: http://0.0.0.0:{port}/mission-control")
     print("=" * 70)
 
 if __name__ == "__main__":
     import uvicorn
-    import os
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
