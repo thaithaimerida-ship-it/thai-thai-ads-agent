@@ -4,3 +4,4 @@ pydantic>=2.0.0
 ag2>=0.3.2
 openai>=1.40.0
 python-dotenv
+google-ads

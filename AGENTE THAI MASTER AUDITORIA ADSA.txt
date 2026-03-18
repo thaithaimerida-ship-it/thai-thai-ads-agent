@@ -1,0 +1,6 @@
+EMAIL:
+<id>@thai-thai-ads-master-agent.iam.gserviceaccount.com
+
+🎉 CUENTA DE SERVICIO LISTA:
+Nombre: thai-thai-ga4-reader
+Email: thai-thai-ga4-reader@thai-thai-ads-master-agent.iam.gserviceaccount.com
