@@ -43,7 +43,14 @@ def get_engine_modules():
             "fetch_ga4_events_detailed": fetch_ga4_events_detailed
         }
     except ImportError as e:
-        print(f"⚠️ Warning: Could not import engine modules: {e}")
+        print(f"⚠️ ImportError: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    except Exception as e:
+        print(f"⚠️ Unexpected error in get_engine_modules: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 app = FastAPI(
