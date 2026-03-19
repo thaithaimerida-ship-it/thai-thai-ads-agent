@@ -211,9 +211,6 @@ tailwind.config = {
 
 <div class="max-w-[1800px] mx-auto px-5 py-5 space-y-4">
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     TOPBAR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <header class="flex items-center justify-between gap-4 flex-wrap">
   <div class="flex items-center gap-3">
     <div class="w-9 h-9 rounded-xl flex items-center justify-center font-black text-sm text-white"
@@ -225,29 +222,22 @@ tailwind.config = {
   </div>
 
   <div class="flex items-center gap-3 flex-wrap">
-    <!-- API status -->
     <div class="flex items-center gap-2 px-3 py-1.5 card rounded-full text-xs">
       <span id="api-dot" class="dot-live bg-slate-600"></span>
       <span id="api-txt" class="text-ink-muted font-mono">—</span>
     </div>
-    <!-- Último update -->
     <span id="ts" class="text-xs text-ink-muted font-mono hidden"></span>
-    <!-- Range -->
     <select id="date-range" class="input w-36" onchange="refreshAll()">
       <option value="7">Últimos 7 días</option>
       <option value="30">Últimos 30 días</option>
       <option value="90">Últimos 90 días</option>
     </select>
-    <!-- Refresh -->
     <button class="btn btn-violet" id="refresh-btn" onclick="refreshAll()">
       <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Actualizar
     </button>
   </div>
 </header>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     KPI ROW
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="kpi-row">
   <div class="card p-5">
     <div class="text-[11px] text-ink-muted uppercase tracking-widest mb-3 flex items-center justify-between">
@@ -279,9 +269,6 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     ALERTS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <div id="alerts-container" class="card card-rose p-5">
   <div class="section-title mb-3">
     <i data-lucide="zap" class="w-4 h-4 text-rose-400"></i>
@@ -293,9 +280,6 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     CHARTS ROW
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
   <div class="card p-5">
     <div class="section-title mb-4">
@@ -320,9 +304,6 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     AI STRATEGY HUB
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <div class="card card-amber p-5">
   <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
     <div class="section-title">
@@ -339,9 +320,6 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     KEYWORDS TABLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <div class="card p-5">
   <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
     <div class="section-title">
@@ -403,9 +381,6 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     CAMPAIGNS TABLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <div class="card p-5">
   <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
     <div class="section-title">
@@ -445,9 +420,6 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     SIMULATOR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <div id="simulator-container" class="card card-glow p-6">
   <div class="section-title mb-5">
     <i data-lucide="flask-conical" class="w-4 h-4 text-violet"></i>
@@ -478,7 +450,6 @@ tailwind.config = {
     </div>
   </div>
 
-  <!-- Delta cards (hidden until run) -->
   <div id="sim-deltas" class="hidden grid grid-cols-3 gap-3 mb-4">
     <div class="card p-4 text-center">
       <p class="text-[10px] text-ink-muted mb-1">Gasto proyectado</p>
@@ -502,9 +473,6 @@ tailwind.config = {
   <div id="simulation-chart"></div>
 </div>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     TIMELINE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <div id="timeline" class="card p-5">
   <div class="section-title mb-4">
     <i data-lucide="history" class="w-4 h-4 text-violet"></i>
@@ -519,12 +487,7 @@ tailwind.config = {
   </div>
 </div>
 
-</div><!-- /wrap -->
-
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     MODAL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
-<div id="modal-backdrop">
+</div><div id="modal-backdrop">
   <div id="modal-box">
     <div class="flex items-start gap-3 mb-5">
       <div class="w-9 h-9 rounded-xl bg-rose-500/15 flex items-center justify-center flex-shrink-0">
@@ -545,14 +508,10 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- TOASTS -->
 <div id="toasts"></div>
 
-<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-     JS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
 <script>
-const API = 'http://localhost:8000';
+const API = 'https://thai-ads-backend-624172071613.northamerica-south1.run.app';
 
 const S = {
   kw: [], camps: [], kwSum: {}, campSum: {},
