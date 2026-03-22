@@ -107,3 +107,24 @@ def test_disable_unprotected_conversion_calls_api():
     result = disable_conversion_action(mock_client, "4021070209", "123", "some_other_conversion")
     assert result["status"] == "success"
     mock_service.mutate_conversion_actions.assert_called_once()
+
+
+# ── TASK 8 ──────────────────────────────────────────────────────────────────
+
+def test_create_rsa_requires_min_headlines():
+    from unittest.mock import MagicMock
+    from engine.ads_client import create_rsa
+    mock_client = MagicMock()
+    result = create_rsa(mock_client, "4021070209", "customers/123/adGroups/456",
+                        headlines=["A", "B"], descriptions=["D1", "D2"])
+    assert result["status"] == "error"
+    assert "mínimo" in result["message"]
+
+def test_create_rsa_requires_min_descriptions():
+    from unittest.mock import MagicMock
+    from engine.ads_client import create_rsa
+    mock_client = MagicMock()
+    result = create_rsa(mock_client, "4021070209", "customers/123/adGroups/456",
+                        headlines=["A", "B", "C"], descriptions=["D1"])
+    assert result["status"] == "error"
+    assert "mínimo" in result["message"]
