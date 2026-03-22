@@ -40,6 +40,30 @@ def _calculate_success_score(cpa: float, has_conversions: bool) -> int:
     else:
         return 20 # Problemático
 
+def _get_cpa_targets(campaign_name: str) -> dict:
+    """Retorna CPA targets según tipo de campaña detectado por nombre."""
+    name = campaign_name.lower()
+    if "delivery" in name:
+        return {"ideal": 25, "max": 45, "critical": 80}
+    elif "reserva" in name:
+        return {"ideal": 50, "max": 85, "critical": 120}
+    else:  # local / brand / default
+        return {"ideal": 35, "max": 60, "critical": 100}
+
+def _calculate_success_score_v2(cpa: float, has_conversions: bool, campaign_name: str = "") -> int:
+    """Score por campaña usando CPA targets reales por tipo."""
+    if not has_conversions:
+        return 20
+    targets = _get_cpa_targets(campaign_name)
+    if cpa <= targets["ideal"]:
+        return 95
+    elif cpa <= targets["max"]:
+        return 75
+    elif cpa <= targets["critical"]:
+        return 45
+    else:
+        return 20
+
 def _get_robust_spend(campaign_dict: dict) -> float:
     """
     ¡EL FIX MAESTRO OMNISCIENTE!
