@@ -372,3 +372,178 @@ def disable_conversion_action(client, customer_id: str, conversion_action_id: st
         return {"status": "success", "conversion_action_id": conversion_action_id}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ── TASK 7 ──────────────────────────────────────────────────────────────────
+
+def create_search_campaign(client, customer_id: str, name: str,
+                            budget_micros: int, target_cpa_micros: int) -> dict:
+    """
+    Crea campaña Search en 2 pasos:
+    1) CampaignBudget, 2) Campaign con Target CPA.
+    La campaña se crea en estado PAUSED para revisión antes de activar.
+    budget_micros = MXN × 1,000,000
+    """
+    try:
+        # Paso 1: Crear budget
+        budget_service = client.get_service("CampaignBudgetService")
+        budget_operation = client.get_type("CampaignBudgetOperation")
+
+        budget = budget_operation.create
+        budget.name = f"Budget - {name}"
+        budget.amount_micros = budget_micros
+        budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
+
+        budget_response = budget_service.mutate_campaign_budgets(
+            customer_id=customer_id,
+            operations=[budget_operation]
+        )
+        budget_resource = budget_response.results[0].resource_name
+
+        # Paso 2: Crear campaign
+        campaign_service = client.get_service("CampaignService")
+        campaign_operation = client.get_type("CampaignOperation")
+
+        campaign = campaign_operation.create
+        campaign.name = name
+        campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.SEARCH
+        campaign.status = client.enums.CampaignStatusEnum.PAUSED
+        campaign.campaign_budget = budget_resource
+        campaign.target_cpa.target_cpa_micros = target_cpa_micros
+        campaign.network_settings.target_google_search = True
+        campaign.network_settings.target_search_network = True
+        campaign.network_settings.target_content_network = False
+
+        campaign_response = campaign_service.mutate_campaigns(
+            customer_id=customer_id,
+            operations=[campaign_operation]
+        )
+        campaign_resource = campaign_response.results[0].resource_name
+
+        return {
+            "status": "success",
+            "budget_resource": budget_resource,
+            "campaign_resource": campaign_resource
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ── TASK 8 ──────────────────────────────────────────────────────────────────
+
+def create_ad_group(client, customer_id: str, campaign_resource_name: str,
+                    name: str, cpc_bid_micros: int = 20_000_000) -> dict:
+    """Crea ad group dentro de una campaña. cpc_bid_micros default = $20 MXN"""
+    try:
+        ad_group_service = client.get_service("AdGroupService")
+        operation = client.get_type("AdGroupOperation")
+
+        ad_group = operation.create
+        ad_group.name = name
+        ad_group.campaign = campaign_resource_name
+        ad_group.status = client.enums.AdGroupStatusEnum.ENABLED
+        ad_group.type_ = client.enums.AdGroupTypeEnum.SEARCH_STANDARD
+        ad_group.cpc_bid_micros = cpc_bid_micros
+
+        response = ad_group_service.mutate_ad_groups(
+            customer_id=customer_id,
+            operations=[operation]
+        )
+        return {"status": "success", "resource_name": response.results[0].resource_name}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def create_rsa(client, customer_id: str, ad_group_resource_name: str,
+               headlines: list, descriptions: list,
+               final_url: str = "https://www.thaithaimerida.com") -> dict:
+    """
+    Crea Responsive Search Ad.
+    Requiere mínimo 3 headlines (max 30 chars cada uno) y 2 descriptions (max 90 chars).
+    """
+    if len(headlines) < 3 or len(descriptions) < 2:
+        return {"status": "error", "message": "RSA requiere mínimo 3 headlines y 2 descriptions"}
+    try:
+        ad_group_ad_service = client.get_service("AdGroupAdService")
+        operation = client.get_type("AdGroupAdOperation")
+
+        ad_group_ad = operation.create
+        ad_group_ad.ad_group = ad_group_resource_name
+        ad_group_ad.status = client.enums.AdGroupAdStatusEnum.ENABLED
+
+        rsa = ad_group_ad.ad.responsive_search_ad
+        for text in headlines[:15]:
+            asset = client.get_type("AdTextAsset")
+            asset.text = text[:30]
+            rsa.headlines.append(asset)
+        for text in descriptions[:4]:
+            asset = client.get_type("AdTextAsset")
+            asset.text = text[:90]
+            rsa.descriptions.append(asset)
+
+        ad_group_ad.ad.final_urls.append(final_url)
+
+        response = ad_group_ad_service.mutate_ad_group_ads(
+            customer_id=customer_id,
+            operations=[operation]
+        )
+        return {"status": "success", "resource_name": response.results[0].resource_name}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def add_keyword_to_ad_group(client, customer_id: str, ad_group_resource_name: str,
+                             keyword_text: str, match_type: str = "EXACT") -> dict:
+    """Agrega keyword a un ad group. match_type: 'EXACT' o 'BROAD'"""
+    try:
+        ad_group_criterion_service = client.get_service("AdGroupCriterionService")
+        operation = client.get_type("AdGroupCriterionOperation")
+
+        criterion = operation.create
+        criterion.ad_group = ad_group_resource_name
+        criterion.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
+        criterion.keyword.text = keyword_text
+        criterion.keyword.match_type = getattr(client.enums.KeywordMatchTypeEnum, match_type)
+
+        response = ad_group_criterion_service.mutate_ad_group_criteria(
+            customer_id=customer_id,
+            operations=[operation]
+        )
+        return {"status": "success", "keyword": keyword_text, "match_type": match_type}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ── TASK 9 ──────────────────────────────────────────────────────────────────
+
+def update_ad_schedule(client, customer_id: str, campaign_id: str,
+                       day_of_week: str, start_hour: int, end_hour: int,
+                       bid_modifier: float = 0.0) -> dict:
+    """
+    Configura horario de anuncios para un día/hora específico.
+    day_of_week: 'MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'
+    bid_modifier: 0.0 = normal, 0.20 = +20%, -1.0 = pausar
+    IMPORTANTE: start_hour debe ser < end_hour (no puede cruzar medianoche).
+    Para pausa nocturna usar dos llamadas: 23-24 y 0-6.
+    """
+    try:
+        criterion_service = client.get_service("CampaignCriterionService")
+        operation = client.get_type("CampaignCriterionOperation")
+        campaign_service = client.get_service("CampaignService")
+
+        criterion = operation.create
+        criterion.campaign = campaign_service.campaign_path(customer_id, campaign_id)
+        criterion.bid_modifier = 1.0 + bid_modifier
+        criterion.ad_schedule.day_of_week = getattr(client.enums.DayOfWeekEnum, day_of_week)
+        criterion.ad_schedule.start_hour = start_hour
+        criterion.ad_schedule.end_hour = end_hour
+        criterion.ad_schedule.start_minute = client.enums.MinuteOfHourEnum.ZERO
+        criterion.ad_schedule.end_minute = client.enums.MinuteOfHourEnum.ZERO
+
+        response = criterion_service.mutate_campaign_criteria(
+            customer_id=customer_id,
+            operations=[operation]
+        )
+        return {"status": "success", "day": day_of_week, "hours": f"{start_hour}-{end_hour}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
