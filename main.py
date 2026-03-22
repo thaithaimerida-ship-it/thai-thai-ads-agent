@@ -106,6 +106,9 @@ class ReservationRequest(BaseModel):
     guests: str
     occasion: Optional[str] = None
 
+class FixTrackingConfirmRequest(BaseModel):
+    conversion_action_ids: List[str]
+
 # ============================================================================
 # BASE DE DATOS — INICIALIZACIÓN
 # ============================================================================
@@ -1262,6 +1265,323 @@ async def generate_strategy():
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
+# TASK 10: /fix-tracking y /fix-tracking/confirm
+# ============================================================================
+
+@app.post("/fix-tracking")
+async def fix_tracking():
+    """
+    Paso 1: Activa auto-tagging en la cuenta Google Ads.
+    Paso 2: Lista todas las conversiones y propone cuáles desactivar.
+    Requiere confirmación vía POST /fix-tracking/confirm antes de ejecutar.
+    """
+    modules = get_engine_modules()
+    if not modules:
+        raise HTTPException(status_code=503, detail="Engine no disponible")
+
+    customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "4021070209")
+    client = modules["get_ads_client"]()
+
+    from engine.ads_client import enable_auto_tagging, fetch_conversion_actions, log_agent_action
+
+    # Paso 1: Auto-tagging
+    auto_tag_result = enable_auto_tagging(client, customer_id)
+    log_agent_action("enable_auto_tagging", f"cuenta {customer_id}", {},
+                     {"auto_tagging_enabled": True}, auto_tag_result["status"], auto_tag_result)
+
+    # Paso 2: Listar conversiones
+    conversions = fetch_conversion_actions(client, customer_id)
+    to_disable = [c for c in conversions if not c["protected"]]
+
+    return {
+        "auto_tagging": auto_tag_result,
+        "conversions_found": conversions,
+        "proposed_to_disable": to_disable,
+        "protected": [c for c in conversions if c["protected"]],
+        "next_step": "POST /fix-tracking/confirm con los IDs que apruebas desactivar"
+    }
+
+
+@app.post("/fix-tracking/confirm")
+async def fix_tracking_confirm(request: FixTrackingConfirmRequest):
+    """Desactiva las conversiones aprobadas por el usuario. Las protegidas son rechazadas automáticamente."""
+    modules = get_engine_modules()
+    if not modules:
+        raise HTTPException(status_code=503, detail="Engine no disponible")
+
+    customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "4021070209")
+    client = modules["get_ads_client"]()
+
+    from engine.ads_client import fetch_conversion_actions, disable_conversion_action, log_agent_action
+
+    all_conversions = {c["id"]: c["name"] for c in fetch_conversion_actions(client, customer_id)}
+    results = []
+
+    for ca_id in request.conversion_action_ids:
+        name = all_conversions.get(ca_id, "unknown")
+        result = disable_conversion_action(client, customer_id, ca_id, name)
+        log_agent_action("disable_conversion", name, {"status": "ENABLED"},
+                         {"status": "HIDDEN"}, result["status"], result)
+        results.append({"id": ca_id, "name": name, "result": result})
+
+    return {"results": results}
+
+
+# ============================================================================
+# TASK 11: /restructure-campaigns
+# ============================================================================
+
+@app.post("/restructure-campaigns")
+async def restructure_campaigns():
+    """
+    Restructura las 2 campañas existentes:
+    - Thai Mérida (22612348265) → Thai Mérida - Local (geo: Mérida ciudad, $50/día)
+    - Restaurant Thai On Line (22839241090) → Thai Mérida - Delivery (geo: 8km radio, $100/día)
+    Cada acción queda registrada en el audit log.
+    """
+    modules = get_engine_modules()
+    if not modules:
+        raise HTTPException(status_code=503, detail="Engine no disponible")
+
+    customer_id = "4021070209"
+    client = modules["get_ads_client"]()
+
+    from engine.ads_client import (update_campaign_name, update_campaign_location,
+                                    update_campaign_proximity, update_campaign_budget,
+                                    log_agent_action)
+
+    # Obtener budget resource names actuales
+    ga_service = client.get_service("GoogleAdsService")
+    budget_query = """
+        SELECT campaign.id, campaign.campaign_budget
+        FROM campaign
+        WHERE campaign.id IN (22612348265, 22839241090)
+    """
+    budget_map = {}
+    for row in ga_service.search(customer_id=customer_id, query=budget_query):
+        budget_map[str(row.campaign.id)] = row.campaign.campaign_budget
+
+    results = []
+
+    # --- Thai Mérida → Local ($50/día) ---
+    r1 = update_campaign_name(client, customer_id, "22612348265", "Thai Mérida - Local")
+    log_agent_action("rename_campaign", "Thai Mérida", {"name": "Thai Mérida"},
+                     {"name": "Thai Mérida - Local"}, r1["status"], r1)
+
+    r2 = update_campaign_location(client, customer_id, "22612348265", "1010182")
+    log_agent_action("update_geo", "Thai Mérida - Local", {},
+                     {"location": "Mérida ciudad (1010182)"}, r2["status"], r2)
+
+    r3 = update_campaign_budget(client, customer_id, budget_map.get("22612348265", ""), 50_000_000)
+    log_agent_action("update_budget", "Thai Mérida - Local", {},
+                     {"budget_day_mxn": 50}, r3["status"], r3)
+
+    results.append({"campaign": "Thai Mérida - Local", "rename": r1, "geo": r2, "budget": r3})
+
+    # --- Restaurant Thai On Line → Delivery ($100/día, 8km) ---
+    r4 = update_campaign_name(client, customer_id, "22839241090", "Thai Mérida - Delivery")
+    log_agent_action("rename_campaign", "Restaurant Thai On Line",
+                     {"name": "Restaurant Thai On Line"}, {"name": "Thai Mérida - Delivery"}, r4["status"], r4)
+
+    r5 = update_campaign_proximity(client, customer_id, "22839241090",
+                                    lat=20.9674, lng=-89.5926, radius_km=8.0)
+    log_agent_action("update_geo", "Thai Mérida - Delivery", {},
+                     {"proximity_km": 8, "center": "Mérida"}, r5["status"], r5)
+
+    r6 = update_campaign_budget(client, customer_id, budget_map.get("22839241090", ""), 100_000_000)
+    log_agent_action("update_budget", "Thai Mérida - Delivery", {},
+                     {"budget_day_mxn": 100}, r6["status"], r6)
+
+    results.append({"campaign": "Thai Mérida - Delivery", "rename": r4, "geo": r5, "budget": r6})
+
+    return {"status": "success", "results": results}
+
+
+# ============================================================================
+# TASK 12: /create-reservations-campaign
+# ============================================================================
+
+@app.post("/create-reservations-campaign")
+async def create_reservations_campaign():
+    """
+    Crea campaña Search 'Thai Mérida - Reservaciones':
+    - Budget: $70 MXN/día
+    - Target CPA: $65 MXN
+    - Geo: radio 30km desde centro de Mérida
+    - Ad Group + RSA + keywords incluidos
+    - Se crea en PAUSED — activar manualmente tras revisión en Google Ads UI
+    """
+    modules = get_engine_modules()
+    if not modules:
+        raise HTTPException(status_code=503, detail="Engine no disponible")
+
+    customer_id = "4021070209"
+    client = modules["get_ads_client"]()
+
+    from engine.ads_client import (create_search_campaign, create_ad_group, create_rsa,
+                                    add_keyword_to_ad_group, update_campaign_proximity,
+                                    add_negative_keyword, log_agent_action)
+
+    # 1. Crear campaña
+    campaign_result = create_search_campaign(
+        client, customer_id,
+        name="Thai Mérida - Reservaciones",
+        budget_micros=70_000_000,
+        target_cpa_micros=65_000_000
+    )
+    if campaign_result["status"] != "success":
+        raise HTTPException(status_code=500, detail=campaign_result)
+
+    campaign_resource = campaign_result["campaign_resource"]
+    campaign_id = campaign_resource.split("/")[-1]
+    log_agent_action("create_campaign", "Thai Mérida - Reservaciones", {},
+                     {"budget_day": 70, "target_cpa": 65, "status": "PAUSED"}, "success", campaign_result)
+
+    # 2. Geo: 30km desde centro de Mérida
+    update_campaign_proximity(client, customer_id, campaign_id, lat=20.9674, lng=-89.5926, radius_km=30.0)
+
+    # 3. Crear ad group
+    ad_group_result = create_ad_group(client, customer_id, campaign_resource,
+                                       "Reservaciones - General", cpc_bid_micros=20_000_000)
+    if ad_group_result["status"] != "success":
+        raise HTTPException(status_code=500, detail=ad_group_result)
+    ad_group_resource = ad_group_result["resource_name"]
+
+    # 4. Crear RSA
+    headlines = [
+        "Restaurante Thai en Mérida",
+        "Reserva tu Mesa Hoy",
+        "Cocina Artesanal Tailandesa",
+        "Thai Thai Mérida",
+        "Sabor Auténtico de Tailandia",
+        "Cena Especial en Mérida",
+        "El Mejor Thai de Yucatán",
+        "Reservaciones en Línea",
+        "Ingredientes Frescos y Auténticos",
+        "Experiencia Culinaria Única"
+    ]
+    descriptions = [
+        "Experimenta la cocina tailandesa artesanal. Reserva tu mesa en línea fácil y rápido.",
+        "Ingredientes frescos, recetas auténticas. Tu mesa te espera en Thai Thai Mérida.",
+        "Del wok a tu mesa. Sabores tailandeses únicos en el corazón de Mérida.",
+        "Reserva ahora y vive una experiencia culinaria tailandesa inigualable."
+    ]
+    create_rsa(client, customer_id, ad_group_resource, headlines, descriptions)
+
+    # 5. Keywords positivas
+    keywords = [
+        ("restaurante thai mérida", "EXACT"),
+        ("thai thai mérida", "EXACT"),
+        ("reservar restaurante mérida", "BROAD"),
+        ("cena romántica mérida", "BROAD"),
+        ("restaurante tailandés mérida", "EXACT"),
+        ("mejor restaurante thai mérida", "EXACT"),
+    ]
+    for kw_text, match_type in keywords:
+        add_keyword_to_ad_group(client, customer_id, ad_group_resource, kw_text, match_type)
+
+    # 6. Negative keywords
+    negative_kws = ["a domicilio", "delivery", "receta", "masaje", "spa", "gratis", "rappi", "uber eats"]
+    for nkw in negative_kws:
+        add_negative_keyword(client, customer_id, campaign_id, nkw)
+
+    return {
+        "status": "success",
+        "campaign": "Thai Mérida - Reservaciones",
+        "campaign_resource": campaign_resource,
+        "campaign_id": campaign_id,
+        "note": "Campaña creada en PAUSED. Revisar en Google Ads UI y activar manualmente."
+    }
+
+
+# ============================================================================
+# TASK 13: /update-ad-schedule y /audit-log
+# ============================================================================
+
+@app.post("/update-ad-schedule")
+async def update_ad_schedule_all():
+    """
+    Aplica programación horaria basada en heatmap a las 3 campañas.
+    Detecta IDs de campañas dinámicamente por nombre.
+    La pausa nocturna se divide en 2 slots (23-24 y 0-6) ya que la API
+    no permite slots que crucen medianoche.
+    """
+    modules = get_engine_modules()
+    if not modules:
+        raise HTTPException(status_code=503, detail="Engine no disponible")
+
+    customer_id = "4021070209"
+    client = modules["get_ads_client"]()
+    from engine.ads_client import update_ad_schedule, log_agent_action
+
+    # Detectar IDs de campañas dinámicamente
+    ga_service = client.get_service("GoogleAdsService")
+    campaign_query = """
+        SELECT campaign.id, campaign.name FROM campaign
+        WHERE campaign.status IN ('ENABLED', 'PAUSED')
+    """
+    campaign_ids = {}
+    for row in ga_service.search(customer_id=customer_id, query=campaign_query):
+        name = row.campaign.name.lower()
+        if "local" in name:
+            campaign_ids["local"] = str(row.campaign.id)
+        elif "delivery" in name:
+            campaign_ids["delivery"] = str(row.campaign.id)
+        elif "reserva" in name:
+            campaign_ids["reservaciones"] = str(row.campaign.id)
+
+    results = []
+    days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+
+    for campaign_key, campaign_id in campaign_ids.items():
+        for day in days:
+            r1 = update_ad_schedule(client, customer_id, campaign_id, day, 12, 14, 0.20)
+            r2 = update_ad_schedule(client, customer_id, campaign_id, day, 18, 21, 0.15)
+            r3 = update_ad_schedule(client, customer_id, campaign_id, day, 23, 24, -1.0)
+            r4 = update_ad_schedule(client, customer_id, campaign_id, day, 0, 6, -1.0)
+            results.append({
+                "campaign": campaign_key, "day": day,
+                "lunch_peak": r1, "dinner_peak": r2,
+                "night_23_24": r3, "night_0_6": r4
+            })
+        log_agent_action("update_ad_schedule", campaign_key, {},
+                         {"schedule": "heatmap-based"}, "success")
+
+    return {
+        "status": "success",
+        "campaigns_found": list(campaign_ids.keys()),
+        "results": results
+    }
+
+
+@app.get("/audit-log")
+async def get_audit_log(limit: int = 50, action_type: Optional[str] = None):
+    """
+    Retorna historial de acciones ejecutadas por el agente.
+    Params: limit (default 50), action_type (filtro opcional)
+    """
+    import sqlite3
+    conn = sqlite3.connect("thai_thai_memory.db")
+    conn.row_factory = sqlite3.Row
+
+    query = "SELECT * FROM agent_actions"
+    params = []
+    if action_type:
+        query += " WHERE action_type = ?"
+        params.append(action_type)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    return {
+        "total": len(rows),
+        "actions": [dict(r) for r in rows]
+    }
 
 
 # ============================================================================
