@@ -86,6 +86,67 @@ class AgentProposal(BaseModel):
 class ApproveProposalRequest(BaseModel):
     decision_ids: List[str]
 
+class OptimizationAction(BaseModel):
+    type: str
+    keyword: Optional[str] = None
+    campaign_id: Optional[str] = None
+    campaign_name: Optional[str] = None
+    spend: Optional[float] = None
+    reason: Optional[str] = None
+
+class ExecuteOptimizationRequest(BaseModel):
+    actions: List[OptimizationAction]
+
+class ReservationRequest(BaseModel):
+    name: str
+    email: str
+    phone: str
+    date: str
+    time: str
+    guests: str
+    occasion: Optional[str] = None
+
+# ============================================================================
+# BASE DE DATOS — INICIALIZACIÓN
+# ============================================================================
+
+def init_db():
+    """Crea las tablas necesarias si no existen."""
+    import sqlite3
+    conn = sqlite3.connect("thai_thai_memory.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reservations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            guests TEXT NOT NULL,
+            occasion TEXT,
+            status TEXT DEFAULT 'confirmed',
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.commit()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agent_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            target TEXT,
+            details_before TEXT,
+            details_after TEXT,
+            status TEXT NOT NULL,
+            google_ads_response TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
 # ============================================================================
 # SKILL 1: WASTE DETECTOR
 # ============================================================================
@@ -740,6 +801,468 @@ async def execute_kill_switch():
         
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+# ============================================================================
+# ENDPOINTS ADICIONALES
+# ============================================================================
+
+@app.get("/analyze-keywords")
+async def analyze_keywords():
+    try:
+        engine = get_engine_modules()
+        if not engine:
+            raise Exception("Engine not available")
+        target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        client = engine["get_ads_client"]()
+        keywords = engine["fetch_keyword_data"](client, target_id)
+        search_terms = engine["fetch_search_term_data"](client, target_id)
+
+        formatted_keywords = []
+        total_waste_spend = 0
+        waste_count = 0
+
+        for kw in keywords:
+            spend = kw.get("cost_micros", 0) / 1_000_000
+            conversions = float(kw.get("conversions", 0))
+            clicks = int(kw.get("clicks", 0))
+            impressions = int(kw.get("impressions", 0))
+            cpa = spend / conversions if conversions > 0 else 0
+            ctr = round(clicks / impressions * 100, 2) if impressions > 0 else 0
+
+            if spend > 50 and conversions == 0:
+                status = "waste"
+                action = "Bloquear inmediatamente"
+                total_waste_spend += spend
+                waste_count += 1
+            elif cpa > 20:
+                status = "high_cpa"
+                action = "Reducir bid o pausar"
+            elif conversions > 0 and cpa <= 15:
+                status = "high_performer"
+                action = "Escalar presupuesto"
+            else:
+                status = "needs_review"
+                action = "Monitorear"
+
+            formatted_keywords.append({
+                "text": kw.get("text", ""),
+                "campaign": kw.get("campaign_name", ""),
+                "campaign_id": str(kw.get("campaign_id", "")),
+                "spend": round(spend, 2),
+                "conversions": round(conversions, 1),
+                "cpa": round(cpa, 2),
+                "ctr": ctr,
+                "impressions": impressions,
+                "clicks": clicks,
+                "status": status,
+                "action": action
+            })
+
+        neg_suggestions = []
+        for st in search_terms:
+            st_spend = st.get("cost_micros", 0) / 1_000_000
+            st_conv = float(st.get("conversions", 0))
+            if st_spend > 20 and st_conv == 0:
+                neg_suggestions.append({"term": st.get("query", ""), "spend": round(st_spend, 2)})
+
+        return {
+            "status": "success",
+            "keywords": formatted_keywords,
+            "summary": {
+                "total": len(formatted_keywords),
+                "waste": waste_count,
+                "total_waste_spend": round(total_waste_spend, 2),
+                "potential_savings": round(total_waste_spend, 2)
+            },
+            "negative_suggestions": neg_suggestions[:20]
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "details": traceback.format_exc()}
+
+
+@app.get("/analyze-campaigns-detailed")
+async def analyze_campaigns_detailed():
+    try:
+        engine = get_engine_modules()
+        if not engine:
+            raise Exception("Engine not available")
+        target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        client = engine["get_ads_client"]()
+        campaigns = engine["fetch_campaign_data"](client, target_id)
+        keywords = engine["fetch_keyword_data"](client, target_id)
+        search_terms = engine["fetch_search_term_data"](client, target_id)
+
+        waste_data = detect_waste(campaigns, keywords, search_terms)
+        waste_by_campaign = {}
+        for item in waste_data["critical_items"] + waste_data["high_priority"]:
+            cid = item.get("campaign_id", "")
+            waste_by_campaign[cid] = waste_by_campaign.get(cid, 0) + item["spend"]
+
+        formatted = []
+        cnt = {"total": 0, "critical": 0, "warning": 0, "good": 0, "excellent": 0, "total_waste": 0.0}
+
+        for c in campaigns:
+            spend = c.get("cost_micros", 0) / 1_000_000
+            conversions = float(c.get("conversions", 0))
+            clicks = int(c.get("clicks", 0))
+            impressions = int(c.get("impressions", 0))
+            cpa = spend / conversions if conversions > 0 else 0
+            ctr = round(clicks / impressions * 100, 2) if impressions > 0 else 0
+            camp_id = str(c.get("id", ""))
+            waste = waste_by_campaign.get(camp_id, 0)
+
+            if conversions == 0 and spend > 100:
+                semaphore = "critical"
+                alerts = ["Sin conversiones con alto gasto"]
+                actions = ["Pausar campaña", "Revisar targeting"]
+            elif cpa > 25:
+                semaphore = "critical"
+                alerts = [f"CPA ${cpa:.2f} muy sobre target $15"]
+                actions = ["Reducir bids", "Revisar keywords"]
+            elif cpa > 20:
+                semaphore = "warning"
+                alerts = [f"CPA ${cpa:.2f} sobre target $15"]
+                actions = ["Optimizar bids"]
+            elif cpa > 0 and cpa <= 15:
+                semaphore = "excellent"
+                alerts = []
+                actions = ["Escalar presupuesto"]
+            else:
+                semaphore = "good"
+                alerts = []
+                actions = ["Monitorear"]
+
+            cnt[semaphore] = cnt.get(semaphore, 0) + 1
+            cnt["total"] += 1
+            cnt["total_waste"] += waste
+
+            formatted.append({
+                "id": camp_id,
+                "name": c.get("name", ""),
+                "spend": round(spend, 2),
+                "conversions": round(conversions, 1),
+                "cpa": round(cpa, 2),
+                "ctr": ctr,
+                "impressions": impressions,
+                "clicks": clicks,
+                "semaphore": semaphore,
+                "alerts": alerts,
+                "recommended_actions": actions,
+                "waste_detected": round(waste, 2)
+            })
+
+        return {
+            "status": "success",
+            "campaigns": formatted,
+            "summary": {
+                "total": cnt["total"],
+                "critical": cnt.get("critical", 0),
+                "warning": cnt.get("warning", 0),
+                "excellent": cnt.get("excellent", 0),
+                "total_waste": round(cnt["total_waste"], 2)
+            }
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "details": traceback.format_exc()}
+
+
+@app.post("/execute-optimization")
+async def execute_optimization(request: ExecuteOptimizationRequest):
+    try:
+        engine = get_engine_modules()
+        target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        results = []
+
+        for action in request.actions:
+            if action.type == "block_keyword" and engine and action.keyword and action.campaign_id:
+                client = engine["get_ads_client"]()
+                try:
+                    engine["add_negative_keyword"](client, target_id, action.campaign_id, action.keyword)
+                    result = {"action": action.type, "target": action.keyword, "status": "executed"}
+                except Exception as ex:
+                    result = {"action": action.type, "target": action.keyword, "status": "error", "message": str(ex)}
+            else:
+                result = {"action": action.type, "status": "recorded", "manual_required": True}
+
+            try:
+                import sqlite3
+                conn = sqlite3.connect("thai_thai_memory.db")
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO decisions (decision_type, reason, confidence_score, executed, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                    (action.type, action.reason or "Acción desde dashboard", 90, 1 if result.get("status") == "executed" else 0)
+                )
+                conn.commit()
+                conn.close()
+            except:
+                pass
+
+            results.append(result)
+
+        return {
+            "status": "success",
+            "executed": len([r for r in results if r.get("status") in ("executed", "recorded")]),
+            "results": results
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/insights")
+async def get_insights():
+    try:
+        engine = get_engine_modules()
+        ga4_data = {}
+        if engine:
+            try:
+                ga4_data = engine["fetch_ga4_events_detailed"](days=7)
+            except:
+                pass
+
+        hour_data = analyze_hourly_patterns(ga4_data)
+        peak_hours_dict = {}
+        if hour_data and hour_data.get("heatmap_data"):
+            vals = hour_data["heatmap_data"]["values"]
+            for h in range(24):
+                peak_hours_dict[h] = vals[0][h] if vals else 0
+
+        return {"status": "success", "insights": {"peak_hours": peak_hours_dict}}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/history")
+async def get_history(days: int = 30):
+    try:
+        import sqlite3
+        conn = sqlite3.connect("thai_thai_memory.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT decision_type, reason, confidence_score, created_at, executed FROM decisions WHERE created_at >= datetime('now', ? || ' days') ORDER BY created_at DESC",
+            (f"-{days}",)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        history = [{
+            "decision_type": r[0],
+            "reason": r[1],
+            "confidence_score": r[2],
+            "created_at": r[3],
+            "executed": bool(r[4]),
+            "success": bool(r[4])
+        } for r in rows]
+
+        total = len(history)
+        executed = sum(1 for h in history if h["executed"])
+        return {
+            "status": "success",
+            "history": history,
+            "summary": {
+                "total_decisions": total,
+                "successful": executed,
+                "executed": executed,
+                "success_rate": round(executed / total * 100) if total > 0 else 0
+            }
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def send_reservation_emails(reservation: "ReservationRequest"):
+    """Envía email de confirmación al cliente y notificación al restaurante."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    sender = os.getenv("EMAIL_SENDER", "")
+    password = os.getenv("EMAIL_APP_PASSWORD", "")
+    restaurant_email = os.getenv("EMAIL_RESTAURANT", sender)
+
+    if not sender or not password or "xxxx" in password:
+        print("⚠️ Email no configurado — agrega EMAIL_SENDER y EMAIL_APP_PASSWORD en .env")
+        return
+
+    occasion_line = f"\n🎉 <b>Ocasión:</b> {reservation.occasion}" if reservation.occasion else ""
+
+    # ── Email al cliente ──────────────────────────────────────────────────────
+    client_html = f"""
+    <div style="font-family:sans-serif;max-width:520px;margin:auto;background:#09090b;color:#fff;border-radius:16px;overflow:hidden">
+      <div style="background:#c2410c;padding:24px 32px">
+        <h1 style="margin:0;font-size:22px;letter-spacing:1px">Thai Thai Mérida</h1>
+        <p style="margin:4px 0 0;color:#fed7aa;font-size:13px">Cocina tailandesa artesanal</p>
+      </div>
+      <div style="padding:32px">
+        <h2 style="color:#4ade80;margin-top:0">Reserva confirmada ✅</h2>
+        <p style="color:#a1a1aa">Hola <b style="color:#fff">{reservation.name}</b>, ya tienes tu mesa asegurada.</p>
+        <div style="background:#18181b;border-radius:12px;padding:20px;margin:20px 0">
+          <p style="margin:6px 0;color:#d4d4d8">📅 <b>Fecha:</b> {reservation.date}</p>
+          <p style="margin:6px 0;color:#d4d4d8">🕐 <b>Hora:</b> {reservation.time}</p>
+          <p style="margin:6px 0;color:#d4d4d8">👥 <b>Personas:</b> {reservation.guests}{occasion_line}</p>
+        </div>
+        <p style="color:#a1a1aa;font-size:14px">📍 Calle 30 No. 351, Col. Emiliano Zapata Norte, Mérida, Yucatán</p>
+        <p style="color:#71717a;font-size:12px;margin-top:32px">¿Necesitas cambiar algo? Escríbenos al WhatsApp o llámanos.</p>
+      </div>
+    </div>
+    """
+
+    msg_client = MIMEMultipart("alternative")
+    msg_client["Subject"] = "Reserva confirmada — Thai Thai Merida"
+    msg_client["From"] = f"Thai Thai Merida <{sender}>"
+    msg_client["To"] = reservation.email
+    msg_client.attach(MIMEText(client_html, "html", "utf-8"))
+
+    # ── Email al restaurante ──────────────────────────────────────────────────
+    restaurant_text = (
+        f"Nueva Reserva\n\n"
+        f"Nombre: {reservation.name}\n"
+        f"Email: {reservation.email}\n"
+        f"Telefono: {reservation.phone}\n"
+        f"Fecha: {reservation.date}\n"
+        f"Hora: {reservation.time}\n"
+        f"Personas: {reservation.guests}\n"
+        f"Ocasion: {reservation.occasion or 'ninguna'}\n"
+    )
+
+    msg_restaurant = MIMEMultipart("alternative")
+    msg_restaurant["Subject"] = f"Nueva reserva: {reservation.name} — {reservation.date} {reservation.time}"
+    msg_restaurant["From"] = f"Thai Thai Reservas <{sender}>"
+    msg_restaurant["To"] = restaurant_email
+    msg_restaurant.attach(MIMEText(restaurant_text, "plain", "utf-8"))
+
+    # ── Enviar ambos ──────────────────────────────────────────────────────────
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender, password)
+            server.sendmail(sender, reservation.email, msg_client.as_bytes())
+            server.sendmail(sender, restaurant_email, msg_restaurant.as_bytes())
+        print(f"✅ Emails enviados — cliente: {reservation.email}")
+    except Exception as e:
+        print(f"⚠️ Error enviando email: {e}")
+
+
+@app.post("/reservations")
+async def create_reservation(reservation: ReservationRequest):
+    """Guarda una reserva en la base de datos y envía emails de confirmación."""
+    import asyncio
+    try:
+        import sqlite3
+        conn = sqlite3.connect("thai_thai_memory.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO reservations (name, email, phone, date, time, guests, occasion)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            reservation.name,
+            reservation.email,
+            reservation.phone,
+            reservation.date,
+            reservation.time,
+            reservation.guests,
+            reservation.occasion or ""
+        ))
+        conn.commit()
+        reservation_id = cursor.lastrowid
+        conn.close()
+
+        # Enviar emails en background — no bloquea la respuesta al cliente
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, send_reservation_emails, reservation)
+
+        return {
+            "status": "success",
+            "reservation_id": reservation_id,
+            "message": f"Reserva confirmada para {reservation.name} el {reservation.date} a las {reservation.time}"
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/reservations")
+async def get_reservations(limit: int = 50):
+    """Retorna las reservas más recientes."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect("thai_thai_memory.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, email, phone, date, time, guests, occasion, status, created_at
+            FROM reservations
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        reservations = [{
+            "id": r[0], "name": r[1], "email": r[2], "phone": r[3],
+            "date": r[4], "time": r[5], "guests": r[6],
+            "occasion": r[7], "status": r[8], "created_at": r[9]
+        } for r in rows]
+
+        return {
+            "status": "success",
+            "total": len(reservations),
+            "reservations": reservations
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/generate-strategy")
+async def generate_strategy():
+    try:
+        engine = get_engine_modules()
+        campaigns = []
+        if engine:
+            try:
+                target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+                client = engine["get_ads_client"]()
+                campaigns = engine["fetch_campaign_data"](client, target_id)
+            except:
+                pass
+
+        total_spend = sum(c.get("cost_micros", 0) / 1_000_000 for c in campaigns)
+        total_conv = sum(float(c.get("conversions", 0)) for c in campaigns)
+        avg_cpa = round(total_spend / total_conv, 2) if total_conv > 0 else 0
+
+        return {
+            "status": "success",
+            "recommendations": {
+                "key_metrics": {
+                    "CPA Actual": avg_cpa,
+                    "CPA Target": 15,
+                    "Gasto Total": round(total_spend, 2),
+                    "Conversiones": round(total_conv, 1)
+                },
+                "campaign_ideas": [
+                    {
+                        "title": "Escalar campana Local",
+                        "description": "La campana Local suele tener mejor CPA que Delivery. Considera aumentar budget 20% si CPA <= $15.",
+                        "priority": "high",
+                        "expected_roi": "+20% conversiones"
+                    },
+                    {
+                        "title": "Agregar extensiones de llamada",
+                        "description": "Los anuncios con numero de telefono tienen 30% mas CTR en restaurantes.",
+                        "priority": "medium",
+                        "expected_roi": "+30% CTR"
+                    },
+                    {
+                        "title": "Bloquear busquedas de recetas",
+                        "description": "Terminos como 'receta pad thai' no convierten. Agregar como negativos.",
+                        "priority": "high",
+                        "expected_roi": "Ahorro directo en desperdicio"
+                    }
+                ]
+            },
+            "waste_opportunities": {}
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 # ============================================================================
 # STARTUP
