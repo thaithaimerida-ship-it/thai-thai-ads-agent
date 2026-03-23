@@ -657,7 +657,17 @@ async def mission_control_data():
             ga4_data = {"events_by_hour": {}}
         
         normalized = engine["normalize_google_ads_data"](campaigns, keywords, search_terms)
-        
+
+        # BRAIN: Claude Sonnet analysis (unified GA4+Sheets+landing+memory context)
+        analysis_result = {}
+        try:
+            from engine.analyzer import analyze_campaign_data
+            enriched = dict(normalized)
+            enriched["ga4_data"] = ga4_data
+            analysis_result = analyze_campaign_data(enriched) or {}
+        except Exception as e:
+            print(f"[WARN] analyze_campaign_data failed in /mission-control: {e}")
+
         # SKILL 1: Waste Detector
         waste_data = detect_waste(campaigns, keywords, search_terms)
         
@@ -710,6 +720,20 @@ async def mission_control_data():
                 "campaigns_critical": len([c for c in campaigns if (c.get("cost_micros", 0)/1_000_000) / max(float(c.get("conversions", 1)), 1) > 20])
             },
             
+            "analysis": {
+                "summary": analysis_result.get("summary", {
+                    "success_index": round(95 if avg_cpa <= 15 else 80 if avg_cpa <= 30 else 50 if avg_cpa <= 45 else 20),
+                    "spend": round(total_spend, 2),
+                    "conversions": round(total_conversions, 1),
+                    "cpa": round(avg_cpa, 2),
+                }),
+                "proposals": analysis_result.get("proposals", proposals),
+                "landing_page": analysis_result.get("landing_page", landing_page_data),
+                "executive_summary": analysis_result.get("executive_summary", {}),
+                "alerts": analysis_result.get("alerts", []),
+                "market_opportunities": analysis_result.get("market_opportunities", []),
+            },
+
             "waste": waste_data,
             "agent_proposals": proposals,
             "heatmap": hour_data,
@@ -1430,7 +1454,6 @@ async def create_reservations_campaign():
         client, customer_id,
         name="Thai Mérida - Reservaciones",
         budget_micros=70_000_000,
-        target_cpa_micros=65_000_000
     )
     if campaign_result["status"] != "success":
         raise HTTPException(status_code=500, detail=campaign_result)
@@ -1515,7 +1538,7 @@ async def update_ad_schedule_all():
 
     customer_id = "4021070209"
     client = modules["get_ads_client"]()
-    from engine.ads_client import update_ad_schedule, log_agent_action
+    from engine.ads_client import update_ad_schedule, clear_ad_schedules, log_agent_action
 
     # Detectar IDs de campañas dinámicamente
     ga_service = client.get_service("GoogleAdsService")
@@ -1537,18 +1560,29 @@ async def update_ad_schedule_all():
     days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
 
     for campaign_key, campaign_id in campaign_ids.items():
+        clear_ad_schedules(client, customer_id, campaign_id)
+        is_smart = campaign_key in ("local", "delivery")
+        # Smart campaigns no soportan bid modifiers — usar 0.0 para todos los slots
+        # Noches: API no admite bid_modifier < 0.1. "Pausar" = no agregar criterio (sin horario = no sirve anuncios).
+        lunch_mod = 0.0 if is_smart else 0.20
+        dinner_mod = 0.0 if is_smart else 0.15
         for day in days:
-            r1 = update_ad_schedule(client, customer_id, campaign_id, day, 12, 14, 0.20)
-            r2 = update_ad_schedule(client, customer_id, campaign_id, day, 18, 21, 0.15)
-            r3 = update_ad_schedule(client, customer_id, campaign_id, day, 23, 24, -1.0)
-            r4 = update_ad_schedule(client, customer_id, campaign_id, day, 0, 6, -1.0)
+            r1 = update_ad_schedule(client, customer_id, campaign_id, day, 12, 14, lunch_mod)
+            r2 = update_ad_schedule(client, customer_id, campaign_id, day, 18, 21, dinner_mod)
+            # Pico mañana: 6-12 con modifier 0 (normal)
+            r3 = update_ad_schedule(client, customer_id, campaign_id, day, 6, 12, 0.0)
+            # 14-18 y 21-23 también activos con modifier 0
+            r4 = update_ad_schedule(client, customer_id, campaign_id, day, 14, 18, 0.0)
+            r5 = update_ad_schedule(client, customer_id, campaign_id, day, 21, 23, 0.0)
+            # 23-24 activo con modifier 0 (no hay forma de pausar vía API — omitir 0-6 = sin anuncios de madrugada)
+            r6 = update_ad_schedule(client, customer_id, campaign_id, day, 23, 24, 0.0)
             results.append({
                 "campaign": campaign_key, "day": day,
-                "lunch_peak": r1, "dinner_peak": r2,
-                "night_23_24": r3, "night_0_6": r4
+                "morning": r3, "lunch_peak": r1, "afternoon": r4,
+                "dinner_peak": r2, "evening": r5, "late_night": r6
             })
         log_agent_action("update_ad_schedule", campaign_key, {},
-                         {"schedule": "heatmap-based"}, "success")
+                         {"schedule": "heatmap-based", "is_smart": is_smart}, "success")
 
     return {
         "status": "success",
@@ -1591,20 +1625,20 @@ async def get_audit_log(limit: int = 50, action_type: Optional[str] = None):
 @app.on_event("startup")
 async def startup_event():
     print("=" * 70)
-    print("🚀 THAI THAI ADS MISSION CONTROL v12.0 - SISTEMA COMPLETO")
+    print("THAI THAI ADS MISSION CONTROL v12.0 - SISTEMA COMPLETO")
     print("=" * 70)
-    print("✅ Skill #1: Waste Detector")
-    print("✅ Skill #2: Agent Decisioner")
-    print("✅ Skill #3: Hour Optimizer")
-    print("✅ Skill #4: Landing Page Optimizer")
-    print("✅ Skill #5: Promotion Suggester")
-    print("✅ Skill #6: Budget Allocator")
-    print("✅ Skill #7: Ad Performance Optimizer")
+    print("OK Skill #1: Waste Detector")
+    print("OK Skill #2: Agent Decisioner")
+    print("OK Skill #3: Hour Optimizer")
+    print("OK Skill #4: Landing Page Optimizer")
+    print("OK Skill #5: Promotion Suggester")
+    print("OK Skill #6: Budget Allocator")
+    print("OK Skill #7: Ad Performance Optimizer")
     print("=" * 70)
     port = int(os.environ.get("PORT", 8080))
-    print(f"📡 Servidor: http://0.0.0.0:{port}")
-    print(f"📚 Docs: http://0.0.0.0:{port}/docs")
-    print(f"🎯 Mission Control: http://0.0.0.0:{port}/mission-control")
+    print(f"Servidor: http://0.0.0.0:{port}")
+    print(f"Docs: http://0.0.0.0:{port}/docs")
+    print(f"Mission Control: http://0.0.0.0:{port}/mission-control")
     print("=" * 70)
 
 if __name__ == "__main__":

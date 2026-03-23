@@ -5,7 +5,14 @@ from datetime import datetime, timedelta
 from google.ads.googleads.client import GoogleAdsClient
 from google.api_core.exceptions import GoogleAPIError
 
-PROTECTED_CONVERSIONS = {"reserva_completada", "pedido_completado_gloria_food", "click_pedir_online"}
+# Nombres exactos de conversiones reales — NUNCA desactivar
+PROTECTED_CONVERSIONS = {
+    "Pedido completado Gloria Food",
+    "Thai Thai Merida (web) reserva_completada",
+    "Thai Thai Merida (web) click_pedir_online",
+}
+# Substrings de respaldo — si el nombre contiene alguno de estos, también está protegido
+PROTECTED_SUBSTRINGS = ["reserva_completada", "click_pedir_online", "pedido completado gloria"]
 
 
 def get_date_range(days: int = 30):
@@ -175,7 +182,7 @@ def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id:
         campaign_criterion.keyword.text = keyword_text
         campaign_criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.BROAD
         
-        response = campaign_criterion_service.mutate_campaign_criteria(
+        campaign_criterion_service.mutate_campaign_criteria(
             customer_id=customer_id,
             operations=[campaign_criterion_operation]
         )
@@ -219,15 +226,13 @@ def enable_auto_tagging(client, customer_id: str) -> dict:
         customer.resource_name = customer_service.customer_path(customer_id)
         customer.auto_tagging_enabled = True
 
-        field_mask = client.get_type("FieldMask")
-        field_mask.paths.append("auto_tagging_enabled")
-        customer_operation.update_mask.CopyFrom(field_mask)
+        customer_operation.update_mask.paths[:] = ["auto_tagging_enabled"]
 
-        response = customer_service.mutate_customer(
+        customer_service.mutate_customer(
             customer_id=customer_id,
             operation=customer_operation
         )
-        return {"status": "success", "resource_name": response.resource_name}
+        return {"status": "success", "customer_id": customer_id}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -288,11 +293,13 @@ def update_campaign_location(client, customer_id: str, campaign_id: str, locatio
         campaign_service = client.get_service("CampaignService")
         geo_target_service = client.get_service("GeoTargetConstantService")
 
+        _remove_existing_geo_criteria(client, customer_id, campaign_id)
+
         criterion = criterion_operation.create
         criterion.campaign = campaign_service.campaign_path(customer_id, campaign_id)
         criterion.location.geo_target_constant = geo_target_service.geo_target_constant_path(location_id)
 
-        response = criterion_service.mutate_campaign_criteria(
+        criterion_service.mutate_campaign_criteria(
             customer_id=customer_id,
             operations=[criterion_operation]
         )
@@ -306,28 +313,91 @@ def update_campaign_proximity(client, customer_id: str, campaign_id: str,
     """Restringe campaña por radio desde coordenadas (criterion type: PROXIMITY).
     Centro Merida: lat=20.9674, lng=-89.5926
     Delivery: radius_km=8, Reservaciones: radius_km=30
+    Si no se puede eliminar el criterio existente, lo actualiza en lugar.
     """
+    criterion_service = client.get_service("CampaignCriterionService")
+    campaign_service = client.get_service("CampaignService")
+
+    def _build_proximity(op_field):
+        op_field.campaign = campaign_service.campaign_path(customer_id, campaign_id)
+        op_field.proximity.address.city_name = "Merida"
+        op_field.proximity.address.country_code = "MX"
+        op_field.proximity.geo_point.longitude_in_micro_degrees = int(lng * 1_000_000)
+        op_field.proximity.geo_point.latitude_in_micro_degrees = int(lat * 1_000_000)
+        op_field.proximity.radius = radius_km
+        op_field.proximity.radius_units = client.enums.ProximityRadiusUnitsEnum.KILOMETERS
+
     try:
-        criterion_service = client.get_service("CampaignCriterionService")
-        criterion_operation = client.get_type("CampaignCriterionOperation")
-        campaign_service = client.get_service("CampaignService")
+        _, failed = _remove_existing_geo_criteria(client, customer_id, campaign_id)
 
-        criterion = criterion_operation.create
-        criterion.campaign = campaign_service.campaign_path(customer_id, campaign_id)
-        criterion.proximity.address.city_name = "Merida"
-        criterion.proximity.address.country_code = "MX"
-        criterion.proximity.geo_point.longitude_in_micro_degrees = int(lng * 1_000_000)
-        criterion.proximity.geo_point.latitude_in_micro_degrees = int(lat * 1_000_000)
-        criterion.proximity.radius = radius_km
-        criterion.proximity.radius_units = client.enums.ProximityRadiusUnitsEnum.KILOMETERS
+        if failed:
+            # Remove failed — try in-place update of the existing PROXIMITY criterion
+            existing = _fetch_geo_criteria(client, customer_id, campaign_id)
+            existing_proximity = [c for c in existing if c["type"] == "PROXIMITY"]
+            if existing_proximity:
+                update_op = client.get_type("CampaignCriterionOperation")
+                upd = update_op.update
+                upd.resource_name = existing_proximity[0]["resource_name"]
+                upd.proximity.geo_point.longitude_in_micro_degrees = int(lng * 1_000_000)
+                upd.proximity.geo_point.latitude_in_micro_degrees = int(lat * 1_000_000)
+                upd.proximity.radius = radius_km
+                upd.proximity.radius_units = client.enums.ProximityRadiusUnitsEnum.KILOMETERS
+                update_op.update_mask.paths[:] = [
+                    "proximity.geo_point.longitude_in_micro_degrees",
+                    "proximity.geo_point.latitude_in_micro_degrees",
+                    "proximity.radius",
+                ]
+                criterion_service.mutate_campaign_criteria(
+                    customer_id=customer_id, operations=[update_op]
+                )
+                return {"status": "success", "radius_km": radius_km, "method": "updated_in_place"}
 
-        response = criterion_service.mutate_campaign_criteria(
-            customer_id=customer_id,
-            operations=[criterion_operation]
+        create_op = client.get_type("CampaignCriterionOperation")
+        _build_proximity(create_op.create)
+        criterion_service.mutate_campaign_criteria(
+            customer_id=customer_id, operations=[create_op]
         )
         return {"status": "success", "radius_km": radius_km}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+def _fetch_geo_criteria(client, customer_id: str, campaign_id: str) -> list:
+    """Retorna lista de dicts con resource_name y tipo para criterios LOCATION/PROXIMITY de la campaña."""
+    ga_service = client.get_service("GoogleAdsService")
+    query = f"""
+        SELECT campaign_criterion.resource_name, campaign_criterion.type
+        FROM campaign_criterion
+        WHERE campaign.id = {campaign_id}
+          AND campaign_criterion.type IN ('LOCATION', 'PROXIMITY')
+    """
+    results = []
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            results.append({
+                "resource_name": row.campaign_criterion.resource_name,
+                "type": row.campaign_criterion.type.name,
+            })
+    except Exception:
+        pass
+    return results
+
+
+def _remove_existing_geo_criteria(client, customer_id: str, campaign_id: str) -> tuple[list, list]:
+    """Elimina criterios LOCATION/PROXIMITY existentes. Retorna (removed, failed)."""
+    criterion_service = client.get_service("CampaignCriterionService")
+    existing = _fetch_geo_criteria(client, customer_id, campaign_id)
+    removed, failed = [], []
+    for item in existing:
+        rn = item["resource_name"]
+        op = client.get_type("CampaignCriterionOperation")
+        op.remove = rn
+        try:
+            criterion_service.mutate_campaign_criteria(customer_id=customer_id, operations=[op])
+            removed.append(rn)
+        except Exception as exc:
+            failed.append({"resource_name": rn, "error": str(exc)[:120]})
+    return removed, failed
 
 
 # ── TASK 6 ──────────────────────────────────────────────────────────────────
@@ -345,15 +415,16 @@ def fetch_conversion_actions(client, customer_id: str) -> list:
         return [{"id": str(row.conversion_action.id),
                  "name": row.conversion_action.name,
                  "status": row.conversion_action.status.name,
-                 "protected": row.conversion_action.name in PROTECTED_CONVERSIONS}
+                 "protected": row.conversion_action.name in PROTECTED_CONVERSIONS or
+                              any(s in row.conversion_action.name.lower() for s in PROTECTED_SUBSTRINGS)}
                 for row in response]
-    except Exception as e:
+    except Exception:
         return []
 
 
 def disable_conversion_action(client, customer_id: str, conversion_action_id: str, conversion_name: str) -> dict:
     """Desactiva una conversion. RECHAZA si el nombre esta en PROTECTED_CONVERSIONS."""
-    if conversion_name in PROTECTED_CONVERSIONS:
+    if conversion_name in PROTECTED_CONVERSIONS or any(s in conversion_name.lower() for s in PROTECTED_SUBSTRINGS):
         return {"status": "rejected", "reason": f"'{conversion_name}' esta protegida y no puede desactivarse"}
     try:
         ca_service = client.get_service("ConversionActionService")
@@ -365,7 +436,7 @@ def disable_conversion_action(client, customer_id: str, conversion_action_id: st
 
         ca_operation.update_mask.paths.append("status")
 
-        response = ca_service.mutate_conversion_actions(
+        ca_service.mutate_conversion_actions(
             customer_id=customer_id,
             operations=[ca_operation]
         )
@@ -377,7 +448,7 @@ def disable_conversion_action(client, customer_id: str, conversion_action_id: st
 # ── TASK 7 ──────────────────────────────────────────────────────────────────
 
 def create_search_campaign(client, customer_id: str, name: str,
-                            budget_micros: int, target_cpa_micros: int) -> dict:
+                            budget_micros: int) -> dict:
     """
     Crea campaña Search en 2 pasos:
     1) CampaignBudget, 2) Campaign con Target CPA.
@@ -390,7 +461,7 @@ def create_search_campaign(client, customer_id: str, name: str,
         budget_operation = client.get_type("CampaignBudgetOperation")
 
         budget = budget_operation.create
-        budget.name = f"Budget - {name}"
+        budget.name = f"Budget - {name} {datetime.now().strftime('%m%d%H%M')}"
         budget.amount_micros = budget_micros
         budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
 
@@ -409,10 +480,13 @@ def create_search_campaign(client, customer_id: str, name: str,
         campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.SEARCH
         campaign.status = client.enums.CampaignStatusEnum.PAUSED
         campaign.campaign_budget = budget_resource
-        campaign.target_cpa.target_cpa_micros = target_cpa_micros
+        campaign.manual_cpc.enhanced_cpc_enabled = False
         campaign.network_settings.target_google_search = True
         campaign.network_settings.target_search_network = True
         campaign.network_settings.target_content_network = False
+        campaign.contains_eu_political_advertising = (
+            client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
+        )
 
         campaign_response = campaign_service.mutate_campaigns(
             customer_id=customer_id,
@@ -505,13 +579,38 @@ def add_keyword_to_ad_group(client, customer_id: str, ad_group_resource_name: st
         criterion.keyword.text = keyword_text
         criterion.keyword.match_type = getattr(client.enums.KeywordMatchTypeEnum, match_type)
 
-        response = ad_group_criterion_service.mutate_ad_group_criteria(
+        ad_group_criterion_service.mutate_ad_group_criteria(
             customer_id=customer_id,
             operations=[operation]
         )
         return {"status": "success", "keyword": keyword_text, "match_type": match_type}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+def clear_ad_schedules(client, customer_id: str, campaign_id: str) -> int:
+    """Elimina todos los criterios AD_SCHEDULE existentes de una campaña. Retorna cantidad eliminada."""
+    ga_service = client.get_service("GoogleAdsService")
+    criterion_service = client.get_service("CampaignCriterionService")
+    query = f"""
+        SELECT campaign_criterion.resource_name
+        FROM campaign_criterion
+        WHERE campaign.id = {campaign_id}
+          AND campaign_criterion.type = 'AD_SCHEDULE'
+    """
+    removed = 0
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            op = client.get_type("CampaignCriterionOperation")
+            op.remove = row.campaign_criterion.resource_name
+            try:
+                criterion_service.mutate_campaign_criteria(customer_id=customer_id, operations=[op])
+                removed += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return removed
 
 
 # ── TASK 9 ──────────────────────────────────────────────────────────────────
@@ -540,7 +639,7 @@ def update_ad_schedule(client, customer_id: str, campaign_id: str,
         criterion.ad_schedule.start_minute = client.enums.MinuteOfHourEnum.ZERO
         criterion.ad_schedule.end_minute = client.enums.MinuteOfHourEnum.ZERO
 
-        response = criterion_service.mutate_campaign_criteria(
+        criterion_service.mutate_campaign_criteria(
             customer_id=customer_id,
             operations=[operation]
         )
