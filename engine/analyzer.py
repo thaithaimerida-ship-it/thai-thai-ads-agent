@@ -201,17 +201,121 @@ def _call_openai_analysis(data: dict) -> dict:
         print(f"❌ Error al consultar a OpenAI: {e}")
         raise e
 
+def _call_claude_analysis(data: dict) -> dict:
+    """Claude Sonnet 4.6 — primary AI brain, replaces GPT-4o-mini."""
+    import anthropic
+    from engine.prompt import THAI_THAI_ADS_MASTER_PROMPT
+
+    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    user_message = (
+        f"FECHA ACTUAL: {fecha_hoy}\n\n"
+        f"TOTALES PRE-CALCULADOS (usa estos valores exactos en el objeto summary):\n"
+        f"{json.dumps(data.get('totals', {}), indent=2)}\n\n"
+        f"DATOS DE GOOGLE ADS:\n"
+        f"{json.dumps(data.get('campaign_data', data.get('campaigns', [])), separators=(',', ':'))}\n\n"
+        f"DATOS GA4 (ultimos 7 dias):\n"
+        f"{json.dumps(data.get('ga4_data', {}), separators=(',', ':'))}\n\n"
+        f"DATOS NEGOCIO REAL (Google Sheets):\n"
+        f"{json.dumps(data.get('sheets_data', {}), separators=(',', ':'))}\n\n"
+        f"AUDITORIA LANDING PAGE:\n"
+        f"{json.dumps(data.get('landing_audit', {}), separators=(',', ':'))}\n\n"
+        f"MEMORIA HISTORICA (patrones aprendidos):\n"
+        f"{json.dumps(data.get('memory_context', {}), separators=(',', ':'))}"
+    )
+
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        system=THAI_THAI_ADS_MASTER_PROMPT,
+        messages=[{"role": "user", "content": user_message}]
+    )
+
+    raw = response.content[0].text
+    result = _safe_json_loads(raw)
+
+    # Inject pre-calculated totals to prevent hallucination
+    if result and "summary" in result and "totals" in data:
+        t = data["totals"]
+        s = result["summary"]
+        s["spend"] = t.get("calculated_total_spend", s.get("spend", 0))
+        s["conversions"] = t.get("calculated_total_conversions", s.get("conversions", 0))
+        s["cpa"] = t.get("calculated_global_cpa", s.get("cpa", 0))
+        s["ctr"] = t.get("calculated_total_ctr", s.get("ctr", 0))
+        s["conversion_rate"] = t.get("calculated_total_conversion_rate", s.get("conversion_rate", 0))
+        s["success_index"] = t.get("calculated_success_index", s.get("success_index", 50))
+        s["success_label"] = t.get("calculated_success_label", s.get("success_label", ""))
+
+    return result
+
+
 def analyze_campaign_data(data: dict) -> dict:
-    if not os.getenv("OPENAI_API_KEY"):
+    """
+    Main analysis entry point.
+    Tries Claude Sonnet first, falls back to OpenAI, then local fallback.
+    Enriches data with GA4, Sheets, landing audit, and memory before calling LLM.
+    """
+    if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):
         return _fallback_analysis(data)
 
-    try:
-        llm_result = _call_openai_analysis(data)
-        if llm_result:
-            if "analysis" in llm_result:
-                return llm_result["analysis"]
-            return llm_result
-    except Exception as e:
-        print(f"❌ Error crítico en flujo de análisis: {str(e)}")
+    # Enrich with GA4
+    if "ga4_data" not in data:
+        try:
+            from engine.ga4_client import fetch_ga4_events_detailed
+            data["ga4_data"] = fetch_ga4_events_detailed(days=7)
+        except Exception as e:
+            print(f"[WARN] GA4 fetch failed: {e}")
+            data["ga4_data"] = {}
+
+    # Enrich with Google Sheets
+    if "sheets_data" not in data:
+        try:
+            from engine.sheets_client import fetch_sheets_data
+            data["sheets_data"] = fetch_sheets_data(days=7)
+        except Exception as e:
+            print(f"[WARN] Sheets fetch failed: {e}")
+            data["sheets_data"] = {}
+
+    # Enrich with landing page audit
+    if "landing_audit" not in data:
+        try:
+            from engine.landing_page_auditor import get_full_landing_audit
+            data["landing_audit"] = get_full_landing_audit(data.get("ga4_data", {}))
+        except Exception as e:
+            print(f"[WARN] Landing audit failed: {e}")
+            data["landing_audit"] = {}
+
+    # Enrich with memory context
+    if "memory_context" not in data:
+        try:
+            from engine.memory import get_memory_system
+            mem = get_memory_system()
+            data["memory_context"] = {
+                "high_confidence_patterns": mem.get_high_confidence_patterns(min_confidence=0.7)[:5],
+                "learnings": mem.get_learnings(min_confidence=0.7)[:5],
+            }
+        except Exception as e:
+            print(f"[WARN] Memory fetch failed: {e}")
+            data["memory_context"] = {}
+
+    # Try Claude first
+    if os.getenv("ANTHROPIC_API_KEY"):
+        try:
+            result = _call_claude_analysis(data)
+            if result:
+                return result
+        except Exception as e:
+            print(f"[WARN] Claude analysis failed, trying OpenAI: {e}")
+
+    # Fallback to OpenAI
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            result = _call_openai_analysis(data)
+            if result:
+                return result
+        except Exception as e:
+            print(f"[ERROR] OpenAI fallback failed: {e}")
 
     return _fallback_analysis(data)
