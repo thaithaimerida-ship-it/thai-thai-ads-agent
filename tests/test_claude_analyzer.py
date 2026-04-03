@@ -37,7 +37,7 @@ def test_claude_analysis_returns_dict():
 
 def test_fallback_when_no_keys(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     result = analyze_campaign_data({"campaign_data": [], "totals": {}})
     assert isinstance(result, dict)
     assert "summary" in result

@@ -123,83 +123,46 @@ def _fallback_analysis(data: dict) -> dict:
         "campaigns": [], "market_opportunities": [], "waste": {}, "alerts": []
     }
 
-def _call_openai_analysis(data: dict) -> dict:
-    """Versión Optimizada: Python como calculadora maestra inviolable."""
-    
-    campaigns = data.get("campaign_data", data.get("campaigns", []))
-    
-    # --- 🧮 CÁLCULOS MATEMÁTICOS DE PRE-AUDITORÍA ---
-    total_spend = sum(_get_robust_spend(c) for c in campaigns)
-    total_conversions = sum(float(c.get("conversions", 0) or 0) for c in campaigns)
-    total_clicks = sum(int(c.get("clicks", 0) or 0) for c in campaigns)
-    total_impressions = sum(int(c.get("impressions", 0) or 0) for c in campaigns)
-    
-    global_cpa = total_spend / total_conversions if total_conversions > 0 else 0
-    global_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
-    global_cvrate = (total_conversions / total_clicks * 100) if total_clicks > 0 else 0
+def _call_haiku_analysis(data: dict) -> dict:
+    """Claude Haiku 4.5 — fast fallback when Sonnet fails."""
+    import anthropic
+    from engine.prompt import THAI_THAI_ADS_MASTER_PROMPT
 
-    success_index = 95 if global_cpa <= 15 else 80 if global_cpa <= 30 else 50 if global_cpa <= 45 else 20
-    success_label = "Excelente" if success_index >= 90 else "Bueno" if success_index >= 80 else "Regular" if success_index >= 50 else "Problemático"
-
-    data["totals"] = {
-        "calculated_total_spend": round(total_spend, 2),
-        "calculated_total_conversions": int(total_conversions),
-        "calculated_global_cpa": round(global_cpa, 2),
-        "calculated_total_ctr": round(global_ctr, 2),
-        "calculated_total_conversion_rate": round(global_cvrate, 2),
-        "calculated_success_index": success_index,
-        "calculated_success_label": success_label
-    }
-
-    print("\n" + "🛡️ " * 20)
-    print(f"AUDITORÍA LISTA: {len(campaigns)} campañas detectadas.")
-    print(f"KPI Real: Spend ${data['totals']['calculated_total_spend']} | CPA ${data['totals']['calculated_global_cpa']}")
-    print("🛡️ " * 20 + "\n")
-
-    payload_minificado = json.dumps(data, separators=(',', ':'))
     fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     user_message = (
         f"FECHA ACTUAL: {fecha_hoy}\n\n"
-        f"ORDEN DE AUDITORÍA: Usa los siguientes TOTALES CALCULADOS para el objeto 'summary'.\n"
-        f"{json.dumps(data['totals'], indent=2)}\n\n"
-        f"DATOS PARA ANÁLISIS ESTRATÉGICO:\n"
-        f"{payload_minificado}"
+        f"TOTALES PRE-CALCULADOS (usa estos valores exactos en el objeto summary):\n"
+        f"{json.dumps(data.get('totals', {}), indent=2)}\n\n"
+        f"DATOS DE GOOGLE ADS:\n"
+        f"{json.dumps(data.get('campaign_data', data.get('campaigns', [])), separators=(',', ':'))}\n\n"
+        f"Responde SOLO con JSON válido. Sin markdown, sin explicaciones."
     )
 
-    try:
-        from openai import OpenAI
-        from engine.prompt import THAI_THAI_ADS_MASTER_PROMPT
-        
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": THAI_THAI_ADS_MASTER_PROMPT},
-                {"role": "user", "content": user_message}
-            ],
-            temperature=0.1, 
-            response_format={"type": "json_object"}
-        )
-        
-        llm_result = _safe_json_loads(response.choices[0].message.content)
-        
-        # 🟢 HACK DEFINITIVO: Python inyecta sus números exactos
-        if llm_result and "summary" in llm_result:
-            llm_result["summary"]["spend"] = data["totals"]["calculated_total_spend"]
-            llm_result["summary"]["conversions"] = data["totals"]["calculated_total_conversions"]
-            llm_result["summary"]["cpa"] = data["totals"]["calculated_global_cpa"]
-            llm_result["summary"]["ctr"] = data["totals"]["calculated_total_ctr"]
-            llm_result["summary"]["conversion_rate"] = data["totals"]["calculated_total_conversion_rate"]
-            llm_result["summary"]["success_index"] = data["totals"]["calculated_success_index"]
-            llm_result["summary"]["success_label"] = data["totals"]["calculated_success_label"]
-            
-        return llm_result
-        
-    except Exception as e:
-        print(f"❌ Error al consultar a OpenAI: {e}")
-        raise e
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=2048,
+        system=THAI_THAI_ADS_MASTER_PROMPT,
+        messages=[{"role": "user", "content": user_message}]
+    )
+
+    raw = response.content[0].text
+    result = _safe_json_loads(raw)
+
+    if result and "summary" in result and "totals" in data:
+        t = data["totals"]
+        s = result["summary"]
+        s["spend"] = t.get("calculated_total_spend", s.get("spend", 0))
+        s["conversions"] = t.get("calculated_total_conversions", s.get("conversions", 0))
+        s["cpa"] = t.get("calculated_global_cpa", s.get("cpa", 0))
+        s["ctr"] = t.get("calculated_total_ctr", s.get("ctr", 0))
+        s["conversion_rate"] = t.get("calculated_total_conversion_rate", s.get("conversion_rate", 0))
+        s["success_index"] = t.get("calculated_success_index", s.get("success_index", 50))
+        s["success_label"] = t.get("calculated_success_label", s.get("success_label", ""))
+
+    return result
 
 def _call_claude_analysis(data: dict) -> dict:
     """Claude Sonnet 4.6 — primary AI brain, replaces GPT-4o-mini."""
@@ -228,7 +191,7 @@ def _call_claude_analysis(data: dict) -> dict:
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4096,
+        max_tokens=8192,
         system=THAI_THAI_ADS_MASTER_PROMPT,
         messages=[{"role": "user", "content": user_message}]
     )
@@ -254,10 +217,10 @@ def _call_claude_analysis(data: dict) -> dict:
 def analyze_campaign_data(data: dict) -> dict:
     """
     Main analysis entry point.
-    Tries Claude Sonnet first, falls back to OpenAI, then local fallback.
+    Tries Claude Sonnet first, falls back to Haiku, then local fallback.
     Enriches data with GA4, Sheets, landing audit, and memory before calling LLM.
     """
-    if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+    if not os.getenv("ANTHROPIC_API_KEY"):
         return _fallback_analysis(data)
 
     # Enrich with GA4
@@ -300,22 +263,22 @@ def analyze_campaign_data(data: dict) -> dict:
             print(f"[WARN] Memory fetch failed: {e}")
             data["memory_context"] = {}
 
-    # Try Claude first
+    # Try Claude Sonnet first
     if os.getenv("ANTHROPIC_API_KEY"):
         try:
             result = _call_claude_analysis(data)
             if result:
                 return result
         except Exception as e:
-            print(f"[WARN] Claude analysis failed, trying OpenAI: {e}")
+            print(f"[WARN] Claude Sonnet failed, trying Haiku: {e}")
 
-    # Fallback to OpenAI
-    if os.getenv("OPENAI_API_KEY"):
+    # Fallback to Haiku (fast + cheap)
+    if os.getenv("ANTHROPIC_API_KEY"):
         try:
-            result = _call_openai_analysis(data)
+            result = _call_haiku_analysis(data)
             if result:
                 return result
         except Exception as e:
-            print(f"[ERROR] OpenAI fallback failed: {e}")
+            print(f"[ERROR] Haiku fallback failed: {e}")
 
     return _fallback_analysis(data)
