@@ -516,3 +516,46 @@ Backend FastAPI con 4 sub-agentes Python puros (sin LangChain, CrewAI ni AutoGen
 - `routes/reports.py`: `/send-weekly-report` extraído
 - `agents/auditor.py`: `_run_audit_task` (1,474 líneas) integrada como `_get_engine_modules()` + `run_autonomous_audit()` method
 - `main.py`: de 4,097 a 535 líneas (-3,562 líneas) — solo mantiene /health, /mission-control, /dashboard-snapshot, /run-autonomous-audit, /run-compensatory-audit
+
+### Fase completada: 3 (Builder + Ecosystem + Streamlit)
+
+- `agents/builder.py`: sub-agente 5 — crea campañas completas desde lenguaje natural (Claude Sonnet 4.6 → Haiku 4.5 fallback → Google Ads API)
+- `routes/builder.py`: POST /build-campaign, POST /deploy-campaign, GET /pending-configs, POST /deploy-pending/{id}
+- `routes/ecosystem.py`: GET /ecosystem/ads-summary, /ecosystem/business-metrics, /ecosystem/health — alimenta thai-thai-web y thai-thai-dashboard
+- `agents/reporter.py`: guarda snapshots diarios en GCS (gs://{bucket}/snapshots/daily/YYYY/MM/YYYY-MM-DD.json + latest.json)
+- `streamlit_app.py`: dashboard de operaciones 4 páginas (Cruce Negocio, Actividad del Agente, Tendencias, Historial Builder)
+
+## Streamlit — Dashboard de Operaciones
+
+Correr localmente:
+
+```bash
+# Instalar dependencias
+pip install -r requirements-streamlit.txt
+
+# Correr contra producción
+AGENT_URL=https://thai-thai-ads-agent-624172071613.us-central1.run.app streamlit run streamlit_app.py
+
+# Correr contra local (backend en puerto 8080)
+AGENT_URL=http://localhost:8080 streamlit run streamlit_app.py
+```
+
+En Windows PowerShell:
+
+```powershell
+$env:AGENT_URL="http://localhost:8080"
+& 'C:\Users\usuario\AppData\Local\Programs\Python\Python313\python.exe' -m streamlit run streamlit_app.py
+```
+
+Páginas disponibles:
+
+- **Cruce Negocio**: ads spend vs comensales, costo por comensal, desglose local/delivery
+- **Actividad del Agente**: últimas auditorías, propuestas pendientes, campañas activas
+- **Tendencias**: historial de gasto, CPA y desperdicio por mes (con targets visuales)
+- **Historial Builder**: campañas creadas con el Builder, con acción de deploy directo
+
+Variables de entorno:
+
+- `AGENT_URL`: URL del backend (default: Cloud Run prod)
+- `AGENT_GCS_BUCKET`: bucket GCS para snapshots del Reporter
+- `AGENT_GCS_SNAPSHOTS_PREFIX`: prefijo de blobs (default: `snapshots/daily`)
