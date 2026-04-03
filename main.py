@@ -13,6 +13,17 @@ import random
 
 logger = logging.getLogger(__name__)
 
+# ── GCS import diagnostic (temporal — confirma que el paquete está instalado) ─
+try:
+    import google.cloud
+    _gc_path = getattr(google.cloud, "__file__", getattr(google.cloud, "__path__", "unknown"))
+    logger.info("DIAG google.cloud cargado desde: %s", _gc_path)
+    from google.cloud import storage as _gcs_diag
+    logger.info("DIAG google.cloud.storage OK — %s", getattr(_gcs_diag, "__file__", "unknown"))
+except Exception as _diag_exc:
+    logger.error("DIAG google.cloud.storage FALLO: %s", _diag_exc)
+# ─────────────────────────────────────────────────────────────────────────────
+
 load_dotenv()
 
 from engine.db_sync import get_db_path
