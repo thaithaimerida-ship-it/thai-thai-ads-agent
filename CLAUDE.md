@@ -1,7 +1,7 @@
 # Thai Thai Ads Agent
 
 ## Qué hace
-FastAPI (Python 3.14) — agente de inteligencia para Google Ads + GA4 + landing page del restaurante Thai Thai Mérida. El cerebro es Claude Sonnet 4.6.
+FastAPI (Python 3.13.3) — agente de inteligencia para Google Ads + GA4 + landing page del restaurante Thai Thai Mérida. El cerebro es Claude Sonnet 4.6.
 
 ## Principio de negocio
 Este proyecto no busca recortar gasto por defecto. Busca detectar:
@@ -17,7 +17,7 @@ Toda recomendación debe responder: **¿Dónde está el siguiente peso mejor inv
 ```bash
 PYTHONIOENCODING=utf-8 C:\Users\usuario\AppData\Roaming\Python\Python314\Scripts\uvicorn.exe main:app --host 0.0.0.0 --port 8080
 ```
-Scripts manuales: `py -3.14 script.py` via PowerShell
+Scripts manuales: `py -3.13 script.py` via PowerShell
 
 ## Producción
 - Cloud Run: `https://thai-thai-ads-agent-624172071613.us-central1.run.app`
@@ -51,6 +51,7 @@ routes/
   tracking.py            ← /fix-tracking, /fix-tracking/confirm, /audit-log
   approvals.py           ← /approve-proposals, /approve-legacy, /approve
   reports.py             ← /send-weekly-report
+  ecosystem.py           ← /ecosystem/ads-summary, /ecosystem/business-metrics, /ecosystem/health
 main.py                  ← FastAPI router puro (~535 líneas): /health, /mission-control, /dashboard-snapshot, /run-autonomous-audit, /run-compensatory-audit
 ```
 
