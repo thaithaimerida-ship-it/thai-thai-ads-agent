@@ -102,7 +102,14 @@ def _save_mc_snapshot(data: dict) -> None:
         )
         logger.info("_save_mc_snapshot: guardado en gs://%s/%s", _GCS_BUCKET, _GCS_SNAPSHOT)
     except Exception as exc:
-        logger.warning("_save_mc_snapshot: no se pudo guardar en GCS — %s", exc)
+        import traceback
+        logger.error(
+            "_save_mc_snapshot: FALLO guardando en GCS\n"
+            "  bucket=%s blob=%s\n"
+            "  error=%s\n"
+            "  traceback=%s",
+            _GCS_BUCKET, _GCS_SNAPSHOT, exc, traceback.format_exc()
+        )
 
 def _load_mc_snapshot() -> dict | None:
     """Carga el último snapshot desde GCS, o None si no existe."""

@@ -20,15 +20,30 @@ def _load_snapshot() -> dict | None:
     try:
         from google.cloud import storage
         _bucket = os.getenv("GCS_BUCKET", "thai-thai-agent-data")
-        _blob = "mission_control_snapshot.json"
+        _blob = "snapshots/dashboard_snapshot.json"   # mismo path que _save_mc_snapshot en main.py
         client = storage.Client()
         bucket = client.bucket(_bucket)
         blob = bucket.blob(_blob)
         if blob.exists():
             return json.loads(blob.download_as_text())
+        logger.info("ecosystem._load_snapshot: blob gs://%s/%s no existe aún", _bucket, _blob)
     except Exception as e:
         logger.warning("ecosystem._load_snapshot: %s", e)
     return None
+
+
+async def _fallback_mission_control() -> dict | None:
+    """Llama a mission_control_data(days=1) como fallback cuando no hay snapshot en GCS."""
+    try:
+        from main import mission_control_data
+        result = await mission_control_data(days=1, month=None)
+        # result puede ser un dict o un JSONResponse
+        if hasattr(result, "body"):
+            return json.loads(result.body)
+        return result
+    except Exception as e:
+        logger.error("ecosystem._fallback_mission_control: %s", e)
+        return None
 
 
 @router.get("/ads-summary")
@@ -40,9 +55,12 @@ async def ads_summary():
     """
     snapshot = _load_snapshot()
     if not snapshot:
+        logger.info("ecosystem.ads_summary: snapshot vacío — usando fallback mission-control")
+        snapshot = await _fallback_mission_control()
+    if not snapshot:
         return JSONResponse(status_code=503, content={
             "status": "no_data",
-            "message": "No hay snapshot disponible. Espera a la próxima auditoría.",
+            "message": "No hay snapshot disponible y el fallback falló.",
         })
 
     metrics = snapshot.get("metrics", {})
@@ -101,6 +119,9 @@ async def business_metrics():
     Cruza datos de Google Ads con Google Sheets (comensales, ingresos).
     """
     snapshot = _load_snapshot()
+    if not snapshot:
+        logger.info("ecosystem.business_metrics: snapshot vacío — usando fallback mission-control")
+        snapshot = await _fallback_mission_control()
 
     # Datos de ads del snapshot
     ads_data = {}
