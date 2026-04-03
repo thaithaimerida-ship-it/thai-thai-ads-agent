@@ -46,7 +46,11 @@ engine/
 routes/
   reservations.py        ← POST/GET /reservations + email/WhatsApp helpers
   campaigns.py           ← /restructure-campaigns, /create-reservations-campaign, /update-ad-schedule
-main.py                  ← FastAPI router + endpoints core (~4000 líneas, pendiente Fase 2)
+  analysis.py            ← /analyze-keywords, /analyze-campaigns-detailed, /execute-optimization, /insights, /history, /generate-strategy, /last-activity, /activity-log
+  tracking.py            ← /fix-tracking, /fix-tracking/confirm, /audit-log
+  approvals.py           ← /approve-proposals, /approve-legacy, /approve
+  reports.py             ← /send-weekly-report
+main.py                  ← FastAPI router puro (~535 líneas): /health, /mission-control, /dashboard-snapshot, /run-autonomous-audit, /run-compensatory-audit
 ```
 
 ## Endpoints principales
@@ -469,7 +473,7 @@ Se mide por cuánto trabajo útil resuelve, cuánto desperdicio evita, cuánta e
 
 ---
 
-## Arquitectura de Sub-Agentes (Fase 1 completada)
+## Arquitectura de Sub-Agentes (Fases 1 y 2 completadas)
 
 Backend FastAPI con 4 sub-agentes Python puros (sin LangChain, CrewAI ni AutoGen):
 
@@ -494,8 +498,6 @@ Backend FastAPI con 4 sub-agentes Python puros (sin LangChain, CrewAI ni AutoGen
 
 ### Fase completada: 1 (Limpieza + Estructura)
 
-Qué se hizo en Fase 1:
-
 - `.gitignore` con credenciales, db, Lib/, Scripts/, **pycache**
 - `Lib/`, `Scripts/`, `modules/` removidos de git tracking
 - `requirements.txt`: eliminados `ag2` y `openai`, agregado `streamlit`
@@ -504,9 +506,11 @@ Qué se hizo en Fase 1:
 - `routes/reservations.py` y `routes/campaigns.py` extraídos de main.py
 - `main.py`: de 5,124 a 4,097 líneas (-1,027 líneas)
 
-### Próxima fase: 2 (Especializar sub-agentes)
+### Fase completada: 2 (Descomponer main.py)
 
-- Mover `_run_audit_task` (1,500 líneas) a `agents/`
-- Conectar `Auditor.run_full_audit()` con `/run-autonomous-audit`
-- Implementar `Strategist.detect_waste()` y `generate_proposals()` en flujo real
-- Mover endpoints de `/approve`, `/send-weekly-report`, `/activity-log` a rutas separadas
+- `routes/analysis.py`: 8 endpoints de análisis extraídos de main.py
+- `routes/tracking.py`: 3 endpoints de tracking extraídos
+- `routes/approvals.py`: 3 endpoints de aprobación extraídos (incluyendo el `/approve` de 1,200+ líneas)
+- `routes/reports.py`: `/send-weekly-report` extraído
+- `agents/auditor.py`: `_run_audit_task` (1,474 líneas) integrada como `_get_engine_modules()` + `run_autonomous_audit()` method
+- `main.py`: de 4,097 a 535 líneas (-3,562 líneas) — solo mantiene /health, /mission-control, /dashboard-snapshot, /run-autonomous-audit, /run-compensatory-audit
