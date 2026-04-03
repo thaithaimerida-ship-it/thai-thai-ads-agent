@@ -85,7 +85,7 @@ def get_engine_modules():
 # SNAPSHOT — caché del último Mission Control en GCS (durable entre cold starts)
 # ============================================================================
 
-_GCS_BUCKET   = "thai-thai-agent-data"
+_GCS_BUCKET   = os.getenv("GCS_BUCKET", "thai-thai-agent-data")
 _GCS_SNAPSHOT = "snapshots/dashboard_snapshot.json"
 
 def _save_mc_snapshot(data: dict) -> None:
@@ -121,7 +121,14 @@ def _load_mc_snapshot() -> dict | None:
             return None
         return json.loads(blob.download_as_text(encoding="utf-8"))
     except Exception as exc:
-        logger.warning("_load_mc_snapshot: no se pudo leer desde GCS — %s", exc)
+        import traceback
+        logger.error(
+            "_load_mc_snapshot: FALLO leyendo GCS\n"
+            "  bucket=%s blob=%s\n"
+            "  error=%s\n"
+            "  traceback=%s",
+            _GCS_BUCKET, _GCS_SNAPSHOT, exc, traceback.format_exc()
+        )
         return None
 
 
@@ -261,6 +268,83 @@ async def health_check():
             "ad-performance-optimizer"
         ]
     }
+
+@app.get("/debug/gcs-snapshot-test")
+async def debug_gcs_snapshot_test():
+    """
+    Prueba real de acceso a GCS: crea cliente, valida bucket, escribe blob temporal, lo lee y lo borra.
+    No usa mocks. Útil para diagnosticar por qué _save_mc_snapshot falla.
+    """
+    import traceback
+    bucket_name = _GCS_BUCKET
+    test_blob   = "debug/gcs_write_test.json"
+    result: dict = {
+        "bucket": bucket_name,
+        "snapshot_blob": _GCS_SNAPSHOT,
+        "steps": {},
+    }
+    try:
+        from google.cloud import storage as gcs
+        client = gcs.Client()
+        result["steps"]["client_created"] = True
+        result["project"] = client.project
+    except Exception as exc:
+        result["steps"]["client_created"] = False
+        result["steps"]["client_error"] = str(exc)
+        result["steps"]["traceback"] = traceback.format_exc()
+        return JSONResponse(status_code=500, content=result)
+
+    try:
+        bucket = client.bucket(bucket_name)
+        bucket.reload()
+        result["steps"]["bucket_accessible"] = True
+    except Exception as exc:
+        result["steps"]["bucket_accessible"] = False
+        result["steps"]["bucket_error"] = str(exc)
+        result["steps"]["traceback"] = traceback.format_exc()
+        return JSONResponse(status_code=500, content=result)
+
+    try:
+        payload = json.dumps({"test": True, "ts": datetime.now().isoformat()})
+        bucket.blob(test_blob).upload_from_string(payload, content_type="application/json")
+        result["steps"]["write_ok"] = True
+    except Exception as exc:
+        result["steps"]["write_ok"] = False
+        result["steps"]["write_error"] = str(exc)
+        result["steps"]["traceback"] = traceback.format_exc()
+        return JSONResponse(status_code=500, content=result)
+
+    try:
+        data = json.loads(bucket.blob(test_blob).download_as_text())
+        result["steps"]["read_ok"] = True
+        result["steps"]["read_data"] = data
+    except Exception as exc:
+        result["steps"]["read_ok"] = False
+        result["steps"]["read_error"] = str(exc)
+
+    try:
+        bucket.blob(test_blob).delete()
+        result["steps"]["cleanup_ok"] = True
+    except Exception:
+        result["steps"]["cleanup_ok"] = False
+
+    try:
+        snapshot_blob = bucket.blob(_GCS_SNAPSHOT)
+        result["steps"]["snapshot_exists"] = snapshot_blob.exists()
+        if result["steps"]["snapshot_exists"]:
+            result["steps"]["snapshot_size_bytes"] = snapshot_blob.size
+            result["steps"]["snapshot_updated"] = str(snapshot_blob.updated)
+    except Exception as exc:
+        result["steps"]["snapshot_check_error"] = str(exc)
+
+    result["success"] = all([
+        result["steps"].get("client_created"),
+        result["steps"].get("bucket_accessible"),
+        result["steps"].get("write_ok"),
+        result["steps"].get("read_ok"),
+    ])
+    return result
+
 
 _DAYS_TO_GAQL = {
     1:  "YESTERDAY",

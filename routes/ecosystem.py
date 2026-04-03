@@ -15,34 +15,26 @@ router = APIRouter(prefix="/ecosystem", tags=["ecosystem"])
 CLOUD_RUN_URL = "https://thai-thai-ads-agent-624172071613.us-central1.run.app"
 
 
+_GCS_BUCKET   = os.getenv("GCS_BUCKET", "thai-thai-agent-data")
+_GCS_SNAPSHOT = "snapshots/dashboard_snapshot.json"
+
+
 def _load_snapshot() -> dict | None:
-    """Carga el último snapshot del mission-control desde GCS."""
+    """Carga el último snapshot del mission-control desde GCS. Sin fallbacks."""
     try:
         from google.cloud import storage
-        _bucket = os.getenv("GCS_BUCKET", "thai-thai-agent-data")
-        _blob = "snapshots/dashboard_snapshot.json"   # mismo path que _save_mc_snapshot en main.py
         client = storage.Client()
-        bucket = client.bucket(_bucket)
-        blob = bucket.blob(_blob)
-        if blob.exists():
-            return json.loads(blob.download_as_text())
-        logger.info("ecosystem._load_snapshot: blob gs://%s/%s no existe aún", _bucket, _blob)
-    except Exception as e:
-        logger.warning("ecosystem._load_snapshot: %s", e)
-    return None
-
-
-async def _fallback_mission_control() -> dict | None:
-    """Llama a mission_control_data(days=1) como fallback cuando no hay snapshot en GCS."""
-    try:
-        from main import mission_control_data
-        result = await mission_control_data(days=1, month=None)
-        # result puede ser un dict o un JSONResponse
-        if hasattr(result, "body"):
-            return json.loads(result.body)
-        return result
-    except Exception as e:
-        logger.error("ecosystem._fallback_mission_control: %s", e)
+        blob = client.bucket(_GCS_BUCKET).blob(_GCS_SNAPSHOT)
+        if not blob.exists():
+            logger.info("ecosystem._load_snapshot: gs://%s/%s no existe", _GCS_BUCKET, _GCS_SNAPSHOT)
+            return None
+        return json.loads(blob.download_as_text())
+    except Exception as exc:
+        import traceback
+        logger.error(
+            "ecosystem._load_snapshot: bucket=%s blob=%s error=%s\n%s",
+            _GCS_BUCKET, _GCS_SNAPSHOT, exc, traceback.format_exc()
+        )
         return None
 
 
@@ -55,12 +47,9 @@ async def ads_summary():
     """
     snapshot = _load_snapshot()
     if not snapshot:
-        logger.info("ecosystem.ads_summary: snapshot vacío — usando fallback mission-control")
-        snapshot = await _fallback_mission_control()
-    if not snapshot:
         return JSONResponse(status_code=503, content={
-            "status": "no_data",
-            "message": "No hay snapshot disponible y el fallback falló.",
+            "status": "no_snapshot",
+            "message": "No hay snapshot en GCS. El agente aún no ha corrido una auditoría o GCS no está accesible.",
         })
 
     metrics = snapshot.get("metrics", {})
@@ -120,8 +109,10 @@ async def business_metrics():
     """
     snapshot = _load_snapshot()
     if not snapshot:
-        logger.info("ecosystem.business_metrics: snapshot vacío — usando fallback mission-control")
-        snapshot = await _fallback_mission_control()
+        return JSONResponse(status_code=503, content={
+            "status": "no_snapshot",
+            "message": "No hay snapshot en GCS. El agente aún no ha corrido una auditoría o GCS no está accesible.",
+        })
 
     # Datos de ads del snapshot
     ads_data = {}

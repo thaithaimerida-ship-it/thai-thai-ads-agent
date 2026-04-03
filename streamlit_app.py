@@ -88,8 +88,9 @@ if page == "Cruce Negocio":
 
     data = fetch("/ecosystem/business-metrics")
 
-    if not data:
-        st.warning("No hay datos disponibles. Verifica la conexión con el agente.")
+    if not data or data.get("status") == "no_snapshot":
+        st.warning("Sin snapshot disponible. El agente aún no ha completado una auditoría o GCS no está accesible.")
+        st.info("Ejecuta `/run-autonomous-audit` en el backend para generar el primer snapshot.")
         st.stop()
 
     ads = data.get("ads", {})
@@ -222,38 +223,13 @@ elif page == "Tendencias":
     st.header("📈 Tendencias")
     st.caption("Historial de gasto y conversiones por mes")
 
-    # Selector de período
-    months_back = st.slider("Meses a mostrar", min_value=1, max_value=12, value=6)
-
-    # Generar lista de meses
-    month_list = []
-    now = datetime.now()
-    for i in range(months_back):
-        d = datetime(now.year, now.month, 1) - timedelta(days=i * 28)
-        month_list.append(f"{d.year}-{d.month:02d}")
-
-    # Fetch datos por mes
-    records = []
-    progress = st.progress(0, text="Cargando datos históricos...")
-
-    for idx, month in enumerate(reversed(month_list)):
-        data = fetch("/mission-control", params={"month": month})
-        if data:
-            metrics = data.get("metrics", {})
-            records.append({
-                "mes": month,
-                "gasto": metrics.get("total_spend", 0),
-                "conversiones": metrics.get("total_conversions", 0),
-                "cpa": metrics.get("avg_cpa", 0),
-                "desperdicio": metrics.get("total_waste", 0),
-            })
-        progress.progress((idx + 1) / len(month_list), text=f"Cargando {month}...")
-
-    progress.empty()
-
-    if not records:
-        st.warning("No hay datos históricos disponibles.")
-        st.stop()
+    st.info(
+        "⚠️ Vista temporalmente desactivada.\n\n"
+        "Esta página hace múltiples llamadas seriales a `/mission-control` (una por mes), "
+        "lo que puede despertar el backend en cold start y colgar Streamlit. "
+        "Se habilitará cuando haya snapshots históricos disponibles en GCS."
+    )
+    st.stop()
 
     df = pd.DataFrame(records)
 
