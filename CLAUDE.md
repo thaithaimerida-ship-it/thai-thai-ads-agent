@@ -31,6 +31,7 @@ agents/
   strategist.py          ← analiza datos, genera propuestas (Claude Sonnet → Haiku)
   executor.py            ← ejecuta acciones aprobadas en Google Ads API
   reporter.py            ← genera reportes y dashboards
+  builder.py             ← crea campañas completas desde lenguaje natural (Claude → Google Ads API)
 engine/
   ads_client.py          ← Google Ads API v23 (NO TOCAR — funciona bien)
   analyzer.py            ← Claude Sonnet 4.6 (primary) / Haiku 4.5 (fallback)
