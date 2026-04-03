@@ -53,27 +53,408 @@ def get_ads_client() -> GoogleAdsClient:
         print(f"❌ Error creando cliente: {e}")
         raise
 
-def fetch_campaign_data(client: GoogleAdsClient, customer_id: str, days: int = 30):
+def fetch_campaign_metrics_range(
+    client: GoogleAdsClient,
+    customer_id: str,
+    start_date: str,
+    end_date: str,
+) -> list:
     """
-    Obtiene datos de campañas de los últimos N días.
+    Obtiene métricas agregadas por campaña para un rango de fechas exacto.
+
+    Usado por Fase 3A para comparación semana actual vs semana anterior.
+    start_date / end_date en formato 'YYYY-MM-DD'.
+
+    Retorna lista de dicts: {id, name, clicks, conversions, cost_mxn, cvr}
     """
     ga_service = client.get_service("GoogleAdsService")
-    start_date, end_date = get_date_range(days)
+    query = f"""
+        SELECT
+          campaign.id,
+          campaign.name,
+          metrics.clicks,
+          metrics.conversions,
+          metrics.cost_micros
+        FROM campaign
+        WHERE campaign.status = 'ENABLED'
+          AND segments.date BETWEEN '{start_date}' AND '{end_date}'
+    """
+    try:
+        response = ga_service.search(customer_id=customer_id, query=query)
+        campaigns = []
+        for row in response:
+            clicks = row.metrics.clicks
+            conversions = row.metrics.conversions
+            campaigns.append({
+                "id": str(row.campaign.id),
+                "name": row.campaign.name,
+                "clicks": clicks,
+                "conversions": conversions,
+                "cost_mxn": round(row.metrics.cost_micros / 1_000_000, 2),
+                "cvr": (conversions / clicks) if clicks > 0 else 0.0,
+            })
+        return campaigns
+    except GoogleAPIError as e:
+        print(f"Error fetching campaign metrics range ({start_date}→{end_date}): {e}")
+        return []
+
+
+def fetch_adgroup_metrics(
+    client: GoogleAdsClient,
+    customer_id: str,
+    start_date: str,
+    end_date: str,
+) -> list:
+    """
+    Obtiene métricas agregadas por ad group para un rango de fechas exacto.
+
+    Usado por Fase 4 para detectar grupos con gasto sin conversiones.
+    start_date / end_date en formato 'YYYY-MM-DD'.
+
+    Retorna lista de dicts: {
+        adgroup_id, adgroup_name, campaign_id, campaign_name,
+        status, clicks, conversions, cost_mxn, impressions
+    }
+    Solo incluye ad groups con status ENABLED en campañas ENABLED.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    query = f"""
+        SELECT
+          ad_group.id,
+          ad_group.name,
+          ad_group.status,
+          campaign.id,
+          campaign.name,
+          metrics.clicks,
+          metrics.conversions,
+          metrics.cost_micros,
+          metrics.impressions
+        FROM ad_group
+        WHERE campaign.status = 'ENABLED'
+          AND ad_group.status = 'ENABLED'
+          AND segments.date BETWEEN '{start_date}' AND '{end_date}'
+    """
+    try:
+        response = ga_service.search(customer_id=customer_id, query=query)
+        adgroups = []
+        for row in response:
+            adgroups.append({
+                "adgroup_id": str(row.ad_group.id),
+                "adgroup_name": row.ad_group.name,
+                "campaign_id": str(row.campaign.id),
+                "campaign_name": row.campaign.name,
+                "status": row.ad_group.status.name,
+                "clicks": row.metrics.clicks,
+                "conversions": row.metrics.conversions,
+                "cost_mxn": round(row.metrics.cost_micros / 1_000_000, 2),
+                "impressions": row.metrics.impressions,
+            })
+        return adgroups
+    except GoogleAPIError as e:
+        print(f"Error fetching adgroup metrics ({start_date}→{end_date}): {e}")
+        return []
+
+
+def verify_adgroup_still_pausable(
+    client: GoogleAdsClient,
+    customer_id: str,
+    adgroup_id: str,
+    campaign_id: str,
+) -> dict:
+    """
+    Verifica si un ad group sigue siendo pausable antes de ejecutar la mutación.
+
+    Guardas de seguridad:
+      G1 — el ad group sigue en estado ENABLED
+      G2 — NO es el único ad group ENABLED en su campaña (evitar dejar campaña sin grupos)
+
+    Retorna dict con:
+      ok                           : bool — True si ambas guardas pasan
+      reason                       : str  — causa del bloqueo (vacío si ok=True)
+      guard                        : str  — código de guarda activada ('G1', 'G2', o '')
+      verify_checked_at            : str  — ISO timestamp de la verificación (UTC)
+      ad_group_status              : str  — estado actual del ad group
+      enabled_adgroups_in_campaign : int  — cantidad de ad groups ENABLED en campaña
+    """
+    from datetime import datetime as _dt
+    verify_checked_at = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    base = {
+        "ok": False,
+        "reason": "",
+        "guard": "",
+        "verify_checked_at": verify_checked_at,
+        "ad_group_status": "UNKNOWN",
+        "enabled_adgroups_in_campaign": 0,
+    }
+
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+
+        # G1 — estado actual del ad group específico
+        q1 = f"""
+            SELECT ad_group.id, ad_group.status
+            FROM ad_group
+            WHERE ad_group.id = {adgroup_id}
+        """
+        rows1 = list(ga_service.search(customer_id=customer_id, query=q1))
+        if not rows1:
+            base["reason"] = "ad group no encontrado en la API"
+            base["guard"] = "G1"
+            return base
+
+        ad_group_status = rows1[0].ad_group.status.name
+        base["ad_group_status"] = ad_group_status
+
+        if ad_group_status != "ENABLED":
+            base["reason"] = f"ad group ya no está ENABLED (status={ad_group_status})"
+            base["guard"] = "G1"
+            return base
+
+        # G2 — cuántos ad groups ENABLED tiene la campaña
+        q2 = f"""
+            SELECT ad_group.id
+            FROM ad_group
+            WHERE campaign.id = {campaign_id}
+              AND ad_group.status = 'ENABLED'
+        """
+        rows2 = list(ga_service.search(customer_id=customer_id, query=q2))
+        enabled_count = len(rows2)
+        base["enabled_adgroups_in_campaign"] = enabled_count
+
+        if enabled_count <= 1:
+            base["reason"] = (
+                f"es el único ad group ENABLED en la campaña "
+                f"({enabled_count} ENABLED) — pausarlo dejaría la campaña sin grupos activos"
+            )
+            base["guard"] = "G2"
+            return base
+
+        base["ok"] = True
+        return base
+
+    except GoogleAPIError as e:
+        base["reason"] = f"error de API al verificar: {str(e)[:120]}"
+        base["guard"] = "G1"
+        return base
+
+
+def verify_budget_still_actionable(
+    client: GoogleAdsClient,
+    customer_id: str,
+    campaign_id: str,
+    budget_at_proposal_mxn: float,
+    suggested_budget_mxn: float,
+) -> dict:
+    """
+    Verifica si el presupuesto de una campaña sigue siendo candidato a reducción.
+    Se ejecuta justo antes de la mutación — siempre re-fetcha estado fresco de la API.
+
+    Guardas de seguridad:
+      G_campaign — la campaña sigue en estado ENABLED
+      G_shared   — el presupuesto NO está marcado como explícitamente compartido
+                   (explicitly_shared=True indica que múltiples campañas lo usan)
+      G_drift    — el presupuesto actual no fue ya reducido >10% manualmente
+                   respecto al presupuesto registrado en la propuesta
+      G_direction— el presupuesto sugerido es menor que el actual
+                   (BA1 solo reduce, nunca sube)
+      G_min      — el presupuesto sugerido >= BUDGET_CHANGE_MIN_DAILY_MXN ($20 MXN)
+      G_max_cut  — la reducción no supera BUDGET_CHANGE_MAX_REDUCTION_PCT (60%)
+
+    Retorna dict con:
+      ok                      : bool — True si todas las guardas pasan
+      reason                  : str  — causa del bloqueo (vacío si ok=True)
+      guard                   : str  — código de guarda activada ('' si ok=True)
+      verify_checked_at       : str  — ISO timestamp UTC de la verificación
+      current_budget_mxn      : float — presupuesto actual re-fetched
+      budget_at_proposal_mxn  : float — presupuesto al momento de crear la propuesta
+      suggested_budget_mxn    : float — presupuesto propuesto
+      reduction_pct_actual    : float — reducción real vs presupuesto actual
+      campaign_status         : str  — estado de la campaña al verificar
+      budget_explicitly_shared: bool — si el presupuesto es compartido
+    """
+    from datetime import datetime as _dt
+    from config.agent_config import (
+        BUDGET_CHANGE_MIN_DAILY_MXN,
+        BUDGET_CHANGE_MAX_REDUCTION_PCT,
+        BUDGET_CHANGE_DRIFT_TOLERANCE_PCT,
+    )
+    verify_checked_at = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    base = {
+        "ok": False,
+        "reason": "",
+        "guard": "",
+        "verify_checked_at": verify_checked_at,
+        "current_budget_mxn": 0.0,
+        "budget_at_proposal_mxn": budget_at_proposal_mxn,
+        "suggested_budget_mxn": suggested_budget_mxn,
+        "reduction_pct_actual": 0.0,
+        "campaign_status": "UNKNOWN",
+        "budget_explicitly_shared": False,
+    }
+
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+
+        query = f"""
+            SELECT
+              campaign.id,
+              campaign.status,
+              campaign_budget.amount_micros,
+              campaign_budget.explicitly_shared
+            FROM campaign
+            WHERE campaign.id = {campaign_id}
+        """
+        rows = list(ga_service.search(customer_id=customer_id, query=query))
+        if not rows:
+            base["reason"] = "campaña no encontrada en la API"
+            base["guard"] = "G_campaign"
+            return base
+
+        row = rows[0]
+        campaign_status = row.campaign.status.name
+        current_micros = row.campaign_budget.amount_micros
+        explicitly_shared = bool(row.campaign_budget.explicitly_shared)
+        current_budget_mxn = round(current_micros / 1_000_000, 2)
+
+        base["campaign_status"] = campaign_status
+        base["budget_explicitly_shared"] = explicitly_shared
+        base["current_budget_mxn"] = current_budget_mxn
+
+        # G_campaign: campaña sigue ENABLED
+        if campaign_status != "ENABLED":
+            base["reason"] = (
+                f"la campaña ya no está ENABLED (status={campaign_status}) — "
+                "no se modifica presupuesto de campaña inactiva"
+            )
+            base["guard"] = "G_campaign"
+            return base
+
+        # G_shared: presupuesto no es explícitamente compartido
+        if explicitly_shared:
+            base["reason"] = (
+                "el presupuesto está marcado como explícitamente compartido "
+                "(explicitly_shared=True) — modificarlo afectaría otras campañas"
+            )
+            base["guard"] = "G_shared"
+            return base
+
+        # G_drift: detectar si el operador ya redujo el presupuesto manualmente
+        if budget_at_proposal_mxn > 0:
+            drift = (budget_at_proposal_mxn - current_budget_mxn) / budget_at_proposal_mxn
+            if drift > BUDGET_CHANGE_DRIFT_TOLERANCE_PCT:
+                base["reason"] = (
+                    f"el presupuesto ya fue reducido manualmente: "
+                    f"${budget_at_proposal_mxn:.2f} → ${current_budget_mxn:.2f} MXN/día "
+                    f"(caída {drift*100:.1f}% > tolerancia {BUDGET_CHANGE_DRIFT_TOLERANCE_PCT*100:.0f}%) — "
+                    "se evita doble corte"
+                )
+                base["guard"] = "G_drift"
+                return base
+
+        # G_direction: solo reducimos presupuesto
+        if suggested_budget_mxn >= current_budget_mxn:
+            base["reason"] = (
+                f"el presupuesto sugerido ${suggested_budget_mxn:.2f} >= actual ${current_budget_mxn:.2f} — "
+                "BA1 solo propone reducciones, no aumentos"
+            )
+            base["guard"] = "G_direction"
+            return base
+
+        # G_min: piso absoluto
+        if suggested_budget_mxn < BUDGET_CHANGE_MIN_DAILY_MXN:
+            base["reason"] = (
+                f"el presupuesto sugerido ${suggested_budget_mxn:.2f} MXN/día < "
+                f"mínimo permitido ${BUDGET_CHANGE_MIN_DAILY_MXN:.2f} MXN/día"
+            )
+            base["guard"] = "G_min"
+            return base
+
+        # G_max_cut: reducción máxima en una sola ejecución
+        reduction_pct = (current_budget_mxn - suggested_budget_mxn) / current_budget_mxn * 100.0
+        base["reduction_pct_actual"] = round(reduction_pct, 1)
+        if reduction_pct > BUDGET_CHANGE_MAX_REDUCTION_PCT:
+            base["reason"] = (
+                f"la reducción ({reduction_pct:.1f}%) supera el máximo permitido "
+                f"en una sola ejecución ({BUDGET_CHANGE_MAX_REDUCTION_PCT:.0f}%)"
+            )
+            base["guard"] = "G_max_cut"
+            return base
+
+        base["ok"] = True
+        return base
+
+    except GoogleAPIError as e:
+        base["reason"] = f"error de API al verificar: {str(e)[:120]}"
+        base["guard"] = "G_campaign"
+        return base
+
+
+def pause_ad_group(
+    client: GoogleAdsClient,
+    customer_id: str,
+    ad_group_id: str,
+) -> dict:
+    """
+    Pausa un ad group vía Google Ads API (AdGroupService.mutate_ad_groups).
+
+    Solo cambia el campo `status` — no toca ningún otro atributo.
+
+    Retorna dict con:
+      status        : 'success' o 'error'
+      resource_name : resource_name retornado por la API (si ok)
+      message       : descripción del error (si falla)
+    """
+    try:
+        ad_group_service = client.get_service("AdGroupService")
+        operation = client.get_type("AdGroupOperation")
+
+        ag = operation.update
+        ag.resource_name = ad_group_service.ad_group_path(customer_id, ad_group_id)
+        ag.status = client.enums.AdGroupStatusEnum.PAUSED
+
+        operation.update_mask.paths[:] = ["status"]
+
+        response = ad_group_service.mutate_ad_groups(
+            customer_id=customer_id,
+            operations=[operation]
+        )
+        return {
+            "status": "success",
+            "resource_name": response.results[0].resource_name,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def fetch_campaign_data(client: GoogleAdsClient, customer_id: str, date_range: str = "YESTERDAY"):
+    """
+    Obtiene datos de campañas para el rango de fechas indicado.
+    date_range acepta cualquier literal GAQL válido: YESTERDAY, LAST_7_DAYS,
+    LAST_14_DAYS, LAST_30_DAYS, etc.
+    Nota: campaign.start_date fue removido del SELECT — UNRECOGNIZED_FIELD en API v23 (google-ads==30).
+    days_active queda como None hasta resolver compatibilidad de versión.
+    """
+    ga_service = client.get_service("GoogleAdsService")
 
     query = f"""
         SELECT
           campaign.id,
           campaign.name,
           campaign.status,
+          campaign_budget.resource_name,
+          campaign_budget.amount_micros,
+          campaign_budget.explicitly_shared,
           metrics.cost_micros,
           metrics.conversions,
           metrics.clicks,
           metrics.impressions
         FROM campaign
         WHERE campaign.status = 'ENABLED'
-          AND segments.date BETWEEN '{start_date}' AND '{end_date}'
+          AND segments.date DURING {date_range}
     """
-    
+
     try:
         response = ga_service.search(customer_id=customer_id, query=query)
         campaigns = []
@@ -82,22 +463,26 @@ def fetch_campaign_data(client: GoogleAdsClient, customer_id: str, days: int = 3
                 "id": row.campaign.id,
                 "name": row.campaign.name,
                 "status": row.campaign.status.name,
+                "start_date": None,
+                "days_active": None,
+                "budget_resource_name": row.campaign_budget.resource_name,
+                "daily_budget_mxn": round(row.campaign_budget.amount_micros / 1_000_000, 2),
+                "budget_explicitly_shared": bool(row.campaign_budget.explicitly_shared),
                 "cost_micros": row.metrics.cost_micros,
                 "conversions": row.metrics.conversions,
                 "clicks": row.metrics.clicks,
-                "impressions": row.metrics.impressions
+                "impressions": row.metrics.impressions,
             })
         return campaigns
     except GoogleAPIError as e:
         print(f"Error fetching campaigns: {e}")
         return []
 
-def fetch_keyword_data(client: GoogleAdsClient, customer_id: str, days: int = 30):
+def fetch_keyword_data(client: GoogleAdsClient, customer_id: str, date_range: str = "YESTERDAY"):
     """
-    Obtiene datos de keywords de los últimos N días.
+    Obtiene datos de keywords para el rango de fechas indicado.
     """
     ga_service = client.get_service("GoogleAdsService")
-    start_date, end_date = get_date_range(days)
 
     query = f"""
         SELECT
@@ -110,7 +495,7 @@ def fetch_keyword_data(client: GoogleAdsClient, customer_id: str, days: int = 30
           metrics.impressions
         FROM keyword_view
         WHERE campaign.status = 'ENABLED'
-          AND segments.date BETWEEN '{start_date}' AND '{end_date}'
+          AND segments.date DURING {date_range}
     """
     
     try:
@@ -123,19 +508,19 @@ def fetch_keyword_data(client: GoogleAdsClient, customer_id: str, days: int = 30
                 "campaign_name": row.campaign.name,
                 "cost_micros": row.metrics.cost_micros,
                 "conversions": row.metrics.conversions,
-                "clicks": row.metrics.clicks
+                "clicks": row.metrics.clicks,
+                "impressions": row.metrics.impressions,
             })
         return keywords
     except GoogleAPIError as e:
         print(f"Error fetching keywords: {e}")
         return []
 
-def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, days: int = 30):
+def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, date_range: str = "YESTERDAY"):
     """
-    Obtiene datos de search terms de los últimos N días.
+    Obtiene datos de search terms para el rango de fechas indicado.
     """
     ga_service = client.get_service("GoogleAdsService")
-    start_date, end_date = get_date_range(days)
 
     query = f"""
         SELECT
@@ -147,7 +532,7 @@ def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, days: int 
           metrics.clicks,
           metrics.impressions
         FROM search_term_view
-        WHERE segments.date BETWEEN '{start_date}' AND '{end_date}'
+        WHERE segments.date DURING {date_range}
     """
     
     try:
@@ -260,6 +645,114 @@ def update_campaign_name(client, customer_id: str, campaign_id: str, new_name: s
         return {"status": "error", "message": str(e)}
 
 
+def fetch_campaign_budget_info(client, customer_id: str, campaign_id: str) -> dict:
+    """
+    Fetches the budget resource name and current daily amount for a campaign.
+    Returns: {budget_resource_name, current_daily_budget_mxn}
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    query = f"""
+        SELECT
+          campaign.id,
+          campaign.name,
+          campaign.campaign_budget,
+          campaign_budget.amount_micros,
+          campaign_budget.resource_name
+        FROM campaign
+        WHERE campaign.id = {campaign_id}
+    """
+    try:
+        response = ga_service.search(customer_id=customer_id, query=query)
+        for row in response:
+            return {
+                "budget_resource_name": row.campaign_budget.resource_name,
+                "current_daily_budget_mxn": round(row.campaign_budget.amount_micros / 1_000_000, 2),
+            }
+    except Exception as e:
+        return {"error": str(e)}
+    return {"error": "Campaign not found"}
+
+
+def separate_and_assign_budget(
+    client, customer_id: str, campaign_id: str, budget_micros: int, campaign_name: str = ""
+) -> dict:
+    """
+    Separa una campaña de su presupuesto compartido creando un presupuesto individual.
+
+    Pasos:
+      1. Crear un nuevo CampaignBudget individual (explicitly_shared=False) con budget_micros.
+      2. Asignar ese nuevo presupuesto a la campaña vía CampaignOperation.
+
+    Returns:
+        {"status": "success", "new_budget_resource": str, "campaign_resource": str}
+        {"status": "error", "message": str}
+    """
+    import time as _time
+    try:
+        budget_service   = client.get_service("CampaignBudgetService")
+        campaign_service = client.get_service("CampaignService")
+
+        # ── Paso 1: crear presupuesto individual ─────────────────────────────
+        budget_op     = client.get_type("CampaignBudgetOperation")
+        new_budget    = budget_op.create
+        # Nombre único para evitar DUPLICATE_NAME
+        new_budget.name             = f"Individual_{campaign_name or campaign_id}_{int(_time.time())}"
+        new_budget.amount_micros    = budget_micros
+        new_budget.delivery_method  = client.enums.BudgetDeliveryMethodEnum.STANDARD
+        new_budget.explicitly_shared = False
+
+        budget_response = budget_service.mutate_campaign_budgets(
+            customer_id=customer_id, operations=[budget_op]
+        )
+        new_budget_resource = budget_response.results[0].resource_name
+
+        # ── Paso 2: vincular campaña al nuevo presupuesto ────────────────────
+        campaign_op   = client.get_type("CampaignOperation")
+        campaign      = campaign_op.update
+        campaign.resource_name  = f"customers/{customer_id}/campaigns/{campaign_id}"
+        campaign.campaign_budget = new_budget_resource
+        campaign_op.update_mask.paths[:] = ["campaign_budget"]
+
+        campaign_response = campaign_service.mutate_campaigns(
+            customer_id=customer_id, operations=[campaign_op]
+        )
+        return {
+            "status":               "success",
+            "new_budget_resource":  new_budget_resource,
+            "campaign_resource":    campaign_response.results[0].resource_name,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def remove_smart_campaign_theme(client, customer_id: str, criterion_resource_name: str) -> dict:
+    """
+    Elimina un keyword theme de una Smart Campaign usando CampaignCriterionService.
+
+    Args:
+        criterion_resource_name: resource_name del campaign_criterion a eliminar.
+            Formato: "customers/{cid}/campaignCriteria/{campaign_id}~{criterion_id}"
+
+    Returns:
+        {"status": "success", "removed": criterion_resource_name}
+        {"status": "error",   "message": str(e)}
+
+    Restricciones API:
+      - Solo operación REMOVE — no hay UPDATE para keyword themes en Smart.
+      - Google puede rechazar si la campaña queda con muy pocos temas (<3).
+      - La guarda de SMART_THEME_MIN_REMAINING (5) está en config/agent_config.py
+        y se evalúa ANTES de llamar esta función.
+    """
+    try:
+        service = client.get_service("CampaignCriterionService")
+        op = client.get_type("CampaignCriterionOperation")
+        op.remove = criterion_resource_name
+        service.mutate_campaign_criteria(customer_id=customer_id, operations=[op])
+        return {"status": "success", "removed": criterion_resource_name}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 def update_campaign_budget(client, customer_id: str, budget_resource_name: str, budget_micros: int) -> dict:
     """Actualiza el presupuesto diario de una campaña. budget_micros = MXN x 1,000,000"""
     try:
@@ -283,10 +776,62 @@ def update_campaign_budget(client, customer_id: str, budget_resource_name: str, 
 
 # ── TASK 5 ──────────────────────────────────────────────────────────────────
 
+def _verify_geo_id_is_allowed(client, customer_id: str, location_id: str) -> dict:
+    """Verifica por API que un location_id resuelva a Mérida, Yucatán antes de mutar.
+
+    Returns:
+        {"allowed": True, "canonical": str}   — ID en whitelist y confirmado como Mérida
+        {"allowed": False, "reason": str}     — ID no en whitelist o no resuelve a Mérida
+    """
+    from config.agent_config import DEFAULT_ALLOWED_LOCATION_IDS, MERIDA_LOCATION_CANONICAL_CONTAINS
+
+    if location_id not in DEFAULT_ALLOWED_LOCATION_IDS:
+        return {
+            "allowed": False,
+            "reason": (
+                f"location_id '{location_id}' no está en DEFAULT_ALLOWED_LOCATION_IDS "
+                f"{DEFAULT_ALLOWED_LOCATION_IDS}. Agregar solo IDs verificados como Mérida."
+            ),
+        }
+    # Verificar contra la API que el ID realmente resuelve a Mérida
+    try:
+        ga = client.get_service("GoogleAdsService")
+        q  = f"""
+            SELECT geo_target_constant.id, geo_target_constant.canonical_name
+            FROM geo_target_constant
+            WHERE geo_target_constant.id = {location_id}
+        """
+        rows = list(ga.search(customer_id=customer_id, query=q))
+        if not rows:
+            return {"allowed": False, "reason": f"ID {location_id} no encontrado en geo_target_constant."}
+        canonical = rows[0].geo_target_constant.canonical_name
+        if MERIDA_LOCATION_CANONICAL_CONTAINS.lower() not in canonical.lower():
+            return {
+                "allowed": False,
+                "reason": (
+                    f"BLOQUEADO: ID {location_id} resuelve a '{canonical}', "
+                    f"que no contiene '{MERIDA_LOCATION_CANONICAL_CONTAINS}'. "
+                    f"Esto no es Mérida — mutación cancelada para prevenir configuración incorrecta."
+                ),
+            }
+        return {"allowed": True, "canonical": canonical}
+    except Exception as exc:
+        return {"allowed": False, "reason": f"Error verificando ID {location_id} contra API: {exc}"}
+
+
 def update_campaign_location(client, customer_id: str, campaign_id: str, location_id: str) -> dict:
     """Restringe campaña a una ciudad/region por location_id (criterion type: LOCATION).
-    Merida, Yucatan location_id: '1010182'
+    Merida, Yucatan location_id: '1010205'
+
+    GUARDIA DE SEGURIDAD: verifica que location_id esté en DEFAULT_ALLOWED_LOCATION_IDS
+    y que resuelva a Mérida, Yucatán via API antes de ejecutar la mutación.
+    Si el ID no es Mérida, la función retorna error sin hacer ningún cambio.
     """
+    # ── Guardia geo: verificar ID antes de cualquier mutación ──────────────
+    guard = _verify_geo_id_is_allowed(client, customer_id, location_id)
+    if not guard["allowed"]:
+        return {"status": "error", "message": guard["reason"], "blocked_by": "geo_id_guard"}
+
     try:
         criterion_service = client.get_service("CampaignCriterionService")
         criterion_operation = client.get_type("CampaignCriterionOperation")
@@ -398,6 +943,127 @@ def _remove_existing_geo_criteria(client, customer_id: str, campaign_id: str) ->
         except Exception as exc:
             failed.append({"resource_name": rn, "error": str(exc)[:120]})
     return removed, failed
+
+
+def fetch_campaign_geo_criteria(client, customer_id: str) -> dict:
+    """
+    Retorna un dict keyed by campaign_id con los criterios de geotargeting de
+    todas las campañas ENABLED y PAUSED (excluye REMOVED).
+
+    Hace tres queries GAQL:
+      1. Campañas ENABLED y PAUSED (id, name, advertising_channel_type).
+      2. Criterios LOCATION positivos.
+      3. Criterios PROXIMITY positivos — una campaña con solo PROXIMITY y sin
+         LOCATION aparece con location_ids=[], señal GEO0 (sin restricción
+         por location_id).  has_proximity=True permite al caller saber que
+         existe restricción de otro tipo.
+
+    Formato del dict retornado:
+    {
+      "123456": {
+        "campaign_id":              "123456",
+        "campaign_name":            "Thai Merida Delivery",
+        "advertising_channel_type": "SMART",
+        "location_ids":             ["1010205"],
+        "criteria_resource_names":  ["customers/.../campaignCriteria/..."],
+        "has_proximity":            False,
+        "proximity_radius_km":      None,   # float si existe PROXIMITY, else None
+        "proximity_center_lat":     None,   # float si existe PROXIMITY, else None
+        "proximity_center_lng":     None,   # float si existe PROXIMITY, else None
+      },
+      ...
+    }
+    Campañas sin ningún criterio LOCATION aparecen con location_ids=[].
+    """
+    ga_service = client.get_service("GoogleAdsService")
+
+    # ── Query 1: campañas ENABLED y PAUSED ───────────────────────────────────
+    q_campaigns = """
+        SELECT
+          campaign.id,
+          campaign.name,
+          campaign.advertising_channel_type
+        FROM campaign
+        WHERE campaign.status IN ('ENABLED', 'PAUSED')
+    """
+    result: dict = {}
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=q_campaigns):
+            cid = str(row.campaign.id)
+            result[cid] = {
+                "campaign_id":              cid,
+                "campaign_name":            row.campaign.name,
+                "advertising_channel_type": row.campaign.advertising_channel_type.name,
+                "location_ids":             [],
+                "criteria_resource_names":  [],
+                "has_proximity":            False,
+                "proximity_radius_km":      None,
+                "proximity_center_lat":     None,
+                "proximity_center_lng":     None,
+            }
+    except Exception as e:
+        print(f"fetch_campaign_geo_criteria: error en query campañas — {e}")
+        return {}
+
+    # ── Query 2: criterios LOCATION positivos ────────────────────────────────
+    q_location = """
+        SELECT
+          campaign.id,
+          campaign_criterion.location.geo_target_constant,
+          campaign_criterion.resource_name
+        FROM campaign_criterion
+        WHERE campaign.status IN ('ENABLED', 'PAUSED')
+          AND campaign_criterion.type = 'LOCATION'
+          AND campaign_criterion.negative = FALSE
+    """
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=q_location):
+            cid = str(row.campaign.id)
+            if cid not in result:
+                continue
+            geo_rn = row.campaign_criterion.location.geo_target_constant
+            location_id = geo_rn.split("/")[-1] if geo_rn else ""
+            if location_id:
+                result[cid]["location_ids"].append(location_id)
+                result[cid]["criteria_resource_names"].append(
+                    row.campaign_criterion.resource_name
+                )
+    except Exception as e:
+        print(f"fetch_campaign_geo_criteria: error en query LOCATION — {e}")
+
+    # ── Query 3: criterios PROXIMITY positivos (incluye radio y centro) ─────
+    q_proximity = """
+        SELECT
+          campaign.id,
+          campaign_criterion.resource_name,
+          campaign_criterion.proximity.radius,
+          campaign_criterion.proximity.geo_point.latitude_in_micro_degrees,
+          campaign_criterion.proximity.geo_point.longitude_in_micro_degrees
+        FROM campaign_criterion
+        WHERE campaign.status IN ('ENABLED', 'PAUSED')
+          AND campaign_criterion.type = 'PROXIMITY'
+          AND campaign_criterion.negative = FALSE
+    """
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=q_proximity):
+            cid = str(row.campaign.id)
+            if cid not in result:
+                continue
+            prox = row.campaign_criterion.proximity
+            result[cid]["has_proximity"]       = True
+            result[cid]["proximity_radius_km"] = prox.radius
+            result[cid]["proximity_center_lat"] = (
+                prox.geo_point.latitude_in_micro_degrees / 1_000_000
+                if prox.geo_point.latitude_in_micro_degrees else None
+            )
+            result[cid]["proximity_center_lng"] = (
+                prox.geo_point.longitude_in_micro_degrees / 1_000_000
+                if prox.geo_point.longitude_in_micro_degrees else None
+            )
+    except Exception as e:
+        print(f"fetch_campaign_geo_criteria: error en query PROXIMITY — {e}")
+
+    return result
 
 
 # ── TASK 6 ──────────────────────────────────────────────────────────────────

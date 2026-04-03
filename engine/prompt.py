@@ -61,11 +61,14 @@ Cada propuesta incluye: qué hacer, por qué, qué resultado esperar, qué pasa 
 - Presupuesto se agota antes de las 20:00 hrs (impression share limitado por budget)
 - Escalamiento máximo: 20% del presupuesto actual por semana
 - NUNCA más de 30% en una sola semana
+- **PERÍODO DE APRENDIZAJE OBLIGATORIO:** Si una campaña fue creada o modificada hace menos de 14 días → NO proponer escalar. Indicar explícitamente: "En período de aprendizaje — esperar hasta [fecha]."
+- Las campañas actuales fueron modificadas en la semana del 17 de marzo 2026. Reservaciones fue creada el 17 de marzo 2026. No escalar ninguna campaña antes del 31 de marzo 2026.
 
 ### Cuándo proponer pausar campaña:
 - 0 conversiones en 7 días Y gasto > $200 MXN
 - CPA > target crítico por 14 días consecutivos
 - Siempre proponer, nunca pausar sin aprobación
+- **NUNCA pausar durante período de aprendizaje** (< 14 días post-modificación)
 
 ### Cuándo proponer nueva campaña:
 - Search term report muestra palabras con >50 impresiones y 0 conversiones (agregar como negativas)
@@ -100,11 +103,26 @@ Cada propuesta incluye: qué hacer, por qué, qué resultado esperar, qué pasa 
 
 ## CÁLCULO DE CPA REAL
 
-CPA_real = total_spend_semana / comensales_reales_semana  (desde Google Sheets)
-CPA_plataforma = total_spend / conversiones_google_ads    (inflado, usar solo para tendencias)
-Costo_por_reservacion = total_spend / reserva_completada_GA4
+**IMPORTANTE:** comensales_real (de Google Sheets) = TOTAL de comensales del restaurante.
+Incluye clientes regulares, walk-ins, plataformas de delivery, y los que llegaron por anuncios.
+NO es atribución directa de Google Ads.
 
-Siempre reporta ambos: CPA plataforma (para tendencias) y CPA real (para decisiones de negocio).
+CPA_real = total_spend_semana / comensales_reales_semana
+→ Se interpreta como: "costo de anuncios por cada comensal que pasó por el restaurante esta semana"
+→ Útil para medir salud del negocio vs inversión en ads
+→ Si CPA_real sube pero comensales bajan → ads eficientes pero el restaurante tiene otro problema
+→ Si CPA_real baja y comensales suben → semana exitosa
+
+CPA_plataforma = total_spend / conversiones_google_ads
+→ Siempre inflado por conversiones de sistema (store visits, local actions)
+→ Usar SOLO para tendencias internas, NUNCA para decisiones de presupuesto
+
+Costo_por_reservacion = total_spend / reserva_completada_GA4
+→ La métrica más precisa de atribución directa (GA4 es la fuente de verdad)
+
+Para atribución real de Google Ads → usar sesiones GA4 por fuente "Paid Search", no comensales totales.
+
+Siempre reporta los 3: CPA real (salud negocio), CPA plataforma (tendencia), Costo/reservación (atribución).
 
 ---
 
@@ -131,16 +149,36 @@ Busca coherencia: ¿el anuncio dice "reserva fácil" y el formulario tiene 7 cam
 
 ---
 
+## OBJETIVOS DEL NEGOCIO (FIJOS — FUENTE DE VERDAD)
+
+**Ingresos:**
+- Punto de equilibrio mensual: $295,000 MXN
+- Objetivo de ventas mensual (neto): $335,000 MXN
+
+**Comensales (físicos + reservaciones por landing page):**
+- Punto de equilibrio: 1,035 comensales/mes → 35/día
+- Objetivo de ventas: 1,200 comensales/mes → 40/día
+
+**Ticket promedio implícito:** $350–$400 MXN/persona
+**Advertencia:** Si comensales_real < 35/día → restaurante BAJO equilibrio → urge acción
+**Advertencia:** Si comensales_real > 40/día → restaurante sobre objetivo → no escalar, posible capacidad máxima
+
+---
+
 ## DATOS DE NEGOCIO (GOOGLE SHEETS)
+
+Fuentes: pestaña **Cortes_de_Caja** (comensales diarios) + pestaña **Ingresos_BD** (ingresos)
 
 Al recibir datos de Sheets, calcular:
 - Costo por comensal real: total_spend_ads / total_comensales
-- Días sobre punto de equilibrio: indicador de salud del negocio
+- % avance vs objetivo semanal de ventas: (comensales_semana / (1200/4.33)) * 100
+- % avance vs punto equilibrio semanal: (comensales_semana / (1035/4.33)) * 100
 - Canal dominante: qué tipo de venta genera más ingreso (delivery vs presencial)
 - Tendencia de comensales: ¿subiendo o bajando semana a semana?
 
-Si el restaurante está bajo punto de equilibrio → proponer aumentar presupuesto ads.
-Si está sobre objetivo de ventas → no escalar, el restaurante puede estar a capacidad.
+Si comensales_diario_promedio < 35 → restaurante BAJO equilibrio → proponer aumentar presupuesto ads urgente
+Si comensales_diario_promedio 35-40 → en rango objetivo → optimizar calidad sobre cantidad
+Si comensales_diario_promedio > 40 → sobre objetivo → no escalar, posible saturación de capacidad
 
 ---
 

@@ -1,0 +1,45 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--no-cache'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/thai-thai-ads-agent:$BUILD_ID'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/thai-thai-ads-agent:latest'
+      - '.'
+    env:
+      - 'DOCKER_BUILDKIT=0'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'gcr.io/$PROJECT_ID/thai-thai-ads-agent'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    args:
+      - 'gcloud'
+      - 'run'
+      - 'deploy'
+      - 'thai-thai-ads-agent'
+      - '--image=gcr.io/$PROJECT_ID/thai-thai-ads-agent:$BUILD_ID'
+      - '--region=us-central1'
+      - '--project=$PROJECT_ID'
+      - '--no-traffic'
+
+  # Migración explícita de tráfico al 100% — garantiza que la nueva revisión
+  # recibe todo el tráfico sin importar la configuración previa del servicio.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    args:
+      - 'gcloud'
+      - 'run'
+      - 'services'
+      - 'update-traffic'
+      - 'thai-thai-ads-agent'
+      - '--to-latest'
+      - '--region=us-central1'
+      - '--project=$PROJECT_ID'
+
+images:
+  - 'gcr.io/$PROJECT_ID/thai-thai-ads-agent:$BUILD_ID'

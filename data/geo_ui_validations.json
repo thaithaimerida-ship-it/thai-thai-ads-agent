@@ -1,0 +1,19 @@
+{
+  "22612348265": {
+    "campaign_id": "22612348265",
+    "campaign_name": "Thai Merida - Local",
+    "ui_state": "correct",
+    "ui_validated_by_human": true,
+    "ui_validated_at": "2026-03-27T00:00:00",
+    "ui_validation_source": "manual_session_confirmation",
+    "notes": "Confirmado por Hugo: Express UI muestra PROXIMITY centrada en Col. Emiliano Zapata Norte (lat=21.008851, lng=-89.612562, radio=25 km). Equivalente al criterio de API.",
+    "geo_snapshot": {
+      "targeting_type": "PROXIMITY",
+      "location_ids": [],
+      "proximity_radius_km": 25.0,
+      "proximity_center_lat": 21.008851,
+      "proximity_center_lng": -89.612562,
+      "objective_type": "LOCAL_DISCOVERY"
+    }
+  }
+}

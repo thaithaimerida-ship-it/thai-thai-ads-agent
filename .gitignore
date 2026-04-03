@@ -17,3 +17,29 @@ __pycache__/
 # AI tools configs
 .playwright-mcp/
 .superpowers/
+.claude/
+
+# Virtual envs
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+*.egg-info/
+dist/
+build/
+
+# Temp diagnostic and one-time fix scripts
+diag_*.py
+fix_*.py
+test_smart_geo.py
+generar_token.py
+refresh_oauth.py
+
+# Generated HTML previews
+resumen_dashboard_thai_thai.html
+weekly_preview.html
+index.html

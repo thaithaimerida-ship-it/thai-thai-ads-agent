@@ -112,21 +112,23 @@ def fetch_ga4_events_detailed(property_id: str = None, days: int = 7) -> dict:
         ],
         metrics=[
             Metric(name="eventCount"),
-            Metric(name="totalUsers")
+            Metric(name="totalUsers"),
+            Metric(name="sessions")
         ]
     )
-    
+
     try:
         response = client.run_report(request)
     except Exception as e:
         print(f"[ERROR] Falló consulta detallada a GA4: {e}")
         return {"error": str(e)}
-    
+
     # Estructura de datos más rica
     detailed_data = {
         "events_by_name": {},
         "events_by_device": {"desktop": 0, "mobile": 0, "tablet": 0},
         "events_by_hour": {str(h): 0 for h in range(24)},
+        "total_sessions": 0,
         "conversion_funnel": {}
     }
     
@@ -135,19 +137,23 @@ def fetch_ga4_events_detailed(property_id: str = None, days: int = 7) -> dict:
         device = row.dimension_values[1].value
         hour = row.dimension_values[2].value
         event_count = int(row.metric_values[0].value)
-        
+        sessions_count = int(row.metric_values[2].value) if len(row.metric_values) > 2 else 0
+
         # Acumular por nombre
         if event_name not in detailed_data["events_by_name"]:
             detailed_data["events_by_name"][event_name] = 0
         detailed_data["events_by_name"][event_name] += event_count
-        
+
         # Acumular por dispositivo
         if device in detailed_data["events_by_device"]:
             detailed_data["events_by_device"][device] += event_count
-        
+
         # Acumular por hora
         if hour in detailed_data["events_by_hour"]:
             detailed_data["events_by_hour"][hour] += event_count
+
+        # Acumular sesiones totales
+        detailed_data["total_sessions"] += sessions_count
     
     # Calcular embudo de conversión
     events_by_name = detailed_data["events_by_name"]
