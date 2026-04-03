@@ -9,3 +9,5 @@ anthropic>=0.40.0
 gspread>=6.0.0
 google-auth>=2.0.0
 streamlit>=1.30.0
+plotly>=5.18.0
+pandas>=2.0.0
