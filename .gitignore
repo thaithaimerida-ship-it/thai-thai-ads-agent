@@ -1,3 +1,19 @@
+﻿# Credentials - NUNCA subir
+ga4-credentials.json
+google-ads.yaml
+*.db
 .env
+
+# Python
+Lib/
+Scripts/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Logs
+*.log
+
+# AI tools configs
+.playwright-mcp/
+.superpowers/
