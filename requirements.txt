@@ -1,8 +1,6 @@
 fastapi[standard]>=0.100.0
 uvicorn[standard]>=0.23.0
 pydantic>=2.0.0
-ag2>=0.3.2
-openai>=1.40.0
 python-dotenv
 google-ads
 google-analytics-data
@@ -10,3 +8,4 @@ requests
 anthropic>=0.40.0
 gspread>=6.0.0
 google-auth>=2.0.0
+streamlit>=1.30.0
