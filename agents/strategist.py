@@ -205,7 +205,17 @@ class Strategist:
                 "approval_required": False
             })
 
-        # 3. SCALE campaigns
+        # 3. SCALE campaigns — con ROI real por canal de negocio
+        _negocio = {}
+        try:
+            from engine.sheets_client import resumen_negocio_para_agente
+            _negocio = resumen_negocio_para_agente(days=7)
+        except Exception:
+            pass
+
+        _roi_delivery = _negocio.get("roi_real_delivery", 0)
+        _roi_local    = _negocio.get("roi_real_local", 0)
+
         for camp in campaigns:
             spend = camp.get("cost_micros", 0) / 1_000_000
             conversions = float(camp.get("conversions", 0))
@@ -213,13 +223,28 @@ class Strategist:
             if conversions > 0:
                 cpa = spend / conversions
                 if cpa < 12 and spend > 100:
+                    # Determinar ROI real del canal según tipo de campaña
+                    name_lower = name.lower()
+                    is_delivery = any(w in name_lower for w in ("delivery", "rappi", "uber", "pedido", "domicilio"))
+                    roi_neto = _roi_delivery if is_delivery else _roi_local
+                    roi_ratio = round(roi_neto / spend, 2) if spend > 0 else 0
+                    roi_label = f"ROI real {roi_ratio}x (neto ${roi_neto:,.0f} vs gasto ${spend:,.0f})" if roi_neto > 0 else ""
+
                     proposals.append({
                         "decision_id": f"dec_{len(proposals)+1:03d}",
                         "type": "scale_campaign",
                         "action": f"Escalar '{name}' +30%",
                         "target": {"campaign_id": str(camp.get("id", "")), "campaign_name": name},
-                        "reason": f"CPA ${cpa:.2f} (excelente) | {int(conversions)} conversiones",
-                        "data_evidence": {"current_cpa": round(cpa, 2), "target_cpa": 15.00, "efficiency": round((15 - cpa) / 15 * 100, 1), "conversions_7d": int(conversions), "trend": "stable"},
+                        "reason": f"CPA ${cpa:.2f} (excelente) | {int(conversions)} conversiones" + (f" | {roi_label}" if roi_label else ""),
+                        "data_evidence": {
+                            "current_cpa": round(cpa, 2),
+                            "target_cpa": 15.00,
+                            "efficiency": round((15 - cpa) / 15 * 100, 1),
+                            "conversions_7d": int(conversions),
+                            "trend": "stable",
+                            "roi_neto_canal": roi_neto,
+                            "roi_ratio": roi_ratio,
+                        },
                         "impact": {"estimated_new_conversions": int(conversions * 0.3), "budget_increase": round(spend * 0.3, 2), "risk": "low"},
                         "confidence": 85,
                         "urgency": "high",

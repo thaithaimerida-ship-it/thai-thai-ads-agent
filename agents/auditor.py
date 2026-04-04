@@ -1403,16 +1403,11 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             else:
                 _run_summary["geo_unverified_campaigns"] = []
             try:
-                from engine.sheets_client import fetch_sheets_data as _fsd
-                _sd = _fsd(days=1)
-                _ud = _sd.get("ultimo_dia", {})
-                _run_summary["ventas_ayer"] = {
-                    "comensales": _ud.get("comensales_real"),
-                    "objetivo":   35,
-                }
+                from engine.sheets_client import resumen_negocio_para_agente as _rna
+                _run_summary["ventas_ayer"] = _rna(days=1)
             except Exception as _sheets_exc:
                 logger.warning("ventas_ayer: no disponible — %s", _sheets_exc)
-                _run_summary["ventas_ayer"] = {"comensales": None, "objetivo": 35}
+                _run_summary["ventas_ayer"] = {}
 
             # GA4: Movimiento en la Web (24h) para correo consolidado
             try:

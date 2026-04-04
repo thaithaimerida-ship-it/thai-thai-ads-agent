@@ -31,42 +31,55 @@ def _find_col(header_row: List, *names) -> int:
 def parse_diario_sheet(rows: List[List]) -> List[Dict]:
     """
     Parses the Cortes_de_Caja sheet into structured dicts.
-    Auto-detects columns by header name.
-    Known layout: A=Fecha, J=No. de Comensales
+    Auto-detects columns by header name with positional fallback.
+    Known layout: A=Fecha, C=Venta Neta, E=Venta c/Imp, F=Efectivo,
+                  G=Tarjeta, H=Otros (plataformas), J=No. de Comensales
     """
     if len(rows) < 2:
         return []
 
     header = rows[0]
 
-    # Detect column indices by header name
-    col_fecha = _find_col(header, "Fecha", "fecha", "FECHA")
-    col_comensales = _find_col(header, "No. de Comensales", "Comensales", "No.de Comensales", "comensales_real")
-    col_obj_ventas = _find_col(header, "Comensales_Obj_Ventas", "Obj_Ventas", "Objetivo Ventas", "obj_ventas")
-    col_obj_equilibrio = _find_col(header, "Comensales_Obj_Equilibrio", "Punto Equilibrio", "Equilibrio", "obj_equilibrio")
-    col_ingresos_bruto = _find_col(header, "Ingresos_Bruto", "Ingresos Bruto", "Ingresos Brutos", "ingresos_bruto")
-    col_ingresos_neto = _find_col(header, "Ingresos_Neto", "Ingresos Neto", "Ingresos Netos", "ingresos_neto")
+    def _col(fallback, *names):
+        idx = _find_col(header, *names)
+        return idx if idx != -1 else fallback
 
-    # Fallback to positional (legacy format)
-    if col_fecha == -1:
-        col_fecha = 0
-    if col_comensales == -1:
-        col_comensales = 9  # Column J (0-indexed)
+    col_fecha           = _col(0,  "Fecha", "fecha", "FECHA")
+    col_venta_neta      = _col(2,  "Venta Neta", "venta_neta", "Neta")
+    col_venta_bruta     = _col(4,  "Venta con Imp.", "Venta c/Imp", "Venta c/Imp.", "venta_bruta", "Bruta")
+    col_pago_efectivo   = _col(5,  "Efectivo", "efectivo", "Pago Efectivo")
+    col_pago_tarjeta    = _col(6,  "Tarjeta", "tarjeta", "Terminal", "POS")
+    col_pago_plataformas = _col(7, "Otros", "otros", "Plataformas", "Delivery apps")
+    col_comensales      = _col(9,  "No. de Comensales", "Comensales", "No.de Comensales", "comensales_real")
+    col_obj_ventas      = _find_col(header, "Comensales_Obj_Ventas", "Obj_Ventas", "Objetivo Ventas", "obj_ventas")
+    col_obj_equilibrio  = _find_col(header, "Comensales_Obj_Equilibrio", "Punto Equilibrio", "Equilibrio", "obj_equilibrio")
+    col_ingresos_bruto  = _find_col(header, "Ingresos_Bruto", "Ingresos Bruto", "Ingresos Brutos", "ingresos_bruto")
+    col_ingresos_neto   = _find_col(header, "Ingresos_Neto", "Ingresos Neto", "Ingresos Netos", "ingresos_neto")
+
+    def _val_f(row, col):
+        return _safe_float(row[col]) if col != -1 and col < len(row) else 0.0
+
+    def _val_i(row, col):
+        return _safe_int(row[col]) if col != -1 and col < len(row) else 0
 
     result = []
     for row in rows[1:]:  # skip header
         if not row or (col_fecha < len(row) and not row[col_fecha]):
             continue
-
         fecha = str(row[col_fecha]) if col_fecha < len(row) else ""
         if not fecha:
             continue
 
-        comensales_real = _safe_int(row[col_comensales]) if col_comensales != -1 and col_comensales < len(row) else 0
-        obj_ventas = _safe_int(row[col_obj_ventas]) if col_obj_ventas != -1 and col_obj_ventas < len(row) else 0
-        obj_equilibrio = _safe_int(row[col_obj_equilibrio]) if col_obj_equilibrio != -1 and col_obj_equilibrio < len(row) else 0
-        ingresos_bruto = _safe_float(row[col_ingresos_bruto]) if col_ingresos_bruto != -1 and col_ingresos_bruto < len(row) else 0.0
-        ingresos_neto = _safe_float(row[col_ingresos_neto]) if col_ingresos_neto != -1 and col_ingresos_neto < len(row) else 0.0
+        comensales_real   = _val_i(row, col_comensales)
+        obj_ventas        = _val_i(row, col_obj_ventas)
+        obj_equilibrio    = _val_i(row, col_obj_equilibrio)
+        ingresos_bruto    = _val_f(row, col_ingresos_bruto)
+        ingresos_neto     = _val_f(row, col_ingresos_neto)
+        venta_neta        = _val_f(row, col_venta_neta)
+        venta_bruta       = _val_f(row, col_venta_bruta)
+        pago_efectivo     = _val_f(row, col_pago_efectivo)
+        pago_tarjeta      = _val_f(row, col_pago_tarjeta)
+        pago_plataformas  = _val_f(row, col_pago_plataformas)
 
         result.append({
             "fecha": fecha,
@@ -75,6 +88,11 @@ def parse_diario_sheet(rows: List[List]) -> List[Dict]:
             "obj_equilibrio": obj_equilibrio,
             "ingresos_bruto": ingresos_bruto,
             "ingresos_neto": ingresos_neto,
+            "venta_neta": venta_neta,
+            "venta_bruta": venta_bruta,
+            "pago_efectivo": pago_efectivo,
+            "pago_tarjeta": pago_tarjeta,
+            "pago_plataformas": pago_plataformas,  # Rappi, Uber, delivery apps
             "sobre_equilibrio": comensales_real >= obj_equilibrio if obj_equilibrio > 0 else None,
             "sobre_objetivo_ventas": comensales_real >= obj_ventas if obj_ventas > 0 else None,
         })
@@ -340,31 +358,64 @@ def _get_spreadsheet():
     return gc.open_by_key(spreadsheet_id)
 
 
-def _read_ingresos_by_daterange(sh, start: date, end: date) -> float:
+def _read_ingresos_by_daterange(sh, start: date, end: date) -> dict:
     """
-    Lee Ingresos_BD (col F = Monto Neto) y suma las filas cuya fecha
-    está en [start, end]. Retorna el total neto en MXN.
+    Lee Ingresos_BD y agrega las filas cuya fecha está en [start, end].
+
+    Retorna:
+      total_neto (float) — suma de col F (Monto Neto)
+      por_canal  (list)  — [{fuente, bruto, comision, neto, comision_pct}]
+                           agrupado por col B (Fuente/Cliente)
     """
-    COL_FECHA = 0
-    COL_NETO = 5  # F
+    COL_FECHA    = 0  # A
+    COL_FUENTE   = 1  # B
+    COL_BRUTO    = 3  # D — Monto Bruto
+    COL_COMISION = 4  # E — Comisión/Retención
+    COL_NETO     = 5  # F — Monto Neto
+
+    _empty = {"total_neto": 0.0, "por_canal": []}
 
     try:
         ws = sh.worksheet("Ingresos_BD")
         rows = ws.get_all_values()
     except Exception as e:
         print(f"[SHEETS] Error leyendo Ingresos_BD: {e}")
-        return 0.0
+        return _empty
 
-    total = 0.0
+    canal_map: dict = {}  # fuente -> {bruto, comision, neto}
+
     for row in rows[1:]:  # saltar header
         if not row or len(row) <= COL_NETO:
             continue
         fecha = _parse_fecha(str(row[COL_FECHA]).strip())
-        if fecha is None:
+        if fecha is None or not (start <= fecha <= end):
             continue
-        if start <= fecha <= end:
-            total += _safe_float(row[COL_NETO])
-    return total
+
+        fuente   = str(row[COL_FUENTE]).strip().upper() if len(row) > COL_FUENTE else "OTRO"
+        bruto    = _safe_float(row[COL_BRUTO])    if len(row) > COL_BRUTO    else 0.0
+        comision = _safe_float(row[COL_COMISION]) if len(row) > COL_COMISION else 0.0
+        neto     = _safe_float(row[COL_NETO])
+
+        if fuente not in canal_map:
+            canal_map[fuente] = {"bruto": 0.0, "comision": 0.0, "neto": 0.0}
+        canal_map[fuente]["bruto"]    += bruto
+        canal_map[fuente]["comision"] += comision
+        canal_map[fuente]["neto"]     += neto
+
+    total_neto = sum(v["neto"] for v in canal_map.values())
+
+    por_canal = []
+    for fuente, v in sorted(canal_map.items(), key=lambda x: -x[1]["neto"]):
+        comision_pct = round(v["comision"] / v["bruto"] * 100, 1) if v["bruto"] > 0 else 0.0
+        por_canal.append({
+            "fuente": fuente,
+            "bruto": round(v["bruto"], 2),
+            "comision": round(v["comision"], 2),
+            "neto": round(v["neto"], 2),
+            "comision_pct": comision_pct,
+        })
+
+    return {"total_neto": round(total_neto, 2), "por_canal": por_canal}
 
 
 def _read_comensales_by_daterange(sh, start: date, end: date) -> dict:
@@ -449,7 +500,8 @@ def fetch_week_business_data(weeks_ago: int = 1) -> dict:
         monday = today - timedelta(days=today.weekday() + 7 * weeks_ago)
         sunday = monday + timedelta(days=6)
 
-        ventas = _read_ingresos_by_daterange(sh, monday, sunday)
+        ingresos_sem = _read_ingresos_by_daterange(sh, monday, sunday)
+        ventas = ingresos_sem["total_neto"]
         coms_data = _read_comensales_by_daterange(sh, monday, sunday)
 
         total_coms = coms_data["total_comensales"]
@@ -505,7 +557,8 @@ def fetch_mtd_business_data() -> dict:
         dias_mes = calendar.monthrange(ayer.year, ayer.month)[1]
         dias_t = ayer.day  # días transcurridos incluyendo ayer
 
-        ventas = _read_ingresos_by_daterange(sh, inicio, ayer)
+        ingresos_mtd = _read_ingresos_by_daterange(sh, inicio, ayer)
+        ventas = ingresos_mtd["total_neto"]
         coms_data = _read_comensales_by_daterange(sh, inicio, ayer)
         total_coms = coms_data["total_comensales"]
 
@@ -551,5 +604,111 @@ def fetch_mtd_business_data() -> dict:
     except Exception as e:
         import traceback
         print(f"[SHEETS] fetch_mtd_business_data error: {e}")
+        print(f"[SHEETS] {traceback.format_exc()}")
+        return {}
+
+
+# ── Función para agentes: resumen completo con ROI real por canal ─────────────
+
+_DELIVERY_FUENTES = {"RAPPI", "UBBER", "UBER", "DIDI", "IFOOD"}
+_LOCAL_FUENTES    = {"BBVA", "CAJA", "CLIP", "PAYPAL", "TRANSFERENCIA", "BANAMEX", "EFECTIVO"}
+
+
+def resumen_negocio_para_agente(days: int = 7) -> dict:
+    """
+    Retorna un resumen ejecutivo de negocio listo para consumir por los agentes.
+
+    Agrega datos de los últimos `days` días (hasta ayer):
+      comensales_promedio_diario   — promedio diario de comensales
+      venta_neta_promedio_diario   — promedio diario de venta neta (Cortes_de_Caja col C)
+      pago_efectivo_total          — suma efectivo del periodo
+      pago_tarjeta_total           — suma tarjeta del periodo
+      pago_plataformas_total       — suma delivery apps del periodo (Rappi, Uber…)
+      ingreso_por_comensal         — venta_neta / comensales (ticket promedio real)
+      porcentaje_plataformas       — pago_plataformas / venta_bruta (% delivery)
+      por_canal                    — lista [{fuente, bruto, comision, neto, comision_pct}]
+                                     de Ingresos_BD agrupado por fuente
+      roi_real_delivery            — neto acumulado de RAPPI+UBER (ingreso real delivery)
+      roi_real_local               — neto acumulado de BBVA+CAJA+CLIP (ingreso real local)
+
+    Retorna {} si no hay credenciales o falla la lectura.
+    """
+    try:
+        sh = _get_spreadsheet()
+
+        end = date.today() - timedelta(days=1)
+        start = end - timedelta(days=days - 1)
+
+        # ── Cortes_de_Caja (comensales + pagos diarios) ──────────────────────
+        try:
+            ws_caja = sh.worksheet("Cortes_de_Caja")
+            caja_rows = ws_caja.get_all_values()
+        except Exception as e:
+            print(f"[SHEETS] resumen: no se pudo leer Cortes_de_Caja: {e}")
+            caja_rows = []
+
+        diario_data = parse_diario_sheet(caja_rows)
+
+        # Filtrar por rango de fechas
+        recientes = []
+        for row in diario_data:
+            fecha_d = _parse_fecha(row["fecha"])
+            if fecha_d and start <= fecha_d <= end:
+                recientes.append(row)
+
+        dias_con_datos = len(recientes) or 1  # evitar div/0
+
+        total_comensales     = sum(r["comensales_real"]  for r in recientes)
+        total_venta_neta     = sum(r["venta_neta"]       for r in recientes)
+        total_venta_bruta    = sum(r["venta_bruta"]      for r in recientes)
+        total_pago_efectivo  = sum(r["pago_efectivo"]    for r in recientes)
+        total_pago_tarjeta   = sum(r["pago_tarjeta"]     for r in recientes)
+        total_pago_plataformas = sum(r["pago_plataformas"] for r in recientes)
+
+        # ── Ingresos_BD (comisiones por canal) ───────────────────────────────
+        ingresos_result = _read_ingresos_by_daterange(sh, start, end)
+        por_canal = ingresos_result["por_canal"]
+
+        # ROI real por tipo de campaña
+        roi_real_delivery = round(sum(
+            c["neto"] for c in por_canal
+            if c["fuente"] in _DELIVERY_FUENTES
+        ), 2)
+        roi_real_local = round(sum(
+            c["neto"] for c in por_canal
+            if c["fuente"] in _LOCAL_FUENTES
+        ), 2)
+
+        ingreso_por_comensal = round(
+            total_venta_neta / total_comensales, 2
+        ) if total_comensales > 0 else 0.0
+
+        porcentaje_plataformas = round(
+            total_pago_plataformas / total_venta_bruta * 100, 1
+        ) if total_venta_bruta > 0 else 0.0
+
+        return {
+            "periodo_dias": days,
+            "fecha_inicio": start.isoformat(),
+            "fecha_fin": end.isoformat(),
+            "dias_con_datos": dias_con_datos,
+            "comensales_total": total_comensales,
+            "comensales_promedio_diario": round(total_comensales / dias_con_datos, 1),
+            "venta_neta_total": round(total_venta_neta, 2),
+            "venta_neta_promedio_diario": round(total_venta_neta / dias_con_datos, 2),
+            "venta_bruta_total": round(total_venta_bruta, 2),
+            "pago_efectivo_total": round(total_pago_efectivo, 2),
+            "pago_tarjeta_total": round(total_pago_tarjeta, 2),
+            "pago_plataformas_total": round(total_pago_plataformas, 2),
+            "ingreso_por_comensal": ingreso_por_comensal,
+            "porcentaje_plataformas": porcentaje_plataformas,
+            "por_canal": por_canal,
+            "roi_real_delivery": roi_real_delivery,
+            "roi_real_local": roi_real_local,
+        }
+
+    except Exception as e:
+        import traceback
+        print(f"[SHEETS] resumen_negocio_para_agente error: {e}")
         print(f"[SHEETS] {traceback.format_exc()}")
         return {}
