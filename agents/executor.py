@@ -91,7 +91,7 @@ class Executor:
         from engine.ads_client import add_keyword_to_ad_group
         client = self._get_client()
         try:
-            add_keyword_to_ad_group(client, self.customer_id, ad_group_resource, keyword_text, match_type, cpc_bid_micros)
+            add_keyword_to_ad_group(client, self.customer_id, ad_group_resource, keyword_text, match_type)
             self._log_action("add_keyword", keyword_text, {"ad_group": ad_group_resource}, "success")
             return {"status": "executed", "action": "add_keyword", "keyword": keyword_text, "match_type": match_type}
         except Exception as e:
