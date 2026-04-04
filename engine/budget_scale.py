@@ -10,6 +10,14 @@ Dos sub-señales:
 
 Incrementos ≤20% se auto-ejecutan vía Fase 6C.AUTO en auditor.py (si AUTO_EXECUTE_ENABLED=true).
 Incrementos >20% quedan como propuesta informativa para el operador.
+
+Cruce con datos de negocio (negocio_data de Sheets):
+  Cuando negocio_data está disponible, se abre una vía alternativa de elegibilidad
+  para campañas que Google Ads reporta con 0 conversiones pero que demuestran
+  ROI real en el negocio:
+    - Delivery: venta_plataformas_neto / gasto_ads > 5x → candidata a escalar
+    - Local:    comensales > 0 y venta_local / gasto_ads > 3x → candidata a escalar
+  Estas propuestas incluyen roi_real, venta_real y fuente_datos="sheets+ads".
 """
 
 from __future__ import annotations
@@ -20,12 +28,40 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _roi_real_ratio(
+    campaign_type: str,
+    ads_cost_mxn: float,
+    negocio_data: dict,
+) -> tuple:
+    """
+    Calcula el ROI real del negocio para el tipo de campaña.
+    Retorna (roi_ratio, venta_real_mxn, campo_sheets) o (None, None, None).
+    """
+    if not negocio_data or ads_cost_mxn <= 0:
+        return None, None, None
+
+    if campaign_type in ("local", "default"):
+        venta = float(negocio_data.get("venta_local_total") or 0)
+        campo = "venta_local_total"
+    elif campaign_type == "delivery":
+        venta = float(negocio_data.get("venta_plataformas_neto") or 0)
+        campo = "venta_plataformas_neto"
+    else:
+        return None, None, None
+
+    if venta <= 0:
+        return None, None, campo
+
+    return round(venta / ads_cost_mxn, 2), round(venta, 2), campo
+
+
 def detect_scale_opportunities(
     campaigns: List[Dict[str, Any]],
     campaign_type_config: Dict[str, Any],
     ba2_config: Dict[str, Any],
     ba1_candidates: Optional[List[Dict[str, Any]]] = None,
     evidence_days: int = 14,
+    negocio_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Detecta campañas candidatas a escalar presupuesto.
@@ -37,6 +73,9 @@ def detect_scale_opportunities(
         ba1_candidates:       Campañas marcadas por BA1 para reducción de presupuesto.
                               Usado para calcular fondos liberados (BA2_REALLOC).
         evidence_days:        Días de la ventana de evidencia (debe coincidir con BA1).
+        negocio_data:         Dict de resumen_negocio_para_agente() — opcional.
+                              Cuando está disponible, abre vía alternativa de elegibilidad
+                              basada en ROI real del negocio (Sheets + Ads).
 
     Returns:
         {
@@ -53,6 +92,10 @@ def detect_scale_opportunities(
     max_scale_pct = ba2_config.get("max_scale_pct", 0.30)
     max_scale_abs_mxn = ba2_config.get("max_scale_abs_mxn", 80.0)
     by_type = ba2_config.get("by_type", {})
+
+    # ROI mínimo para elegibilidad vía Sheets cuando Google Ads no reporta conversiones
+    ROI_SHEETS_DELIVERY = 5.0
+    ROI_SHEETS_LOCAL    = 3.0
 
     # Calcular fondos diarios liberados por BA1
     freed_daily_mxn = _calc_freed_budget(ba1_candidates or [])
@@ -90,36 +133,67 @@ def detect_scale_opportunities(
             )
             continue
 
-        # --- Guardrail 2: Conversiones mínimas ---
-        if conversions < min_conversions:
-            logger.debug(
-                "BA2 skip %s — conversions=%.1f < min=%d",
-                name, conversions, min_conversions,
-            )
-            continue
-
         # --- Guardrail 3: Presupuesto diario debe ser > 0 ---
         if daily_budget_mxn <= 0:
             continue
 
-        # --- Señal principal: CPA debe estar en zona ideal ---
-        cpa_actual = cost_mxn / conversions if conversions > 0 else None
-        if cpa_actual is None or cpa_ideal <= 0:
-            continue
+        # ── Vía 1: Elegibilidad estándar (Google Ads conversiones) ─────────────
+        roi_ratio, venta_real, campo_sheets = _roi_real_ratio(camp_type, cost_mxn, negocio_data)
 
-        if cpa_actual > cpa_max:
-            # CPA crítico o elevado — BA1 ya lo cubre, no escalar
-            logger.debug("BA2 skip %s — CPA %.1f > cpa_max %.1f", name, cpa_actual, cpa_max)
-            continue
+        via_sheets = False
+        cpa_actual = None
 
-        if cpa_actual > cpa_ideal:
-            # CPA entre ideal y máximo: zona gris, no escalar por ahora
-            logger.debug("BA2 skip %s — CPA %.1f en zona gris (ideal=%.1f)", name, cpa_actual, cpa_ideal)
-            continue
+        if conversions >= min_conversions:
+            # Conversiones suficientes en Google Ads — evaluar CPA
+            cpa_actual = cost_mxn / conversions if conversions > 0 else None
+
+            if cpa_actual is None or cpa_ideal <= 0:
+                continue
+
+            if cpa_actual > cpa_max:
+                logger.debug("BA2 skip %s — CPA %.1f > cpa_max %.1f", name, cpa_actual, cpa_max)
+                continue
+
+            if cpa_actual > cpa_ideal:
+                logger.debug("BA2 skip %s — CPA %.1f en zona gris (ideal=%.1f)", name, cpa_actual, cpa_ideal)
+                continue
+
+        else:
+            # ── Vía 2: Elegibilidad por ROI real de Sheets ────────────────────
+            # Campañas con 0 conversiones en Google Ads pero buen desempeño real.
+            # Local puede tener 0 conv en Ads (mide Maps/offline) pero generar
+            # comensales y ventas en efectivo/tarjeta.
+            if roi_ratio is None:
+                logger.debug(
+                    "BA2 skip %s — conversiones %.1f < min=%d y sin datos de Sheets",
+                    name, conversions, min_conversions,
+                )
+                continue
+
+            roi_threshold = ROI_SHEETS_DELIVERY if camp_type == "delivery" else ROI_SHEETS_LOCAL
+            comensales = int(negocio_data.get("comensales_total") or 0) if negocio_data else 0
+
+            # Local: requiere comensales > 0 como señal adicional de actividad real
+            if camp_type in ("local", "default") and comensales == 0:
+                logger.debug("BA2 skip %s — local con 0 comensales en Sheets", name)
+                continue
+
+            if roi_ratio < roi_threshold:
+                logger.debug(
+                    "BA2 skip %s — ROI real %.1fx < umbral %.1fx",
+                    name, roi_ratio, roi_threshold,
+                )
+                continue
+
+            via_sheets = True
+            logger.info(
+                "BA2 candidato vía Sheets: %s | tipo=%s | ROI_real=%.1fx | "
+                "%s=$%.0f | gasto_ads=$%.0f",
+                name, camp_type, roi_ratio, campo_sheets, venta_real, cost_mxn,
+            )
+        # ──────────────────────────────────────────────────────────────────────
 
         # --- Señal de saturación: Budget Utilization Rate ---
-        # cost_period = gasto total en los evidence_days
-        # budget_period = daily_budget × evidence_days
         budget_period_mxn = daily_budget_mxn * evidence_days
         utilization_rate = cost_mxn / budget_period_mxn if budget_period_mxn > 0 else 0.0
 
@@ -130,9 +204,8 @@ def detect_scale_opportunities(
             )
             continue
 
-        # --- Campaña candidata: CPA ideal + presupuesto saturado ---
-        # Calcular escala óptima
-        scale_by_pct = min(max_scale_pct, 1.0)  # Hasta max_scale_pct
+        # --- Campaña candidata: elegible + presupuesto saturado ---
+        scale_by_pct = min(max_scale_pct, 1.0)
         suggested_increase_mxn = min(
             daily_budget_mxn * scale_by_pct,
             max_scale_abs_mxn,
@@ -149,7 +222,7 @@ def detect_scale_opportunities(
             signal = "BA2_SCALE"
             fund_source = f"nueva inversión requerida: +${actual_increase:.0f} MXN/día"
 
-        proposal = {
+        proposal: Dict[str, Any] = {
             "type": "budget_scale",
             "signal": signal,
             "campaign_id": camp_id,
@@ -158,7 +231,7 @@ def detect_scale_opportunities(
             "current_daily_budget_mxn": daily_budget_mxn,
             "suggested_daily_budget_mxn": new_budget_mxn,
             "increase_mxn": actual_increase,
-            "cpa_actual": round(cpa_actual, 2),
+            "cpa_actual": round(cpa_actual, 2) if cpa_actual is not None else None,
             "cpa_ideal": cpa_ideal,
             "cpa_max": cpa_max,
             "conversions": conversions,
@@ -167,12 +240,26 @@ def detect_scale_opportunities(
             "days_active": days_active,
             "fund_source": fund_source,
             "evidence_days": evidence_days,
+            "fuente_datos": "sheets+ads" if via_sheets else "ads",
         }
+
+        # Enriquecer con ROI real si está disponible
+        if roi_ratio is not None:
+            proposal["roi_real"]   = roi_ratio
+            proposal["venta_real"] = venta_real
+
         proposals.append(proposal)
-        logger.info(
-            "BA2 candidato: %s | señal=%s | CPA=%.1f | util=%.0f%% | +$%.0f MXN/día",
-            name, signal, cpa_actual, utilization_rate * 100, actual_increase,
-        )
+
+        if via_sheets:
+            logger.info(
+                "BA2 candidato (Sheets): %s | señal=%s | ROI_real=%.1fx | util=%.0f%% | +$%.0f MXN/día",
+                name, signal, roi_ratio, utilization_rate * 100, actual_increase,
+            )
+        else:
+            logger.info(
+                "BA2 candidato: %s | señal=%s | CPA=%.1f | util=%.0f%% | +$%.0f MXN/día",
+                name, signal, cpa_actual, utilization_rate * 100, actual_increase,
+            )
 
     total_realloc = sum(p["increase_mxn"] for p in proposals if p["signal"] == "BA2_REALLOC")
     total_scale = sum(p["increase_mxn"] for p in proposals if p["signal"] == "BA2_SCALE")

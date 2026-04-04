@@ -20,6 +20,14 @@ Criterios BA1:
   4. costo en ventana >= min_spend_window del tipo
   5. days_active >= min_days_active del tipo (si disponible — guarda de campaña nueva)
 
+Guardrail ROI real (Sheets):
+  Si negocio_data está disponible, una campaña con CPA alto en Google Ads
+  NO se propone para reducción si el ROI real del negocio es bueno:
+    - Local:    venta_local_total / gasto_ads > 3x
+    - Delivery: venta_plataformas_neto / gasto_ads > 5x
+  Esto protege campañas cuyas conversiones se miden fuera de Google Ads
+  (Google Maps, visitas físicas, offline) pero que generan ingresos reales.
+
 Presupuesto sugerido:
   suggested = current_daily * (cpa_max / cpa_real)
   Piso de seguridad: no sugerir por debajo del budget_floor_pct (30%) del presupuesto actual.
@@ -80,14 +88,54 @@ def _suggest_budget(current_budget: float, cpa_real: float, cpa_max: float,
     return round(max(suggested, floor), 2)
 
 
+def _roi_real_ratio(
+    campaign_type: str,
+    ads_cost_mxn: float,
+    negocio_data: dict,
+) -> tuple:
+    """
+    Calcula el ROI real del negocio para el tipo de campaña dado.
+
+    Compara ingresos reales de Sheets contra gasto de Google Ads.
+    Retorna (roi_ratio, venta_real_mxn, campo_sheets) o (None, None, None).
+
+    - Local:    venta_local_total (tarjeta + efectivo) / ads_cost
+    - Delivery: venta_plataformas_neto (neto tras comisiones) / ads_cost
+
+    Nota: los ingresos son totales del negocio, no atribuibles 100% a Ads.
+    El ratio es un proxy de salud del canal, no atribución directa.
+    """
+    if not negocio_data or ads_cost_mxn <= 0:
+        return None, None, None
+
+    if campaign_type in ("local", "default"):
+        venta = float(negocio_data.get("venta_local_total") or 0)
+        campo = "venta_local_total"
+    elif campaign_type == "delivery":
+        venta = float(negocio_data.get("venta_plataformas_neto") or 0)
+        campo = "venta_plataformas_neto"
+    else:
+        return None, None, None
+
+    if venta <= 0:
+        return None, None, campo
+
+    return round(venta / ads_cost_mxn, 2), round(venta, 2), campo
+
+
 # ── Función pública ───────────────────────────────────────────────────────────
 
-def detect_budget_opportunities(campaigns: list) -> list:
+def detect_budget_opportunities(campaigns: list, negocio_data: dict = None) -> list:
     """
     Detecta señal BA1 en campañas activas.
 
     Solo evalúa campañas con status 'ENABLED'.
     Solo propone (RISK_PROPOSE) — nunca ejecuta automáticamente.
+
+    negocio_data: dict de resumen_negocio_para_agente() — opcional.
+      Si está disponible, activa el guardrail de ROI real: campañas con CPA alto
+      en Google Ads pero buen ROI de negocio (>3x local / >5x delivery) no se
+      proponen para reducción de presupuesto.
 
     Cada candidato retornado incluye evidencia completa:
       signal                — 'BA1'
@@ -106,6 +154,8 @@ def detect_budget_opportunities(campaigns: list) -> list:
       min_spend_window      — umbral de gasto mínimo en ventana para BA1
       min_days_active       — protección mínima de días del tipo
       reason                — texto descriptivo con evidencia
+      roi_real              — ratio ROI real vs gasto Ads (si negocio_data disponible)
+      fuente_datos          — "ads" o "sheets+ads"
 
     Returns:
       Lista de dicts ordenada por gasto descendente (mayor CPA waste primero).
@@ -115,6 +165,10 @@ def detect_budget_opportunities(campaigns: list) -> list:
     min_conv = ba1_cfg.get("min_conversions", 2)
     floor_pct = ba1_cfg.get("budget_floor_pct", 0.30)
     evidence_window = ba1_cfg.get("evidence_window_days", 14)
+
+    # Umbrales de ROI real para proteger campañas con buen desempeño de negocio
+    ROI_PROTECT_LOCAL    = 3.0
+    ROI_PROTECT_DELIVERY = 5.0
 
     candidates = []
 
@@ -156,6 +210,23 @@ def detect_budget_opportunities(campaigns: list) -> list:
         if cpa_real <= cpa_critical:
             continue
 
+        # ── Guardrail ROI real (Sheets) ───────────────────────────────────────
+        # Si el negocio muestra rentabilidad real suficiente, no proponer reducción.
+        # CPA alto en Ads puede reflejar atribución incompleta (Maps, offline).
+        roi_ratio, venta_real, campo_sheets = _roi_real_ratio(campaign_type, cost, negocio_data)
+
+        if roi_ratio is not None:
+            roi_threshold = ROI_PROTECT_DELIVERY if campaign_type == "delivery" else ROI_PROTECT_LOCAL
+            if roi_ratio >= roi_threshold:
+                import logging as _log
+                _log.getLogger(__name__).info(
+                    "BA1 skip %s — ROI real %.1fx ≥ %.1fx umbral "
+                    "(%s=$%.0f vs gasto_ads=$%.0f) — campaña protegida",
+                    name, roi_ratio, roi_threshold, campo_sheets, venta_real, cost,
+                )
+                continue  # No proponer reducción — el negocio es rentable
+        # ─────────────────────────────────────────────────────────────────────
+
         # Calcular presupuesto sugerido
         if daily_budget_mxn > 0:
             suggested_daily = _suggest_budget(daily_budget_mxn, cpa_real, cpa_max, floor_pct)
@@ -181,7 +252,7 @@ def detect_budget_opportunities(campaigns: list) -> list:
                 f" (reduccion {reduction_pct}% desde ${daily_budget_mxn:.2f})"
             )
 
-        candidates.append({
+        candidate = {
             "signal":                "BA1",
             "campaign_id":          cid,
             "campaign_name":        name,
@@ -201,7 +272,17 @@ def detect_budget_opportunities(campaigns: list) -> list:
             # Campos necesarios para ejecución en /approve (Fase 6B.1)
             "budget_resource_name":    camp.get("budget_resource_name", ""),
             "budget_explicitly_shared":camp.get("budget_explicitly_shared", False),
-        })
+        }
+
+        # Enriquecer con ROI real si está disponible (aunque no alcanzó umbral de protección)
+        if roi_ratio is not None:
+            candidate["roi_real"]     = roi_ratio
+            candidate["venta_real"]   = venta_real
+            candidate["fuente_datos"] = "sheets+ads"
+        else:
+            candidate["fuente_datos"] = "ads"
+
+        candidates.append(candidate)
 
     # Ordenar por gasto descendente (mayor desperdicio primero)
     candidates.sort(key=lambda x: x["cost_mxn"], reverse=True)

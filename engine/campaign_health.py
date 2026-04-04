@@ -10,6 +10,13 @@ Señales implementadas:
 Señal excluida del MVP:
   CH2 — Caída de CVR semana a semana (requiere doble ventana de API; Fase 6A.1).
 
+Cruce con datos de negocio (negocio_data de Sheets):
+  CH3 para campañas "local" con 0 conversiones en Google Ads se omite como alerta
+  si el negocio muestra actividad real (comensales > 0 y venta_local > 0).
+  La campaña Local mide "cómo llegar" en Google Maps, no compras web — tener
+  0 conversiones en Ads no indica campaña muerta si hay comensales reales.
+  Se registra como nota informativa en lugar de alerta de problema.
+
 Función pura — no realiza llamadas a la API de Google Ads ni a SQLite.
 Testeable con datos sintéticos, sin dependencias externas.
 
@@ -59,15 +66,20 @@ def _type_cfg(campaign_type: str) -> dict:
 
 # ── Función pública ───────────────────────────────────────────────────────────
 
-def detect_campaign_issues(campaigns: list) -> list:
+def detect_campaign_issues(campaigns: list, negocio_data: dict = None) -> list:
     """
     Detecta señales de salud CH1 y CH3 en campañas activas.
 
     Solo evalúa campañas con status 'ENABLED'.
     Solo propone (RISK_PROPOSE) — nunca ejecuta automáticamente.
 
+    negocio_data: dict de resumen_negocio_para_agente() — opcional.
+      Si está disponible, CH3 para campañas "local" con 0 conversiones se omite
+      como alerta cuando el negocio muestra comensales > 0 y venta_local > 0.
+      En su lugar se incluye una nota informativa con los datos reales.
+
     Cada candidato retornado incluye evidencia completa:
-      signal            — 'CH1' o 'CH3'
+      signal            — 'CH1', 'CH3' o 'CH3_INFO' (nota sin alerta)
       campaign_id       — ID de la campaña
       campaign_name     — nombre de la campaña
       campaign_type     — tipo resuelto ('delivery', 'reservaciones', etc.)
@@ -147,6 +159,43 @@ def detect_campaign_issues(campaigns: list) -> list:
             continue
 
         if conversions == 0 and cost >= min_spend:
+            # ── Cruce con datos de negocio (Sheets) ──────────────────────────
+            # Si la campaña es "local" y el negocio muestra actividad real,
+            # no es una campaña muerta — mide Maps/offline, no conversiones web.
+            # Registrar como nota informativa en lugar de alerta.
+            if negocio_data and campaign_type in ("local", "default"):
+                comensales = int(negocio_data.get("comensales_total") or 0)
+                venta_local = float(negocio_data.get("venta_local_total") or 0)
+
+                if comensales > 0 and venta_local > 0:
+                    ingreso_por_comensal = float(negocio_data.get("ingreso_por_comensal") or 0)
+                    candidates.append({
+                        "signal":                  "CH3_INFO",
+                        "campaign_id":             cid,
+                        "campaign_name":           name,
+                        "campaign_type":           campaign_type,
+                        "cost_mxn":                round(cost, 2),
+                        "conversions":             0,
+                        "min_spend":               min_spend,
+                        "min_days_active":         min_days,
+                        "days_active":             days_active,
+                        "days_protection_applied": days_protection_applied,
+                        "fuente_datos":            "sheets+ads",
+                        "comensales_real":         comensales,
+                        "venta_local_real":        round(venta_local, 2),
+                        "ingreso_por_comensal":    round(ingreso_por_comensal, 2),
+                        "reason": (
+                            f"[{campaign_type}] 0 conversiones en Google Ads — "
+                            f"normal para campaña de visitas (Maps/offline) | "
+                            f"negocio activo: {comensales} comensales, "
+                            f"${venta_local:.0f} venta local, "
+                            f"${ingreso_por_comensal:.0f}/comensal | "
+                            f"gasto Ads ${cost:.0f} MXN"
+                        ),
+                    })
+                    continue  # No agregar CH3 alerta
+
+            # CH3 estándar: 0 conversiones sin datos de negocio que lo justifiquen
             reason_parts = [
                 f"[{campaign_type}]",
                 f"0 conversiones en {ch3_cfg.get('evidence_window_days', 14)} dias",
@@ -170,6 +219,7 @@ def detect_campaign_issues(campaigns: list) -> list:
                 "min_days_active":         min_days,
                 "days_active":             days_active,
                 "days_protection_applied": days_protection_applied,
+                "fuente_datos":            "ads",
                 "reason":                  " | ".join(reason_parts),
             })
 

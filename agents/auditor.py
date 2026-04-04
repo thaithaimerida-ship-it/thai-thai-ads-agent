@@ -775,6 +775,26 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             results["adgroup_proposals"] = adgroup_proposals_result
 
         # ====================================================================
+        # DATOS DE NEGOCIO (Sheets) — fetch único compartido por 6A, 6B y 6C
+        #
+        # Ventana de 7 días para tener estadística más estable que 1 día.
+        # Se pasa como negocio_data a detect_campaign_issues, detect_budget_opportunities
+        # y detect_scale_opportunities para cruzar ROI real con métricas de Ads.
+        # ====================================================================
+        _negocio_data_6x: dict = {}
+        try:
+            from engine.sheets_client import resumen_negocio_para_agente as _rna_6x
+            _negocio_data_6x = _rna_6x(days=7) or {}
+            logger.info(
+                "Datos de negocio (7d): comensales=%s venta_local=$%.0f delivery_neto=$%.0f",
+                _negocio_data_6x.get("comensales_total", "n/d"),
+                float(_negocio_data_6x.get("venta_local_total") or 0),
+                float(_negocio_data_6x.get("venta_plataformas_neto") or 0),
+            )
+        except Exception as _nd_exc:
+            logger.warning("Datos de negocio para fases 6A/6B/6C: no disponibles — %s", _nd_exc)
+
+        # ====================================================================
         # FASE 6A — Campaign Health: CH1 (CPA crítico) + CH3 (sin conversiones)
         # Capa de observación pura — RISK_PROPOSE, sin autoejecución.
         # Los candidatos se registran en autonomous_decisions y aparecen
@@ -784,12 +804,35 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         try:
             from engine.campaign_health import detect_campaign_issues as _detect_ch
 
-            ch_candidates = _detect_ch(campaigns)
+            ch_candidates = _detect_ch(campaigns, negocio_data=_negocio_data_6x)
 
             for ch in ch_candidates:
                 ch_campaign_id   = ch["campaign_id"]
                 ch_campaign_name = ch["campaign_name"]
                 ch_signal        = ch["signal"]
+
+                # CH3_INFO: nota informativa — negocio sano, no emitir alerta
+                if ch_signal == "CH3_INFO":
+                    memory.record_autonomous_decision(
+                        action_type="campaign_health",
+                        risk_level=RISK_OBSERVE,
+                        urgency="normal",
+                        decision="observe",
+                        campaign_id=ch_campaign_id,
+                        campaign_name=ch_campaign_name,
+                        keyword=f"campaign:{ch_campaign_id}:CH3_INFO",
+                        evidence={
+                            "signal":           "CH3_INFO",
+                            "cost_mxn":         ch["cost_mxn"],
+                            "comensales_real":  ch.get("comensales_real"),
+                            "venta_local_real": ch.get("venta_local_real"),
+                            "fuente_datos":     "sheets+ads",
+                            "reason":           ch["reason"],
+                        },
+                        session_id=session_id,
+                    )
+                    campaign_health_result.append({**ch, "decision": "observe"})
+                    continue
 
                 # Clave de dedup: 'campaign:{id}:{signal}'
                 ch_keyword = f"campaign:{ch_campaign_id}:{ch_signal}"
@@ -864,7 +907,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             from engine.budget_actions import detect_budget_opportunities as _detect_ba
             import secrets as _ba_secrets
 
-            ba_candidates = _detect_ba(campaigns)
+            ba_candidates = _detect_ba(campaigns, negocio_data=_negocio_data_6x)
 
             for ba in ba_candidates:
                 ba_campaign_id   = ba["campaign_id"]
@@ -1114,6 +1157,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 ba2_config=_ba2_cfg,
                 ba1_candidates=_pending_ba_proposals,  # propuestas BA1 aprobadas en este ciclo
                 evidence_days=_ba2_evidence_days,
+                negocio_data=_negocio_data_6x,
             )
 
             if _ba2_raw.get("proposals"):
