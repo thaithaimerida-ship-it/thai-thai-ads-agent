@@ -241,7 +241,10 @@ def classify_pause_ad_group(
     ad_group_data: Dict,
     campaign_data: Dict,
 ) -> Tuple[int, str, str]:
-    """Pausa de un grupo de anuncios — siempre riesgo medio, requiere aprobación."""
+    """
+    Pausa de un grupo de anuncios.
+    Auto-ejecuta si hay ≥$100 MXN gastados con 0 conversiones (evidencia clara de desperdicio).
+    """
     campaign_name = campaign_data.get("name", "")
     campaign_id = str(campaign_data.get("id", ""))
 
@@ -250,6 +253,14 @@ def classify_pause_ad_group(
 
     if is_learning_phase(campaign_data):
         return RISK_BLOCK, URGENCY_NORMAL, "Campaña en aprendizaje — no pausar grupo sin autorización"
+
+    spend = float(ad_group_data.get("spend", ad_group_data.get("cost_mxn", 0)) or 0)
+    conversions = float(ad_group_data.get("conversions", 0) or 0)
+
+    if spend >= 100.0 and conversions == 0:
+        return RISK_EXECUTE, URGENCY_NORMAL, (
+            f"Ad group con ${spend:.0f} MXN gastados y 0 conversiones — pausa automática justificada"
+        )
 
     return RISK_PROPOSE, URGENCY_NORMAL, "Pausa de grupo de anuncios — riesgo medio, requiere aprobación"
 
@@ -274,14 +285,22 @@ def classify_budget_change(
 
     change_pct = abs((proposed_budget_mxn - current_budget_mxn) / current_budget_mxn) * 100
 
+    # >40%: cambio agresivo — proponer con urgencia alta para que el operador lo vea
     if change_pct > BUDGET_CHANGE_MAX_PCT_HIGH_RISK:
-        return RISK_BLOCK, URGENCY_NORMAL, f"Cambio de presupuesto {change_pct:.1f}% supera el límite de riesgo alto ({BUDGET_CHANGE_MAX_PCT_HIGH_RISK}%)"
+        return RISK_PROPOSE, URGENCY_URGENT, (
+            f"Cambio de presupuesto {change_pct:.1f}% — cambio agresivo, requiere aprobación urgente"
+        )
 
+    # 20–40%: cambio moderado — proponer para aprobación
     if change_pct > BUDGET_CHANGE_MAX_PCT_MEDIUM_RISK:
-        return RISK_PROPOSE, URGENCY_NORMAL, f"Cambio de presupuesto {change_pct:.1f}% — riesgo medio, requiere aprobación"
+        return RISK_PROPOSE, URGENCY_NORMAL, (
+            f"Cambio de presupuesto {change_pct:.1f}% — requiere aprobación"
+        )
 
-    # Cambios pequeños de presupuesto siguen siendo riesgo medio por política
-    return RISK_PROPOSE, URGENCY_NORMAL, f"Cambio de presupuesto {change_pct:.1f}% — propuesta para aprobación"
+    # ≤20%: cambio menor — auto-ejecutable sin aprobación
+    return RISK_EXECUTE, URGENCY_NORMAL, (
+        f"Cambio de presupuesto {change_pct:.1f}% ≤{BUDGET_CHANGE_MAX_PCT_MEDIUM_RISK:.0f}% — auto-ejecutable"
+    )
 
 
 def classify_pause_campaign(campaign_data: Dict) -> Tuple[int, str, str]:

@@ -19,12 +19,25 @@ KEYWORD_MIN_SPEND_TO_BLOCK = 70.0
 # Evita actuar en keywords demasiado nuevas
 KEYWORD_MIN_EVIDENCE_DAYS = 7
 
-# Cambio máximo de presupuesto (%) que el agente puede proponer sin escalar a riesgo alto
-# Por encima de este % se clasifica como riesgo alto
-BUDGET_CHANGE_MAX_PCT_MEDIUM_RISK = 30.0
+# Cambio máximo de presupuesto (%) que el agente puede auto-ejecutar sin aprobación.
+# Por encima de este % se clasifica como riesgo medio (RISK_PROPOSE).
+BUDGET_CHANGE_MAX_PCT_MEDIUM_RISK = 20.0
 
-# Cambio de presupuesto (%) por encima del cual se requiere autorización explícita (riesgo alto)
-BUDGET_CHANGE_MAX_PCT_HIGH_RISK = 50.0
+# Cambio de presupuesto (%) por encima del cual la urgencia sube a HIGH (sigue siendo RISK_PROPOSE).
+# El agente nunca ejecuta cambios >40% automáticamente.
+BUDGET_CHANGE_MAX_PCT_HIGH_RISK = 40.0
+
+# ============================================================================
+# PRESUPUESTO MENSUAL — GUARDRAIL DE GASTO
+# ============================================================================
+
+# Presupuesto mensual total de Google Ads (MXN).
+# El agente verifica que ninguna auto-ejecución lo supere antes de ejecutar.
+MONTHLY_ADS_BUDGET_MXN = 8_000.0
+
+# Presupuesto diario objetivo (MXN) — referencia para escalar proporcionalmente.
+# 8000 / 30 = 266.67 → redondeado a 267.
+DAILY_ADS_BUDGET_TARGET_MXN = 267.0
 
 # CPA máximo permitido antes de que el agente considere una keyword como desperdicio
 # Se combina con KEYWORD_MIN_SPEND_TO_BLOCK

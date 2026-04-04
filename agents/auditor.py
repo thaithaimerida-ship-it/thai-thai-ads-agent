@@ -951,6 +951,148 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 )
 
         # ====================================================================
+        # FASE 6B.AUTO — Ejecución autónoma de cambios de presupuesto ≤20%
+        #
+        # Conecta el Strategist (BA1) con el Executor para cambios menores.
+        # Solo actúa si:
+        #   1. AUTO_EXECUTE_ENABLED=true  (kill switch global)
+        #   2. BUDGET_CHANGE_ENABLED=true (kill switch específico de budget)
+        #   3. El cambio classifica como RISK_EXECUTE (≤20% por tipo de campaña)
+        #   4. Guardrail mensual: new_budget * 30 ≤ MONTHLY_ADS_BUDGET_MXN
+        #
+        # Los cambios ejecutados se eliminan de _pending_ba_proposals para
+        # que NO aparezcan como propuestas pendientes en el correo.
+        # ====================================================================
+        _auto_executed_budget: list = []
+        _auto_executed_ids: set = set()
+        try:
+            from config.agent_config import (
+                MONTHLY_ADS_BUDGET_MXN as _monthly_budget_cap,
+                BUDGET_CHANGE_ENABLED as _bc_enabled,
+                BUDGET_CHANGE_ALLOW_IDS as _bc_allow_ids,
+            )
+            from engine.risk_classifier import classify_budget_change as _clf_budget, RISK_EXECUTE as _RE_BUDGET
+            from agents.executor import Executor as _BudgetExecutor
+
+            _auto_exec_global = os.getenv("AUTO_EXECUTE_ENABLED", "false").lower() == "true"
+
+            if _auto_exec_global and _bc_enabled and _pending_ba_proposals:
+                _bexec = _BudgetExecutor()
+                for _ba in _pending_ba_proposals:
+                    _cid  = str(_ba.get("campaign_id", ""))
+                    _cname = _ba.get("campaign_name", "")
+                    _cur  = float(_ba.get("daily_budget_mxn") or 0)
+                    _new  = float(_ba.get("suggested_daily_budget") or 0)
+
+                    if _cur <= 0 or _new <= 0:
+                        continue
+
+                    # Whitelist de campañas si está configurada
+                    if _bc_allow_ids and _cid not in _bc_allow_ids:
+                        logger.info(
+                            "Fase 6B.AUTO: campaña %s no está en BUDGET_CHANGE_ALLOW_IDS — omitida",
+                            _cid,
+                        )
+                        continue
+
+                    _rc, _, _rc_msg = _clf_budget(
+                        _cur, _new,
+                        {"id": _cid, "name": _cname},
+                    )
+
+                    if _rc != _RE_BUDGET:
+                        logger.info(
+                            "Fase 6B.AUTO: %s cambio %.1f%% → RISK_PROPOSE, se mantiene como propuesta",
+                            _cname, abs(_new - _cur) / _cur * 100,
+                        )
+                        continue
+
+                    # Guardrail mensual: evitar que el presupuesto diario × 30 supere el cap
+                    _monthly_equiv = _new * 30
+                    if _monthly_equiv > _monthly_budget_cap:
+                        _auto_executed_budget.append({
+                            **_ba,
+                            "status":        "guardrail_blocked",
+                            "guardrail_msg": (
+                                f"${_new:.0f}/día × 30 = ${_monthly_equiv:.0f} MXN "
+                                f"excede guardrail mensual ${_monthly_budget_cap:.0f} MXN"
+                            ),
+                        })
+                        logger.warning(
+                            "Fase 6B.AUTO: guardrail mensual bloqueó %s — $%.0f/día × 30 = $%.0f > $%.0f",
+                            _cname, _new, _monthly_equiv, _monthly_budget_cap,
+                        )
+                        continue
+
+                    # Ejecutar vía Executor
+                    _exec_res = _bexec.update_budget(
+                        _cid, _new,
+                        reason=f"Auto-ejecutado por agente: {_ba.get('reason', '')}",
+                    )
+                    _auto_executed_budget.append({
+                        **_ba,
+                        "exec_result":   _exec_res,
+                        "risk_reason":   _rc_msg,
+                        "auto_executed": True,
+                    })
+
+                    if _exec_res.get("status") == "executed":
+                        _auto_executed_ids.add(_ba.get("decision_id"))
+                        logger.info(
+                            "Fase 6B.AUTO: ✓ presupuesto actualizado — %s $%.0f→$%.0f MXN/día",
+                            _cname, _cur, _new,
+                        )
+                        # Registrar en SQLite para historial y dedup
+                        memory.record_autonomous_decision(
+                            action_type="budget_auto_executed",
+                            risk_level=_RE_BUDGET,
+                            urgency="normal",
+                            decision="auto_executed",
+                            campaign_id=_cid,
+                            campaign_name=_cname,
+                            keyword=f"campaign:{_cid}:BA1_AUTO",
+                            evidence={
+                                "old_budget_mxn": round(_cur, 2),
+                                "new_budget_mxn": round(_new, 2),
+                                "reduction_pct":  _ba.get("reduction_pct"),
+                                "reason":         _ba.get("reason", ""),
+                                "session_id":     session_id,
+                            },
+                            session_id=session_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Fase 6B.AUTO: error ejecutando %s — %s",
+                            _cname, _exec_res.get("error", "unknown"),
+                        )
+
+                # Eliminar ya-ejecutados del correo de propuestas
+                if _auto_executed_ids:
+                    _pending_ba_proposals = [
+                        p for p in _pending_ba_proposals
+                        if p.get("decision_id") not in _auto_executed_ids
+                    ]
+                    logger.info(
+                        "Fase 6B.AUTO: %d ejecutado(s) — %d propuesta(s) restantes para correo",
+                        len(_auto_executed_ids), len(_pending_ba_proposals),
+                    )
+
+                if _auto_executed_budget:
+                    results["executed_budget"] = _auto_executed_budget
+                    print(
+                        f"Fase 6B.AUTO: {len(_auto_executed_ids)} ejecutado(s), "
+                        f"{len(_auto_executed_budget) - len(_auto_executed_ids)} bloqueado(s)/error"
+                    )
+            else:
+                if not _auto_exec_global:
+                    logger.debug("Fase 6B.AUTO: AUTO_EXECUTE_ENABLED=false — sin ejecución autónoma")
+                elif not _bc_enabled:
+                    logger.debug("Fase 6B.AUTO: BUDGET_CHANGE_ENABLED=false — sin ejecución de budget")
+
+        except Exception as _auto_exc:
+            logger.warning("Fase 6B.AUTO: error no crítico — %s", _auto_exc)
+
+        # ====================================================================
         # FASE 6C — Budget Scale: BA2 (acelerador de campañas rentables)
         # Detecta campañas con CPA ideal + presupuesto saturado y propone escalar.
         # BA2_REALLOC: usa fondos liberados por BA1 (costo neto = $0).
@@ -1381,6 +1523,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
 
             # Enriquecer con datos colectados para el correo consolidado
             _run_summary["keyword_proposals"]    = _pending_kw_proposals
+            _run_summary["executed_budget"]      = _auto_executed_budget
             _run_summary["budget_proposals"]     = _pending_ba_proposals
             _run_summary["ba2_proposals"]        = _pending_ba2_proposals
             _run_summary["ba2_freed_budget_mxn"] = budget_scale_result.get("freed_budget_mxn", 0.0)
