@@ -243,12 +243,14 @@ from routes.approvals import router as approvals_router
 from routes.reports import router as reports_router
 from routes.builder import router as builder_router
 from routes.ecosystem import router as ecosystem_router
+from routes.keywords import router as keywords_router
 app.include_router(analysis_router)
 app.include_router(tracking_router)
 app.include_router(approvals_router)
 app.include_router(reports_router)
 app.include_router(builder_router)
 app.include_router(ecosystem_router)
+app.include_router(keywords_router)
 app.include_router(campaigns_router)
 
 # Strategy functions delegated to agents/strategist.py

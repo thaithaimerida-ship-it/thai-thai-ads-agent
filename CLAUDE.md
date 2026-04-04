@@ -52,6 +52,7 @@ routes/
   approvals.py           ← /approve-proposals, /approve-legacy, /approve
   reports.py             ← /send-weekly-report
   ecosystem.py           ← /ecosystem/ads-summary, /ecosystem/business-metrics, /ecosystem/health
+  keywords.py            ← POST /keyword-research (volúmenes, CPC, competencia)
 main.py                  ← FastAPI router puro (~535 líneas): /health, /mission-control, /dashboard-snapshot, /run-autonomous-audit, /run-compensatory-audit
 ```
 

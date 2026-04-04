@@ -377,12 +377,25 @@ class Builder:
         self.validation = None
         self.receipt = None
 
-    def build_config(self, prompt: str) -> dict:
+    def build_config(self, prompt: str, enrich_keywords: bool = True) -> dict:
         """Paso 1: Genera config con Claude desde un prompt en lenguaje natural."""
         result = generate_campaign_config(prompt)
         if result.get("status") == "success":
             self.config = result["config"]
             self.config["_original_prompt"] = prompt[:500]
+
+            # Enriquecer keywords con Keyword Planner (graceful — no bloquea si falla)
+            if enrich_keywords:
+                try:
+                    from engine.keyword_planner import enrich_keywords_with_data, suggest_additional_keywords
+                    for ag in self.config.get("ad_groups", []):
+                        ag["keywords"] = enrich_keywords_with_data(ag.get("keywords", []))
+                        seed_texts = [kw["text"] if isinstance(kw, dict) else kw for kw in ag.get("keywords", [])]
+                        ag["keyword_suggestions"] = suggest_additional_keywords(seed_texts, min_searches=30, max_results=10)
+                    logger.info("Builder: keywords enriquecidas con Keyword Planner")
+                except Exception as e:
+                    logger.warning("Builder: Keyword Planner falló (no crítico): %s", e)
+
             self.validation = validate_config(self.config)
             return {
                 "status": "success",
