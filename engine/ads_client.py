@@ -24,34 +24,43 @@ def get_date_range(days: int = 30):
 def get_ads_client() -> GoogleAdsClient:
     """
     Inicializa y retorna el cliente de Google Ads.
-    Intenta primero google-ads.yaml, luego variables de entorno.
+    Prioridad: env vars (siempre disponibles en Cloud Run) → yaml (solo local).
+
+    El yaml en la imagen Docker puede tener un refresh token expirado; las env vars
+    son la fuente canónica de credenciales en producción.
     """
-    # Intentar cargar desde google-ads.yaml primero
+    # Prioridad 1: env vars (producción — Cloud Run)
+    _refresh = os.getenv("GOOGLE_ADS_REFRESH_TOKEN")
+    _client_id = os.getenv("GOOGLE_ADS_CLIENT_ID")
+    _client_secret = os.getenv("GOOGLE_ADS_CLIENT_SECRET")
+    _dev_token = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
+
+    if _refresh and _client_id and _client_secret and _dev_token:
+        credentials = {
+            "developer_token": _dev_token,
+            "client_id":       _client_id,
+            "client_secret":   _client_secret,
+            "refresh_token":   _refresh,
+            "use_proto_plus":  True,
+        }
+        _login_cid = os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
+        if _login_cid:
+            credentials["login_customer_id"] = _login_cid
+        try:
+            return GoogleAdsClient.load_from_dict(credentials)
+        except Exception as e:
+            print(f"⚠️ Error con env vars: {e}, intentando yaml...")
+
+    # Prioridad 2: google-ads.yaml (desarrollo local)
     yaml_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "google-ads.yaml")
     if os.path.exists(yaml_path):
         try:
             return GoogleAdsClient.load_from_storage(yaml_path)
         except Exception as e:
-            print(f"⚠️ No se pudo cargar yaml: {e}, intentando env vars...")
+            print(f"❌ No se pudo cargar yaml: {e}")
+            raise
 
-    # Fallback: variables de entorno
-    credentials = {
-        "developer_token": os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN"),
-        "client_id": os.getenv("GOOGLE_ADS_CLIENT_ID"),
-        "client_secret": os.getenv("GOOGLE_ADS_CLIENT_SECRET"),
-        "refresh_token": os.getenv("GOOGLE_ADS_REFRESH_TOKEN"),
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "use_proto_plus": True
-    }
-
-    if os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID"):
-        credentials["login_customer_id"] = os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
-
-    try:
-        return GoogleAdsClient.load_from_dict(credentials)
-    except Exception as e:
-        print(f"❌ Error creando cliente: {e}")
-        raise
+    raise RuntimeError("No hay credenciales de Google Ads disponibles (env vars ni yaml)")
 
 def fetch_campaign_metrics_range(
     client: GoogleAdsClient,
