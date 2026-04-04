@@ -534,6 +534,24 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         learning_phase_protected=classification.learning_phase,
                     )
 
+                    # Enriquecer propuesta con datos del Keyword Planner (graceful)
+                    _kp_volume = 0
+                    _kp_cpc_low = 0
+                    _kp_cpc_high = 0
+                    _kp_competition = "UNKNOWN"
+                    try:
+                        from engine.keyword_planner import suggest_additional_keywords
+                        _kp_ideas = suggest_additional_keywords(
+                            [keyword_text], min_searches=0, max_results=1
+                        )
+                        if _kp_ideas:
+                            _kp_volume = _kp_ideas[0].get("avg_monthly_searches", 0)
+                            _kp_cpc_low = _kp_ideas[0].get("low_bid_mxn", 0)
+                            _kp_cpc_high = _kp_ideas[0].get("high_bid_mxn", 0)
+                            _kp_competition = _kp_ideas[0].get("competition", "UNKNOWN")
+                    except Exception:
+                        pass  # Keyword Planner no disponible — continuar sin datos de volumen
+
                     results["proposed"].append({
                         "keyword": keyword_text,
                         "campaign": campaign_name,
@@ -547,6 +565,10 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         "approval_token": token,
                         "decision_id": decision_id,
                         "protected": classification.protected,
+                        "avg_monthly_searches": _kp_volume,
+                        "estimated_cpc_low": _kp_cpc_low,
+                        "estimated_cpc_high": _kp_cpc_high,
+                        "competition": _kp_competition,
                     })
 
             elif classification.risk_level == RISK_BLOCK:

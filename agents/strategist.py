@@ -20,6 +20,19 @@ class Strategist:
         moderate_waste = []
         total_waste = 0
 
+        # Enriquecer keywords con Keyword Planner (lazy, graceful — no bloquea si falla)
+        _kp_map = {}
+        try:
+            from engine.keyword_planner import enrich_keywords_with_data
+            _kw_dicts = [
+                {"text": kw.get("text", ""), "match_type": "PHRASE"}
+                for kw in keywords if kw.get("text")
+            ]
+            _enriched = enrich_keywords_with_data(_kw_dicts)
+            _kp_map = {e["text"].lower(): e for e in _enriched}
+        except Exception:
+            pass  # Keyword Planner no disponible — continuar sin datos de volumen
+
         for kw in keywords:
             spend = kw.get("cost_micros", 0) / 1_000_000
             conversions = float(kw.get("conversions", 0))
@@ -30,36 +43,75 @@ class Strategist:
             if spend <= 0:
                 continue
 
+            planner_data = _kp_map.get(keyword_text.lower(), {})
+            avg_searches = planner_data.get("avg_monthly_searches", 0)
+            competition = planner_data.get("competition", "UNKNOWN")
+
             wrong_intent = any(term in keyword_text.lower() for term in [
                 "china", "chino", "japonés", "sushi", "receta", "recipe"
             ])
 
+            # Si la keyword tiene volumen alto y competencia no es HIGH,
+            # puede tener potencial — bajar severidad aunque tenga 0 conversiones
+            has_potential = avg_searches > 100 and competition not in ("HIGH", "UNKNOWN")
+
             if spend > 100 and conversions == 0:
-                critical_waste.append({
-                    "type": "keyword",
-                    "keyword": keyword_text,
-                    "campaign": campaign_name,
-                    "campaign_id": campaign_id,
-                    "spend": round(spend, 2),
-                    "conversions": 0,
-                    "reason": "Intent equivocado" if wrong_intent else "Alto gasto sin conversiones",
-                    "action": "block_immediately",
-                    "impact": f"Ahorro ${round(spend, 2)}/semana",
-                    "confidence": 95 if wrong_intent else 85
-                })
+                if has_potential and not wrong_intent:
+                    # Tiene potencial según Keyword Planner — monitorear en lugar de bloquear
+                    moderate_waste.append({
+                        "type": "keyword",
+                        "keyword": keyword_text,
+                        "campaign": campaign_name,
+                        "campaign_id": campaign_id,
+                        "spend": round(spend, 2),
+                        "conversions": 0,
+                        "reason": f"Gasto alto sin conversiones pero volumen {avg_searches}/mes — monitorear",
+                        "action": "monitor",
+                        "confidence": 60,
+                        "planner_data": planner_data,
+                    })
+                else:
+                    critical_waste.append({
+                        "type": "keyword",
+                        "keyword": keyword_text,
+                        "campaign": campaign_name,
+                        "campaign_id": campaign_id,
+                        "spend": round(spend, 2),
+                        "conversions": 0,
+                        "reason": "Intent equivocado" if wrong_intent else "Alto gasto sin conversiones",
+                        "action": "block_immediately",
+                        "impact": f"Ahorro ${round(spend, 2)}/semana",
+                        "confidence": 95 if wrong_intent else 85,
+                        "planner_data": planner_data,
+                    })
                 total_waste += spend
             elif spend >= 50 and conversions == 0:
-                high_waste.append({
-                    "type": "keyword",
-                    "keyword": keyword_text,
-                    "campaign": campaign_name,
-                    "campaign_id": campaign_id,
-                    "spend": round(spend, 2),
-                    "conversions": 0,
-                    "reason": "Gasto moderado sin retorno",
-                    "action": "block",
-                    "confidence": 80
-                })
+                if has_potential and not wrong_intent:
+                    moderate_waste.append({
+                        "type": "keyword",
+                        "keyword": keyword_text,
+                        "campaign": campaign_name,
+                        "campaign_id": campaign_id,
+                        "spend": round(spend, 2),
+                        "conversions": 0,
+                        "reason": f"Gasto moderado sin retorno pero volumen {avg_searches}/mes — monitorear",
+                        "action": "monitor",
+                        "confidence": 55,
+                        "planner_data": planner_data,
+                    })
+                else:
+                    high_waste.append({
+                        "type": "keyword",
+                        "keyword": keyword_text,
+                        "campaign": campaign_name,
+                        "campaign_id": campaign_id,
+                        "spend": round(spend, 2),
+                        "conversions": 0,
+                        "reason": "Gasto moderado sin retorno",
+                        "action": "block",
+                        "confidence": 80,
+                        "planner_data": planner_data,
+                    })
                 total_waste += spend
             elif spend >= 20 and conversions == 0:
                 moderate_waste.append({
@@ -71,7 +123,8 @@ class Strategist:
                     "conversions": 0,
                     "reason": "Monitorear de cerca",
                     "action": "monitor",
-                    "confidence": 70
+                    "confidence": 70,
+                    "planner_data": planner_data,
                 })
                 total_waste += spend
 
