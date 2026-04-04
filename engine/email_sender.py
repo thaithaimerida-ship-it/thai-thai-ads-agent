@@ -2359,6 +2359,49 @@ def _build_daily_summary_html(run: dict) -> str:
             f'</td></tr>'
         )
 
+    # ── SECCIÓN 2C: Decisiones AI (Claude Haiku) ────────────────────────────────
+    _ai_decisions = run.get("ai_decisions", []) or []
+    _ai_block = ""
+    _ai_executed = [d for d in _ai_decisions if d.get("exec_result", {}).get("status") == "executed"]
+    if _ai_executed:
+        _ai_rows = ""
+        for _d in _ai_executed:
+            _d_action  = str(_d.get("action", "hold"))
+            _d_name    = str(_d.get("campaign_name", "—"))
+            _d_budget  = float(_d.get("new_budget_mxn", 0))
+            _d_pct     = float(_d.get("change_pct", 0))
+            _d_reason  = str(_d.get("reason", ""))[:160]
+            _d_conf    = int(_d.get("confidence", 0))
+            _d_old     = float(_d.get("exec_result", {}).get("old_budget_mxn", 0))
+            _d_color   = "#15803d" if _d_action == "scale" else "#dc2626"
+            _d_arrow   = "↑" if _d_action == "scale" else "↓"
+            _d_conf_color = "#15803d" if _d_conf >= 80 else "#d97706" if _d_conf >= 70 else "#dc2626"
+            _ai_rows += (
+                f'<tr style="border-bottom:1px solid #f0f0f0;">'
+                f'<td style="padding:10px 0;">'
+                f'<p style="margin:0 0 3px 0;font-size:13px;font-weight:bold;color:#111;">'
+                f'🧠 {_d_name}'
+                f'<span style="margin-left:8px;background:{_d_color}20;color:{_d_color};'
+                f'padding:2px 6px;border-radius:3px;font-size:10px;font-weight:bold;">'
+                f'{_d_arrow} {_d_action.upper()}</span></p>'
+                f'<p style="margin:0 0 2px 0;font-size:11px;color:#6b7280;">'
+                f'${_d_old:,.0f} → <strong style="color:{_d_color};">${_d_budget:,.0f}/día</strong>'
+                f' &nbsp;({_d_pct:+.0f}%)'
+                f' &nbsp;·&nbsp; Confianza: <strong style="color:{_d_conf_color};">{_d_conf}%</strong></p>'
+                f'<p style="margin:0 0 0 0;font-size:12px;color:#374151;">{_d_reason}</p>'
+                f'</td></tr>'
+            )
+        _ai_block = (
+            f'<tr><td style="padding:14px 20px 4px 20px;">'
+            f'<p style="margin:0 0 6px 0;font-size:12px;font-weight:bold;color:#6b7280;'
+            f'text-transform:uppercase;letter-spacing:0.5px;">'
+            f'🧠 Decisiones AI — Claude Haiku ({len(_ai_executed)} ejecutada(s))</p>'
+            f'<p style="margin:0 0 8px 0;font-size:11px;color:#6b7280;">'
+            f'El agente cruzó datos de Ads + Sheets + GA4 y tomó estas decisiones automáticamente.</p>'
+            f'<table width="100%" cellpadding="0" cellspacing="0">{_ai_rows}</table>'
+            f'</td></tr>'
+        )
+
     # ── SECCIÓN 3: Alertas GEO ───────────────────────────────────────────────────
     _geo_alerts_email = run.get("geo_issues_for_email", [])
     _geo_email_block = ""
@@ -2487,6 +2530,7 @@ def _build_daily_summary_html(run: dict) -> str:
   {_kw_block}
   {_ba_block}
   {_ba2_block}
+  {_ai_block}
 
   <!-- SECCIÓN 3: Alertas GEO -->
   {_geo_email_block}

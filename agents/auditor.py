@@ -1317,6 +1317,161 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             logger.warning("Fase 6C.AUTO: error no crítico — %s", _ba2_auto_exc)
 
         # ====================================================================
+        # FASE 7 — DECISIONES DE PRESUPUESTO CON AI (Claude Haiku)
+        #
+        # Haiku recibe toda la data disponible (Ads + GA4 + Sheets) y decide
+        # autónomamente qué hacer con cada campaña.
+        #
+        # Guardrails (aplicados en decision_engine.py + aquí):
+        #   - Cambio máximo ±20% por día
+        #   - Confianza mínima 70% para ejecutar
+        #   - Techo mensual $8,000 MXN
+        #   - Máximo 1 decisión por campaña por ciclo
+        #   - JSON inválido de Haiku → hold (silencioso)
+        #
+        # Kill switch: AUTO_EXECUTE_ENABLED=true + BUDGET_CHANGE_ENABLED=true
+        # ====================================================================
+        _ai_decisions_executed: list = []
+        try:
+            from engine.decision_engine import get_budget_decisions as _get_ai_decisions
+            from config.agent_config import (
+                MONTHLY_ADS_BUDGET_MXN as _monthly_cap_ai,
+                BUDGET_CHANGE_ENABLED as _bc_enabled_ai,
+                BUDGET_CHANGE_ALLOW_IDS as _bc_allow_ids_ai,
+            )
+            from agents.executor import Executor as _AIExecutor
+
+            _auto_exec_ai = os.getenv("AUTO_EXECUTE_ENABLED", "false").lower() == "true"
+
+            if _auto_exec_ai and _bc_enabled_ai:
+                # Fetch GA4 fresco para el engine (si falla, usar dict vacío)
+                _ga4_for_ai: dict = {}
+                try:
+                    from engine.ga4_client import fetch_ga4_events_detailed as _ga4_ai_fetch
+                    _ga4_raw_ai = _ga4_ai_fetch(days=1)
+                    if isinstance(_ga4_raw_ai, dict) and "error" not in _ga4_raw_ai:
+                        _funnel_ai = _ga4_raw_ai.get("conversion_funnel", {})
+                        _ga4_for_ai = {
+                            "page_views":       _funnel_ai.get("page_view", 0),
+                            "click_pedir":      _funnel_ai.get("click_pedir_online", 0),
+                            "click_reservar":   _funnel_ai.get("click_reservar", 0),
+                            "usuarios_activos": _ga4_raw_ai.get("events_by_name", {}).get("session_start", 0),
+                        }
+                except Exception as _ga4_ai_err:
+                    logger.debug("Fase 7: GA4 no disponible — %s", _ga4_ai_err)
+
+                ai_decisions = _get_ai_decisions(
+                    campaigns=campaigns,
+                    negocio_data=_negocio_data_6x,
+                    ga4_data=_ga4_for_ai,
+                )
+
+                if ai_decisions:
+                    _ai_exec = _AIExecutor()
+                    for _dec in ai_decisions:
+                        if _dec["action"] == "hold":
+                            continue
+
+                        _dec_cid    = str(_dec.get("campaign_id", ""))
+                        _dec_cname  = _dec.get("campaign_name", "")
+                        _dec_budget = float(_dec.get("new_budget_mxn", 0))
+                        _dec_pct    = float(_dec.get("change_pct", 0))
+                        _dec_conf   = int(_dec.get("confidence", 0))
+                        _dec_reason = _dec.get("reason", "")
+
+                        # Guardrail: confianza mínima
+                        if _dec_conf < 70:
+                            logger.info(
+                                "Fase 7: %s confianza=%d < 70 — hold",
+                                _dec_cname, _dec_conf,
+                            )
+                            continue
+
+                        # Guardrail: cambio máximo ±20%
+                        if abs(_dec_pct) > 20:
+                            logger.warning(
+                                "Fase 7: %s cambio %.1f%% excede ±20%% — skip",
+                                _dec_cname, _dec_pct,
+                            )
+                            continue
+
+                        # Guardrail: presupuesto mínimo
+                        if _dec_budget < 20:
+                            logger.warning("Fase 7: %s budget $%.0f < $20 — skip", _dec_cname, _dec_budget)
+                            continue
+
+                        # Guardrail: techo mensual
+                        if _dec_budget * 30 > _monthly_cap_ai:
+                            logger.warning(
+                                "Fase 7: %s $%.0f/día × 30 = $%.0f > cap $%.0f — skip",
+                                _dec_cname, _dec_budget, _dec_budget * 30, _monthly_cap_ai,
+                            )
+                            continue
+
+                        # Whitelist de campañas si está configurada
+                        if _bc_allow_ids_ai and _dec_cid not in _bc_allow_ids_ai:
+                            logger.info("Fase 7: %s no en BUDGET_CHANGE_ALLOW_IDS — skip", _dec_cid)
+                            continue
+
+                        # Ejecutar
+                        _ai_exec_result = _ai_exec.update_budget(
+                            _dec_cid,
+                            _dec_budget,
+                            reason=f"[AI] {_dec_reason}",
+                        )
+
+                        _ai_decisions_executed.append({
+                            **_dec,
+                            "exec_result": _ai_exec_result,
+                        })
+
+                        if _ai_exec_result.get("status") == "executed":
+                            logger.info(
+                                "Fase 7: ✓ AI ejecutó %s $→%.0f/día (%+.0f%%) conf=%d",
+                                _dec_cname, _dec_budget, _dec_pct, _dec_conf,
+                            )
+                            # Registrar en SQLite para auditoría
+                            memory.record_autonomous_decision(
+                                action_type="ai_budget_decision",
+                                risk_level=1,  # RISK_EXECUTE
+                                urgency="normal",
+                                decision="auto_executed",
+                                campaign_id=_dec_cid,
+                                campaign_name=_dec_cname,
+                                keyword=f"campaign:{_dec_cid}:AI",
+                                evidence={
+                                    "action":        _dec["action"],
+                                    "new_budget_mxn": _dec_budget,
+                                    "change_pct":    _dec_pct,
+                                    "confidence":    _dec_conf,
+                                    "reason":        _dec_reason,
+                                    "source":        "claude_haiku_decision_engine",
+                                    "session_id":    session_id,
+                                },
+                                session_id=session_id,
+                            )
+                        else:
+                            logger.warning(
+                                "Fase 7: error ejecutando %s — %s",
+                                _dec_cname, _ai_exec_result.get("error", "unknown"),
+                            )
+
+                    if _ai_decisions_executed:
+                        results["ai_decisions"] = _ai_decisions_executed
+                        print(
+                            f"Fase 7 (AI): {sum(1 for d in _ai_decisions_executed if d.get('exec_result', {}).get('status') == 'executed')} "
+                            f"ejecutada(s) de {len(ai_decisions)} decisiones Haiku"
+                        )
+            else:
+                logger.debug(
+                    "Fase 7: deshabilitada — AUTO_EXECUTE_ENABLED=%s BUDGET_CHANGE_ENABLED=%s",
+                    _auto_exec_ai, _bc_enabled_ai,
+                )
+
+        except Exception as _ai_exc:
+            logger.warning("Fase 7 (AI decisions): error no crítico — %s", _ai_exc)
+
+        # ====================================================================
         # MÓDULO GEO — Auditoría de Geotargeting
         #
         # Módulo oficial del agente MVP. Evalúa todas las campañas activas en
@@ -1706,6 +1861,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             # Enriquecer con datos colectados para el correo consolidado
             _run_summary["keyword_proposals"]    = _pending_kw_proposals
             _run_summary["executed_budget"]      = _auto_executed_budget
+            _run_summary["ai_decisions"]         = _ai_decisions_executed
             _run_summary["budget_proposals"]     = _pending_ba_proposals
             _run_summary["ba2_proposals"]        = _pending_ba2_proposals
             _run_summary["ba2_freed_budget_mxn"] = budget_scale_result.get("freed_budget_mxn", 0.0)
