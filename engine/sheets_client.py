@@ -420,46 +420,79 @@ def _read_ingresos_by_daterange(sh, start: date, end: date) -> dict:
 
 def _read_comensales_by_daterange(sh, start: date, end: date) -> dict:
     """
-    Lee Cortes_de_Caja (col J = No. de Comensales) y agrega:
-      total_comensales, dias_con_datos, dias_sobre_objetivo, dias_sobre_equilibrio
-    para el rango [start, end].
+    Lee Cortes_de_Caja para el rango [start, end] y agrega:
+      Columnas confirmadas:
+        A(0)=Fecha, C(2)=Venta Neta, E(4)=Venta con Imp.,
+        F(5)=Efectivo, G(6)=Tarjeta, H(7)=Otros (delivery apps), J(9)=No. de Comensales
+
+    Retorna totales de comensales + ventas por tipo de pago.
     """
-    COL_FECHA = 0
-    COL_COMENSALES = 9  # J (0-indexed)
+    COL_FECHA        = 0
+    COL_VENTA_NETA   = 2   # C — Venta Neta
+    COL_VENTA_BRUTA  = 4   # E — Venta con Imp.
+    COL_EFECTIVO     = 5   # F — Efectivo
+    COL_TARJETA      = 6   # G — Tarjeta
+    COL_PLATAFORMAS  = 7   # H — Otros (Rappi, Uber, delivery apps)
+    COL_COMENSALES   = 9   # J — No. de Comensales
+
+    _empty = {
+        "total_comensales": 0, "dias_con_datos": 0,
+        "dias_sobre_objetivo": 0, "dias_sobre_equilibrio": 0,
+        "venta_neta_total": 0.0, "venta_bruta_total": 0.0,
+        "pago_efectivo_total": 0.0, "pago_tarjeta_total": 0.0,
+        "pago_plataformas_total": 0.0,
+    }
 
     try:
         ws = sh.worksheet("Cortes_de_Caja")
         rows = ws.get_all_values()
     except Exception as e:
         print(f"[SHEETS] Error leyendo Cortes_de_Caja: {e}")
-        return {"total_comensales": 0, "dias_con_datos": 0,
-                "dias_sobre_objetivo": 0, "dias_sobre_equilibrio": 0}
+        return _empty
 
-    total = 0
-    dias_con_datos = 0
-    dias_sobre_obj = 0
-    dias_sobre_eq = 0
+    total_coms       = 0
+    dias_con_datos   = 0
+    dias_sobre_obj   = 0
+    dias_sobre_eq    = 0
+    venta_neta       = 0.0
+    venta_bruta      = 0.0
+    pago_efectivo    = 0.0
+    pago_tarjeta     = 0.0
+    pago_plataformas = 0.0
+
+    def _v(row, col):
+        return _safe_float(row[col]) if col < len(row) else 0.0
 
     for row in rows[1:]:
         if not row or len(row) <= COL_COMENSALES:
             continue
         fecha = _parse_fecha(str(row[COL_FECHA]).strip())
-        if fecha is None:
+        if fecha is None or not (start <= fecha <= end):
             continue
-        if start <= fecha <= end:
-            coms = _safe_int(row[COL_COMENSALES])
-            total += coms
-            dias_con_datos += 1
-            if coms >= OBJETIVO_COMENSALES_DIA:
-                dias_sobre_obj += 1
-            if coms >= EQUILIBRIO_COMENSALES_DIA:
-                dias_sobre_eq += 1
+
+        coms = _safe_int(row[COL_COMENSALES])
+        total_coms       += coms
+        venta_neta       += _v(row, COL_VENTA_NETA)
+        venta_bruta      += _v(row, COL_VENTA_BRUTA)
+        pago_efectivo    += _v(row, COL_EFECTIVO)
+        pago_tarjeta     += _v(row, COL_TARJETA)
+        pago_plataformas += _v(row, COL_PLATAFORMAS)
+        dias_con_datos   += 1
+        if coms >= OBJETIVO_COMENSALES_DIA:
+            dias_sobre_obj += 1
+        if coms >= EQUILIBRIO_COMENSALES_DIA:
+            dias_sobre_eq += 1
 
     return {
-        "total_comensales": total,
-        "dias_con_datos": dias_con_datos,
-        "dias_sobre_objetivo": dias_sobre_obj,
+        "total_comensales":      total_coms,
+        "dias_con_datos":        dias_con_datos,
+        "dias_sobre_objetivo":   dias_sobre_obj,
         "dias_sobre_equilibrio": dias_sobre_eq,
+        "venta_neta_total":      round(venta_neta, 2),
+        "venta_bruta_total":     round(venta_bruta, 2),
+        "pago_efectivo_total":   round(pago_efectivo, 2),
+        "pago_tarjeta_total":    round(pago_tarjeta, 2),
+        "pago_plataformas_total": round(pago_plataformas, 2),
     }
 
 
@@ -557,10 +590,15 @@ def fetch_mtd_business_data() -> dict:
         dias_mes = calendar.monthrange(ayer.year, ayer.month)[1]
         dias_t = ayer.day  # días transcurridos incluyendo ayer
 
-        ingresos_mtd = _read_ingresos_by_daterange(sh, inicio, ayer)
-        ventas = ingresos_mtd["total_neto"]
-        coms_data = _read_comensales_by_daterange(sh, inicio, ayer)
+        coms_data  = _read_comensales_by_daterange(sh, inicio, ayer)
         total_coms = coms_data["total_comensales"]
+
+        # Fuente primaria: Cortes_de_Caja col C (Venta Neta)
+        ventas = coms_data["venta_neta_total"]
+        # Fallback: Ingresos_BD si Cortes_de_Caja no tiene datos de venta
+        if ventas == 0.0:
+            ingresos_mtd = _read_ingresos_by_daterange(sh, inicio, ayer)
+            ventas = ingresos_mtd["total_neto"]
 
         # Objetivos proporcionales al avance del mes
         obj_v_prop = round(OBJETIVO_INGRESOS_MENSUAL_NETO * dias_t / dias_mes)
@@ -583,6 +621,12 @@ def fetch_mtd_business_data() -> dict:
             "comensales": total_coms,
             "dias_sobre_objetivo": coms_data["dias_sobre_objetivo"],
             "dias_sobre_equilibrio": coms_data["dias_sobre_equilibrio"],
+            # Desglose de pagos del periodo (de Cortes_de_Caja)
+            "venta_neta_total":      coms_data["venta_neta_total"],
+            "venta_bruta_total":     coms_data["venta_bruta_total"],
+            "pago_efectivo_total":   coms_data["pago_efectivo_total"],
+            "pago_tarjeta_total":    coms_data["pago_tarjeta_total"],
+            "pago_plataformas_total": coms_data["pago_plataformas_total"],
             # Objetivos proporcionales
             "obj_ventas_prop": obj_v_prop,
             "eq_ventas_prop": eq_v_prop,
@@ -632,28 +676,15 @@ def resumen_negocio_para_agente(days: int = 7) -> dict:
         end = date.today() - timedelta(days=1)
         start = end - timedelta(days=days - 1)
 
-        # ── Cortes_de_Caja ───────────────────────────────────────────────────
-        try:
-            ws_caja = sh.worksheet("Cortes_de_Caja")
-            caja_rows = ws_caja.get_all_values()
-        except Exception as e:
-            print(f"[SHEETS] resumen: no se pudo leer Cortes_de_Caja: {e}")
-            caja_rows = []
-
-        diario_data = parse_diario_sheet(caja_rows)
-
-        recientes = [
-            r for r in diario_data
-            if (fd := _parse_fecha(r["fecha"])) and start <= fd <= end
-        ]
-        dias_con_datos = len(recientes) or 1
-
-        total_comensales       = sum(r["comensales_real"]   for r in recientes)
-        total_venta_neta       = sum(r["venta_neta"]        for r in recientes)
-        total_venta_bruta      = sum(r["venta_bruta"]       for r in recientes)
-        total_pago_efectivo    = sum(r["pago_efectivo"]     for r in recientes)
-        total_pago_tarjeta     = sum(r["pago_tarjeta"]      for r in recientes)
-        total_pago_plataformas = sum(r["pago_plataformas"]  for r in recientes)
+        # ── Cortes_de_Caja: fuente primaria para todos los datos de venta ────
+        coms_data = _read_comensales_by_daterange(sh, start, end)
+        dias_con_datos         = coms_data["dias_con_datos"] or 1
+        total_comensales       = coms_data["total_comensales"]
+        total_venta_neta       = coms_data["venta_neta_total"]
+        total_venta_bruta      = coms_data["venta_bruta_total"]
+        total_pago_efectivo    = coms_data["pago_efectivo_total"]
+        total_pago_tarjeta     = coms_data["pago_tarjeta_total"]
+        total_pago_plataformas = coms_data["pago_plataformas_total"]
 
         # Ventas del restaurante físico (campaña Local)
         venta_local_total = round(total_pago_tarjeta + total_pago_efectivo, 2)
@@ -661,7 +692,7 @@ def resumen_negocio_para_agente(days: int = 7) -> dict:
             venta_local_total / total_comensales, 2
         ) if total_comensales > 0 else 0.0
 
-        # ── Ingresos_BD (comisiones reales por fuente) ───────────────────────
+        # ── Ingresos_BD: comisiones reales por fuente (delivery) ─────────────
         ingresos_result = _read_ingresos_by_daterange(sh, start, end)
         por_canal = ingresos_result["por_canal"]
 
