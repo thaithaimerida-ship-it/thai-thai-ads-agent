@@ -1607,17 +1607,33 @@ def generate_daily_insight(
             "por eso no aparecen en GA4 — es normal y esperado."
         )
 
+    _CONTEXTO_NEGOCIO = (
+        "CONTEXTO DE NEGOCIO — Thai Thai, Mérida, Yucatán:\n"
+        "Restaurante de comida tailandesa auténtica adaptada al paladar local. "
+        "Mucha gente en Mérida no conoce la comida thai; hay que educar y atraer. "
+        "Presupuesto de ads: $8,000 MXN/mes (subió de $6,000 en marzo, que fue bien). "
+        "Objetivo: 40 comensales/día, 1,200/mes.\n\n"
+        "DOS CANALES CON MÁRGENES DISTINTOS:\n"
+        "1. RESTAURANTE (campaña Local): gente que VA al restaurante a comer. "
+        "   Margen alto — sin comisiones. Se mide con comensales (col J), tarjeta+efectivo, "
+        "   y 'Cómo llegar' en Google Maps. Conversiones en Google Ads, NO en GA4 (eso es normal).\n"
+        "2. ONLINE (campañas Delivery + Reservaciones): gente que PIDE por thaithaimerida.com.mx. "
+        "   Rappi/Uber cobran ~30% comisión ($200 bruto = $140 neto). "
+        "   Se mide con GA4 click_ordenar_online, click_reservar, y ventas en plataformas. "
+        "   Aunque el margen es menor, delivery amplía el alcance a gente que no vendría al restaurante.\n"
+        "Ambos canales son valiosos. El agente debe optimizar los dos, no sacrificar uno por el otro.\n\n"
+    )
+
     _prompt = (
-        "Eres el analista de Thai Thai, restaurante tailandés en Mérida, México. "
-        f"{_ads_str}, tuvimos {_views} vistas en la web y {_clics_web} clics de intención "
-        f"(pedir: {_pedir}, reservar: {_reservar}) en GA4, "
-        f"y {_sheets_str} según el corte de caja."
-        f"{_local_str} "
-        "Importante: los comensales son personas que comieron en el restaurante (campaña Local). "
-        "La venta delivery (neto) es lo que Thai Thai recibe después de comisiones de Rappi/Uber. "
-        "Escribe UNA SOLA oración ejecutiva correlacionando estos datos para el dueño. "
-        "Si recibes datos de local_directions (intenciones de visita física), úsalos para "
-        "resaltar el tráfico peatonal como un éxito de la campaña Local. "
+        _CONTEXTO_NEGOCIO
+        + "DATOS DE HOY:\n"
+        + f"{_ads_str}. "
+        + f"Web (GA4): {_views} vistas, {_clics_web} clics de intención "
+        + f"(pedir: {_pedir}, reservar: {_reservar}). "
+        + f"Corte de caja: {_sheets_str}."
+        + (_local_str if _local_str else "")
+        + "\n\nEscribe UNA SOLA oración ejecutiva correlacionando estos datos para el dueño. "
+        "Menciona si el canal restaurante, el canal online, o ambos tuvieron buen desempeño. "
         "Sin bullets, sin saltos de línea, sin markdown. Solo la oración."
     )
 
