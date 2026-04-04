@@ -170,21 +170,21 @@ def fetch_sheets_data(days: int = 7) -> Dict:
     Falls back to empty dict if credentials or spreadsheet not configured.
     """
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
-    credentials_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "./ga4-credentials.json")
-
-    if not spreadsheet_id or not os.path.exists(credentials_path):
+    from engine.credentials import get_credentials, is_available
+    if not spreadsheet_id or not is_available():
         print("[SHEETS] Credenciales o spreadsheet no configurados. Saltando.")
         return {}
 
     try:
         import gspread
-        from google.oauth2.service_account import Credentials
-
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets.readonly",
             "https://www.googleapis.com/auth/drive.readonly",
         ]
-        creds = Credentials.from_service_account_file(credentials_path, scopes=scopes)
+        creds = get_credentials(scopes=scopes)
+        if creds is None:
+            print("[SHEETS] No se pudieron cargar credenciales. Saltando.")
+            return {}
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(spreadsheet_id)
 
@@ -325,19 +325,17 @@ def _get_spreadsheet():
     Lanza excepción si faltan credenciales o ID de hoja.
     """
     import gspread
-    from google.oauth2.service_account import Credentials
-
+    from engine.credentials import get_credentials
     spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
-    credentials_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "./ga4-credentials.json")
-
-    if not spreadsheet_id or not os.path.exists(credentials_path):
-        raise RuntimeError("[SHEETS] Credenciales o spreadsheet no configurados.")
-
+    if not spreadsheet_id:
+        raise RuntimeError("[SHEETS] GOOGLE_SHEETS_SPREADSHEET_ID no configurado.")
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
-    creds = Credentials.from_service_account_file(credentials_path, scopes=scopes)
+    creds = get_credentials(scopes=scopes)
+    if creds is None:
+        raise RuntimeError("[SHEETS] Credenciales no disponibles.")
     gc = gspread.authorize(creds)
     return gc.open_by_key(spreadsheet_id)
 

@@ -12,26 +12,16 @@ from google.analytics.data_v1beta.types import (
     Dimension,
     Metric
 )
-from google.oauth2 import service_account
-
 def get_ga4_client():
-    """
-    Inicializa cliente de GA4 usando Service Account.
-    """
-    credentials_path = os.getenv("GA4_CREDENTIALS_PATH", "./ga4-credentials.json")
-    
-    if not os.path.exists(credentials_path):
-        raise FileNotFoundError(
-            f"Credenciales GA4 no encontradas en: {credentials_path}\n"
-            f"Descarga el archivo JSON de Service Account y guárdalo ahí."
+    """Inicializa cliente de GA4 usando Service Account."""
+    from engine.credentials import get_credentials
+    creds = get_credentials(scopes=["https://www.googleapis.com/auth/analytics.readonly"])
+    if creds is None:
+        raise RuntimeError(
+            "Credenciales GA4 no disponibles. "
+            "Configura GOOGLE_CREDENTIALS_JSON (env var) o GA4_CREDENTIALS_PATH (archivo)."
         )
-    
-    credentials = service_account.Credentials.from_service_account_file(
-        credentials_path,
-        scopes=["https://www.googleapis.com/auth/analytics.readonly"]
-    )
-    
-    return BetaAnalyticsDataClient(credentials=credentials)
+    return BetaAnalyticsDataClient(credentials=creds)
 
 def fetch_ga4_events(property_id: str = None, days: int = 7) -> dict:
     """
