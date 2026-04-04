@@ -1096,8 +1096,8 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         # FASE 6C — Budget Scale: BA2 (acelerador de campañas rentables)
         # Detecta campañas con CPA ideal + presupuesto saturado y propone escalar.
         # BA2_REALLOC: usa fondos liberados por BA1 (costo neto = $0).
-        # BA2_SCALE:   requiere nueva inversión (propone, sin autoejecución).
-        # No hay autoejecución — la propuesta es para decisión del operador.
+        # BA2_SCALE:   requiere nueva inversión.
+        # Incrementos ≤20% se auto-ejecutan en Fase 6C.AUTO; el resto queda como propuesta.
         # ====================================================================
         try:
             from engine.budget_scale import detect_scale_opportunities as _detect_ba2
@@ -1133,6 +1133,144 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         except Exception as _ba2_exc:
             logger.warning("Fase 6C: error en budget_scale — %s", _ba2_exc)
             budget_scale_result = {"error": str(_ba2_exc)}
+
+        # ====================================================================
+        # FASE 6C.AUTO — Auto-ejecución de BA2 (escalar campañas rentables ≤20%)
+        #
+        # Conecta el detector BA2 con el Executor para incrementos menores.
+        # Solo actúa si:
+        #   1. AUTO_EXECUTE_ENABLED=true + BUDGET_CHANGE_ENABLED=true
+        #   2. El incremento classifica como RISK_EXECUTE (≤20%)
+        #   3. Guardrail mensual: new_budget * 30 ≤ MONTHLY_ADS_BUDGET_MXN
+        #
+        # BA2_REALLOC y BA2_SCALE se tratan igual — el guardrail mensual
+        # protege contra escalar más allá del cap de $8,000 MXN/mes.
+        # Las propuestas auto-ejecutadas se eliminan del correo informativo.
+        # ====================================================================
+        _auto_executed_ba2: list = []
+        _auto_executed_ba2_ids: set = set()
+        try:
+            from config.agent_config import (
+                MONTHLY_ADS_BUDGET_MXN as _monthly_cap_ba2,
+                BUDGET_CHANGE_ENABLED as _bc_enabled_ba2,
+                BUDGET_CHANGE_ALLOW_IDS as _bc_allow_ids_ba2,
+            )
+            from engine.risk_classifier import classify_budget_change as _clf_ba2, RISK_EXECUTE as _RE_BA2
+            from agents.executor import Executor as _BA2Executor
+
+            _auto_exec_ba2 = os.getenv("AUTO_EXECUTE_ENABLED", "false").lower() == "true"
+
+            if _auto_exec_ba2 and _bc_enabled_ba2 and _pending_ba2_proposals:
+                _ba2exec = _BA2Executor()
+                for _p in _pending_ba2_proposals:
+                    _cid_ba2  = str(_p.get("campaign_id", ""))
+                    _cname_ba2 = _p.get("campaign_name", "")
+                    _cur_ba2  = float(_p.get("current_daily_budget_mxn") or 0)
+                    _new_ba2  = float(_p.get("suggested_daily_budget_mxn") or 0)
+
+                    if _cur_ba2 <= 0 or _new_ba2 <= 0:
+                        continue
+
+                    # Whitelist de campañas si está configurada
+                    if _bc_allow_ids_ba2 and _cid_ba2 not in _bc_allow_ids_ba2:
+                        logger.info(
+                            "Fase 6C.AUTO: campaña %s no está en BUDGET_CHANGE_ALLOW_IDS — omitida",
+                            _cid_ba2,
+                        )
+                        continue
+
+                    _rc_ba2, _, _rc_msg_ba2 = _clf_ba2(
+                        _cur_ba2, _new_ba2,
+                        {"id": _cid_ba2, "name": _cname_ba2},
+                    )
+
+                    if _rc_ba2 != _RE_BA2:
+                        logger.info(
+                            "Fase 6C.AUTO: %s incremento %.1f%% → RISK_PROPOSE, se mantiene como propuesta",
+                            _cname_ba2, (_new_ba2 - _cur_ba2) / _cur_ba2 * 100,
+                        )
+                        continue
+
+                    # Guardrail mensual
+                    _monthly_equiv_ba2 = _new_ba2 * 30
+                    if _monthly_equiv_ba2 > _monthly_cap_ba2:
+                        _auto_executed_ba2.append({
+                            **_p,
+                            "status":        "guardrail_blocked",
+                            "guardrail_msg": (
+                                f"${_new_ba2:.0f}/día × 30 = ${_monthly_equiv_ba2:.0f} MXN "
+                                f"excede guardrail mensual ${_monthly_cap_ba2:.0f} MXN"
+                            ),
+                        })
+                        logger.warning(
+                            "Fase 6C.AUTO: guardrail mensual bloqueó %s — $%.0f/día × 30 = $%.0f > $%.0f",
+                            _cname_ba2, _new_ba2, _monthly_equiv_ba2, _monthly_cap_ba2,
+                        )
+                        continue
+
+                    _exec_res_ba2 = _ba2exec.update_budget(
+                        _cid_ba2, _new_ba2,
+                        reason=f"BA2 auto-ejecutado ({_p.get('signal','')}) — {_p.get('fund_source', '')}",
+                    )
+                    _auto_executed_ba2.append({
+                        **_p,
+                        "exec_result":   _exec_res_ba2,
+                        "risk_reason":   _rc_msg_ba2,
+                        "auto_executed": True,
+                    })
+
+                    if _exec_res_ba2.get("status") == "executed":
+                        _idx_ba2 = _pending_ba2_proposals.index(_p)
+                        _auto_executed_ba2_ids.add(_idx_ba2)
+                        logger.info(
+                            "Fase 6C.AUTO: ✓ escala ejecutada — %s $%.0f→$%.0f MXN/día (%s)",
+                            _cname_ba2, _cur_ba2, _new_ba2, _p.get("signal", ""),
+                        )
+                        memory.record_autonomous_decision(
+                            action_type="budget_scale_auto_executed",
+                            risk_level=_RE_BA2,
+                            urgency="normal",
+                            decision="auto_executed",
+                            campaign_id=_cid_ba2,
+                            campaign_name=_cname_ba2,
+                            keyword=f"campaign:{_cid_ba2}:BA2_AUTO",
+                            evidence={
+                                "old_budget_mxn":  round(_cur_ba2, 2),
+                                "new_budget_mxn":  round(_new_ba2, 2),
+                                "increase_mxn":    _p.get("increase_mxn"),
+                                "signal":          _p.get("signal"),
+                                "cpa_actual":      _p.get("cpa_actual"),
+                                "fund_source":     _p.get("fund_source", ""),
+                                "session_id":      session_id,
+                            },
+                            session_id=session_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Fase 6C.AUTO: error escalando %s — %s",
+                            _cname_ba2, _exec_res_ba2.get("error", "unknown"),
+                        )
+
+                # Eliminar ya-ejecutados del correo informativo
+                if _auto_executed_ba2_ids:
+                    _pending_ba2_proposals = [
+                        p for i, p in enumerate(_pending_ba2_proposals)
+                        if i not in _auto_executed_ba2_ids
+                    ]
+                    logger.info(
+                        "Fase 6C.AUTO: %d ejecutado(s) — %d propuesta(s) BA2 restantes para correo",
+                        len(_auto_executed_ba2_ids), len(_pending_ba2_proposals),
+                    )
+
+                if _auto_executed_ba2:
+                    results["executed_budget_scale"] = _auto_executed_ba2
+                    print(
+                        f"Fase 6C.AUTO: {len(_auto_executed_ba2_ids)} ejecutado(s), "
+                        f"{len(_auto_executed_ba2) - len(_auto_executed_ba2_ids)} bloqueado(s)/error"
+                    )
+
+        except Exception as _ba2_auto_exc:
+            logger.warning("Fase 6C.AUTO: error no crítico — %s", _ba2_auto_exc)
 
         # ====================================================================
         # MÓDULO GEO — Auditoría de Geotargeting

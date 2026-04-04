@@ -6,9 +6,10 @@ por presupuesto (alta utilización), y propone escalar la inversión.
 
 Dos sub-señales:
   BA2_REALLOC — reubica fondos liberados por BA1 (costo neto = $0)
-  BA2_SCALE   — requiere nueva inversión (propone, no ejecuta automáticamente)
+  BA2_SCALE   — requiere nueva inversión
 
-No hay autoejecución. Toda propuesta es informativa para el operador.
+Incrementos ≤20% se auto-ejecutan vía Fase 6C.AUTO en auditor.py (si AUTO_EXECUTE_ENABLED=true).
+Incrementos >20% quedan como propuesta informativa para el operador.
 """
 
 from __future__ import annotations
