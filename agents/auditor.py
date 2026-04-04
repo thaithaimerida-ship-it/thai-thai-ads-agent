@@ -1458,7 +1458,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 _run_summary["agent_insight"] = None
 
             _mem_daily    = _get_mem_daily()
-            _already_sent = _mem_daily.has_recent_alert("daily_summary", 12)
+            _already_sent = _mem_daily.has_recent_alert("daily_summary", 20)
 
             _email_sent = False
             if not _already_sent:
