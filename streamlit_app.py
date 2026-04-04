@@ -1,13 +1,12 @@
 """
 Thai Thai Ads Agent — Dashboard de Operaciones (Streamlit)
 
-4 páginas:
-  1. Cruce Negocio    — ads spend vs comensales, costo por comensal
-  2. Actividad Agente — últimas auditorías, propuestas pendientes
-  3. Tendencias       — gasto e inversión histórica por mes
-  4. Historial Builder — campañas creadas con el sub-agente Builder
-
-Consume endpoints del agente vía HTTP (no accede a DB ni API directamente).
+Fuentes de datos:
+  - /ecosystem/ads-summary      → rápido, snapshot GCS (<200ms)
+  - /ecosystem/business-metrics → rápido, snapshot GCS (<200ms)
+  - /ecosystem/health           → rápido, metadata del snapshot
+  - /pending-configs            → rápido, in-memory
+  - /mission-control            → PESADO, NO se llama al render inicial
 """
 import os
 import requests
@@ -15,7 +14,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ── Config ────────────────────────────────────────────────────────────────────
 AGENT_URL = os.getenv(
@@ -34,13 +33,14 @@ st.set_page_config(
 
 @st.cache_data(ttl=300)
 def fetch(path: str, params: dict | None = None) -> dict | None:
-    """GET al agente con caché de 5 minutos."""
+    """GET al agente con caché de 5 minutos. Retorna None sin mostrar error — el caller decide."""
     try:
         r = requests.get(f"{AGENT_URL}{path}", params=params, timeout=15)
         r.raise_for_status()
         return r.json()
-    except Exception as e:
-        st.error(f"Error al conectar con el agente: {e}")
+    except requests.exceptions.Timeout:
+        return {"_error": "timeout"}
+    except Exception:
         return None
 
 
@@ -48,14 +48,26 @@ def fmt_mxn(v: float) -> str:
     return f"${v:,.2f} MXN"
 
 
-def metric_card(label: str, value: str, delta: str | None = None):
-    st.metric(label=label, value=value, delta=delta)
+def _show_snapshot_error(data: dict | None) -> bool:
+    """
+    Muestra mensaje apropiado si no hay datos. Retorna True si debe detenerse.
+    """
+    if data is None:
+        st.error("El backend no respondió. Verifica que Cloud Run esté activo.")
+        return True
+    if data.get("_error") == "timeout":
+        st.error("Timeout al conectar con el agente (>15s). El backend puede estar en cold start.")
+        return True
+    if data.get("status") == "no_snapshot":
+        st.warning("No hay snapshot disponible aún.")
+        st.info("Ejecuta `GET /run-autonomous-audit` en el backend para generar el primer snapshot.")
+        return True
+    return False
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.image("https://thaithaimerida.com/logo.png", width=120) if False else None
     st.title("🍜 Thai Thai Ops")
     st.caption("Dashboard de operaciones del agente de ads")
     st.divider()
@@ -72,50 +84,43 @@ with st.sidebar:
         st.rerun()
 
     health = fetch("/ecosystem/health")
-    if health:
-        age_hours = health.get("snapshot_age_hours", 0)
-        status_color = "🟢" if age_hours < 2 else "🟡" if age_hours < 6 else "🔴"
-        st.caption(f"{status_color} Último snapshot: hace {age_hours:.1f}h")
-    else:
+    if health and not health.get("_error") and health.get("snapshot_available"):
+        age_min = health.get("snapshot_age_minutes") or 0
+        age_h = age_min / 60
+        color = "🟢" if age_h < 2 else "🟡" if age_h < 6 else "🔴"
+        st.caption(f"{color} Snapshot: hace {age_min:.0f} min")
+    elif health is None or health.get("_error"):
         st.caption("⚠️ Agente no disponible")
+    else:
+        st.caption("⚪ Sin snapshot aún")
 
 
 # ── Página 1: Cruce Negocio ───────────────────────────────────────────────────
 
 if page == "Cruce Negocio":
     st.header("📊 Cruce Negocio")
-    st.caption("Inversión en ads vs actividad real del restaurante")
+    st.caption("Inversión en ads vs actividad real del restaurante — datos del último snapshot")
 
     data = fetch("/ecosystem/business-metrics")
-
-    if not data or data.get("status") == "no_snapshot":
-        st.warning("Sin snapshot disponible. El agente aún no ha completado una auditoría o GCS no está accesible.")
-        st.info("Ejecuta `/run-autonomous-audit` en el backend para generar el primer snapshot.")
+    if _show_snapshot_error(data):
         st.stop()
 
     ads = data.get("ads", {})
     cross = data.get("cross_metrics", {})
 
-    # KPIs principales
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        metric_card("Inversión total (ads)", fmt_mxn(ads.get("total_spend", 0)))
+        st.metric("Inversión total", fmt_mxn(ads.get("total_spend", 0)))
     with col2:
-        metric_card("Conversiones", str(ads.get("total_conversions", 0)))
+        st.metric("Conversiones", str(ads.get("total_conversions", 0)))
     with col3:
-        cpa = ads.get("avg_cpa", 0)
-        cpa_color = "normal" if cpa <= 60 else "inverse"
-        st.metric("CPA Promedio", fmt_mxn(cpa))
+        st.metric("CPA Promedio", fmt_mxn(ads.get("avg_cpa", 0)))
     with col4:
-        cpc_comensal = cross.get("costo_por_comensal", 0)
-        if cpc_comensal > 0:
-            metric_card("Costo por comensal", fmt_mxn(cpc_comensal))
-        else:
-            st.metric("Costo por comensal", "N/D")
+        cpc = cross.get("costo_por_comensal", 0)
+        st.metric("Costo por comensal", fmt_mxn(cpc) if cpc > 0 else "N/D")
 
     st.divider()
 
-    # Desglose local vs delivery
     campaign_sep = ads.get("campaign_separation", {})
     local = campaign_sep.get("local", {})
     delivery = campaign_sep.get("delivery", {})
@@ -123,20 +128,17 @@ if page == "Cruce Negocio":
     if local or delivery:
         st.subheader("Desglose por campaña")
         col_l, col_d = st.columns(2)
-
         with col_l:
-            st.markdown("**🏪 Local (restaurante)**")
+            st.markdown("**Local (restaurante)**")
             st.metric("Gasto", fmt_mxn(local.get("spend", 0)))
             st.metric("Conversiones", local.get("conversions", 0))
             st.metric("CPA", fmt_mxn(local.get("cpa", 0)))
-
         with col_d:
-            st.markdown("**🛵 Delivery**")
+            st.markdown("**Delivery**")
             st.metric("Gasto", fmt_mxn(delivery.get("spend", 0)))
             st.metric("Conversiones", delivery.get("conversions", 0))
             st.metric("CPA", fmt_mxn(delivery.get("cpa", 0)))
 
-        # Gráfico de torta gasto
         if local.get("spend", 0) + delivery.get("spend", 0) > 0:
             fig = px.pie(
                 values=[local.get("spend", 0), delivery.get("spend", 0)],
@@ -146,7 +148,6 @@ if page == "Cruce Negocio":
             )
             st.plotly_chart(fig, use_container_width=True)
 
-    # Cruce comensales
     comensales = cross.get("comensales", 0)
     ads_spend = cross.get("ads_spend", 0)
     if comensales > 0:
@@ -155,66 +156,51 @@ if page == "Cruce Negocio":
         st.info(
             f"Se invirtieron **{fmt_mxn(ads_spend)}** en ads → "
             f"**{comensales} comensales** registrados → "
-            f"**{fmt_mxn(cpc_comensal)} por comensal**"
+            f"**{fmt_mxn(cpc)} por comensal**"
         )
 
-    # Waste alert
     waste = ads.get("total_waste", 0)
     if waste > 50:
-        st.warning(f"⚠️ Desperdicio detectado: {fmt_mxn(waste)} en keywords sin conversión.")
+        st.warning(f"Desperdicio detectado: {fmt_mxn(waste)} en keywords sin conversión.")
 
 
 # ── Página 2: Actividad del Agente ───────────────────────────────────────────
 
 elif page == "Actividad del Agente":
     st.header("🤖 Actividad del Agente")
-    st.caption("Últimas auditorías y propuestas de optimización")
+    st.caption("Propuestas y campañas — datos del último snapshot")
 
     data = fetch("/ecosystem/ads-summary")
-
-    if not data:
-        st.warning("No hay datos disponibles.")
+    if _show_snapshot_error(data):
         st.stop()
 
-    # Estado general
     col1, col2 = st.columns(2)
     with col1:
-        status = data.get("status", "unknown")
-        color = "🟢" if status == "active" else "🔴"
-        st.metric("Estado del agente", f"{color} {status.upper()}")
+        ts = data.get("timestamp", "N/D")
+        st.metric("Snapshot generado", ts[:16] if ts and ts != "N/D" else "N/D")
     with col2:
-        last_audit = data.get("last_audit_at", "N/D")
-        st.metric("Última auditoría", last_audit[:16] if last_audit and last_audit != "N/D" else "N/D")
+        st.metric("Propuestas pendientes", data.get("proposals_count", 0))
 
     st.divider()
 
-    # Propuestas pendientes
-    proposals = data.get("proposals", [])
-    if proposals:
-        st.subheader(f"📋 Propuestas pendientes ({len(proposals)})")
-        for i, p in enumerate(proposals[:10], 1):
-            with st.expander(f"#{i} — {p.get('action', 'Sin título')}"):
-                st.write(f"**Descripción:** {p.get('description', 'N/D')}")
-                if p.get("estimated_impact"):
-                    st.write(f"**Impacto estimado:** {p['estimated_impact']}")
-                if p.get("priority"):
-                    st.write(f"**Prioridad:** {p['priority']}")
-    else:
-        st.success("✅ Sin propuestas pendientes")
-
-    # Campañas activas
     campaigns = data.get("campaigns", [])
     if campaigns:
-        st.divider()
-        st.subheader(f"📡 Campañas activas ({len(campaigns)})")
+        st.subheader(f"Campañas ({len(campaigns)})")
         df = pd.DataFrame(campaigns)
-        if not df.empty:
-            # Mostrar columnas relevantes si existen
-            cols = [c for c in ["name", "status", "spend", "conversions", "cpa"] if c in df.columns]
-            if cols:
-                st.dataframe(df[cols], use_container_width=True)
-            else:
-                st.dataframe(df, use_container_width=True)
+        cols = [c for c in ["name", "status", "spend", "conversions", "cpa"] if c in df.columns]
+        st.dataframe(df[cols] if cols else df, use_container_width=True)
+
+    summary = data.get("summary", {})
+    if summary:
+        st.divider()
+        st.subheader("Resumen del snapshot")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("Inversión", fmt_mxn(summary.get("spend", 0)))
+        with col_b:
+            st.metric("Conversiones", summary.get("conversions", 0))
+        with col_c:
+            st.metric("Desperdicio estimado", fmt_mxn(summary.get("estimated_waste", 0)))
 
 
 # ── Página 3: Tendencias ──────────────────────────────────────────────────────
@@ -223,65 +209,56 @@ elif page == "Tendencias":
     st.header("📈 Tendencias")
     st.caption("Historial de gasto y conversiones por mes")
 
-    st.info(
-        "⚠️ Vista temporalmente desactivada.\n\n"
-        "Esta página hace múltiples llamadas seriales a `/mission-control` (una por mes), "
-        "lo que puede despertar el backend en cold start y colgar Streamlit. "
-        "Se habilitará cuando haya snapshots históricos disponibles en GCS."
+    st.warning(
+        "Carga de histórico desactivada temporalmente. "
+        "Esta vista requiere múltiples llamadas seriales a `/mission-control` "
+        "(una por mes), lo que puede saturar el backend en cold start."
     )
-    st.stop()
+    st.info("Se habilitará cuando los snapshots históricos estén disponibles en GCS.")
 
-    df = pd.DataFrame(records)
+    if st.button("Cargar histórico ahora (puede tardar 1-2 min)"):
+        months_back = st.slider("Meses a cargar", min_value=1, max_value=6, value=3)
+        now = datetime.now()
+        month_list = []
+        for i in range(months_back):
+            d = datetime(now.year, now.month, 1)
+            m = d.month - i
+            y = d.year
+            while m <= 0:
+                m += 12
+                y -= 1
+            month_list.append(f"{y}-{m:02d}")
 
-    # Gráfico gasto + conversiones
-    st.subheader("Gasto mensual")
-    fig_gasto = px.bar(
-        df, x="mes", y="gasto",
-        title="Inversión mensual en ads (MXN)",
-        color_discrete_sequence=["#FF6B6B"],
-        labels={"mes": "Mes", "gasto": "Gasto (MXN)"},
-    )
-    st.plotly_chart(fig_gasto, use_container_width=True)
+        records = []
+        progress = st.progress(0, text="Cargando...")
+        for idx, month in enumerate(reversed(month_list)):
+            r = fetch("/mission-control", params={"month": month})
+            if r and not r.get("_error") and r.get("metrics"):
+                metrics = r["metrics"]
+                records.append({
+                    "mes": month,
+                    "gasto": metrics.get("total_spend", 0),
+                    "conversiones": metrics.get("total_conversions", 0),
+                    "cpa": metrics.get("avg_cpa", 0),
+                    "desperdicio": metrics.get("total_waste", 0),
+                })
+            progress.progress((idx + 1) / len(month_list), text=f"Cargando {month}...")
+        progress.empty()
 
-    # CPA por mes
-    st.subheader("CPA promedio por mes")
-    fig_cpa = go.Figure()
-    fig_cpa.add_trace(go.Scatter(
-        x=df["mes"], y=df["cpa"],
-        mode="lines+markers",
-        name="CPA",
-        line=dict(color="#4ECDC4", width=2),
-        marker=dict(size=8),
-    ))
-    # Líneas de referencia de targets
-    fig_cpa.add_hline(y=60, line_dash="dash", line_color="orange",
-                      annotation_text="CPA Máx ($60)", annotation_position="right")
-    fig_cpa.add_hline(y=100, line_dash="dash", line_color="red",
-                      annotation_text="CPA Crítico ($100)", annotation_position="right")
-    fig_cpa.update_layout(title="CPA mensual vs targets", xaxis_title="Mes", yaxis_title="CPA (MXN)")
-    st.plotly_chart(fig_cpa, use_container_width=True)
+        if not records:
+            st.error("No se obtuvieron datos. El backend puede estar en cold start.")
+        else:
+            df = pd.DataFrame(records)
+            st.subheader("Gasto mensual")
+            fig = px.bar(df, x="mes", y="gasto", labels={"mes": "Mes", "gasto": "Gasto (MXN)"})
+            st.plotly_chart(fig, use_container_width=True)
 
-    # Desperdicio
-    if df["desperdicio"].sum() > 0:
-        st.subheader("Desperdicio (keywords sin conversión)")
-        fig_waste = px.bar(
-            df, x="mes", y="desperdicio",
-            title="Desperdicio mensual (MXN)",
-            color_discrete_sequence=["#FFE66D"],
-            labels={"mes": "Mes", "desperdicio": "Desperdicio (MXN)"},
-        )
-        st.plotly_chart(fig_waste, use_container_width=True)
-
-    # Tabla resumen
-    st.subheader("Tabla resumen")
-    df_display = df.copy()
-    df_display["gasto"] = df_display["gasto"].apply(lambda x: f"${x:,.2f}")
-    df_display["cpa"] = df_display["cpa"].apply(lambda x: f"${x:,.2f}")
-    df_display["desperdicio"] = df_display["desperdicio"].apply(lambda x: f"${x:,.2f}")
-    st.dataframe(df_display.rename(columns={
-        "mes": "Mes", "gasto": "Gasto", "conversiones": "Conversiones",
-        "cpa": "CPA", "desperdicio": "Desperdicio"
-    }), use_container_width=True)
+            fig_cpa = go.Figure()
+            fig_cpa.add_trace(go.Scatter(x=df["mes"], y=df["cpa"], mode="lines+markers", name="CPA"))
+            fig_cpa.add_hline(y=60, line_dash="dash", line_color="orange", annotation_text="Máx $60")
+            fig_cpa.add_hline(y=100, line_dash="dash", line_color="red", annotation_text="Crítico $100")
+            fig_cpa.update_layout(title="CPA mensual", xaxis_title="Mes", yaxis_title="CPA (MXN)")
+            st.plotly_chart(fig_cpa, use_container_width=True)
 
 
 # ── Página 4: Historial Builder ───────────────────────────────────────────────
@@ -291,78 +268,55 @@ elif page == "Historial Builder":
     st.caption("Campañas creadas con el sub-agente Builder")
 
     data = fetch("/pending-configs")
-
-    if data is None:
-        st.warning("No se pudo conectar al agente.")
+    if data is None or data.get("_error"):
+        st.error("No se pudo conectar al agente.")
         st.stop()
 
     configs = data if isinstance(data, list) else data.get("configs", [])
 
     if not configs:
-        st.info("No hay configuraciones pendientes o desplegadas registradas.")
-        st.markdown("""
-        **¿Qué es el Builder?**
-        El sub-agente Builder crea campañas de Google Ads desde lenguaje natural.
-
-        **Ejemplo de uso vía API:**
-        ```
-        POST /build-campaign
-        {"prompt": "Campaña de delivery para el fin de semana con presupuesto de $50 MXN/día"}
-        ```
-        """)
+        st.info("No hay configuraciones registradas.")
+        st.markdown(
+            "**¿Qué es el Builder?** Crea campañas de Google Ads desde lenguaje natural.\n\n"
+            "Uso: `POST /build-campaign` con `{\"prompt\": \"...\"}`"
+        )
     else:
         st.subheader(f"{len(configs)} configuraciones registradas")
-
         for cfg in configs:
             cfg_id = cfg.get("id", "N/D")
             name = cfg.get("config", {}).get("name", cfg_id)
             status = cfg.get("status", "pending")
             created = cfg.get("created_at", "N/D")
+            icon = {"pending": "⏳", "deployed": "✅", "failed": "❌"}.get(status, "❓")
 
-            status_icon = {"pending": "⏳", "deployed": "✅", "failed": "❌"}.get(status, "❓")
-
-            with st.expander(f"{status_icon} {name} — {status.upper()}"):
+            with st.expander(f"{icon} {name} — {status.upper()}"):
                 col1, col2 = st.columns(2)
                 with col1:
                     st.write(f"**ID:** `{cfg_id}`")
                     st.write(f"**Estado:** {status}")
-                    st.write(f"**Creado:** {created[:16] if len(str(created)) > 16 else created}")
-
+                    st.write(f"**Creado:** {str(created)[:16]}")
                 config = cfg.get("config", {})
                 if config:
                     with col2:
-                        budget = config.get("daily_budget_mxn", 0)
-                        st.write(f"**Presupuesto diario:** {fmt_mxn(budget)}")
-                        geo = config.get("geo_target", "N/D")
-                        st.write(f"**Geo target:** {geo}")
-                        ad_groups = config.get("ad_groups", [])
-                        st.write(f"**Grupos de anuncios:** {len(ad_groups)}")
-
-                prompt = cfg.get("prompt", "")
-                if prompt:
-                    st.write(f"**Prompt original:** _{prompt}_")
-
-                # Acción de deploy si está pendiente
+                        st.write(f"**Presupuesto diario:** {fmt_mxn(config.get('daily_budget_mxn', 0))}")
+                        st.write(f"**Geo:** {config.get('geo_target', 'N/D')}")
+                        st.write(f"**Grupos:** {len(config.get('ad_groups', []))}")
+                if cfg.get("prompt"):
+                    st.write(f"**Prompt:** _{cfg['prompt']}_")
                 if status == "pending":
-                    if st.button(f"🚀 Desplegar {cfg_id}", key=f"deploy_{cfg_id}"):
+                    if st.button(f"Desplegar {cfg_id}", key=f"deploy_{cfg_id}"):
                         try:
-                            r = requests.post(
-                                f"{AGENT_URL}/deploy-pending/{cfg_id}",
-                                timeout=30,
-                            )
+                            r = requests.post(f"{AGENT_URL}/deploy-pending/{cfg_id}", timeout=30)
                             if r.ok:
-                                st.success("¡Campaña desplegada correctamente!")
+                                st.success("Campaña desplegada.")
                                 st.cache_data.clear()
                                 st.rerun()
                             else:
-                                st.error(f"Error al desplegar: {r.text}")
+                                st.error(f"Error: {r.text}")
                         except Exception as e:
                             st.error(f"Error de conexión: {e}")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 
 st.divider()
-st.caption(
-    f"Thai Thai Ads Agent · {datetime.now().strftime('%Y-%m-%d %H:%M')} · "
-    f"[Agente]({AGENT_URL}/health)"
-)
+st.caption(f"Thai Thai Ops · {datetime.now().strftime('%Y-%m-%d %H:%M')} · {AGENT_URL}/health")
