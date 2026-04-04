@@ -316,3 +316,244 @@ def _parse_decisions(text: str, campaigns: list) -> list:
         len(validated), len(raw_decisions),
     )
     return validated
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Keyword Decision Engine — Haiku decide qué keywords agregar
+# ══════════════════════════════════════════════════════════════════════════════
+
+_MAX_KW_PER_CYCLE  = 5
+_MIN_KW_CONFIDENCE = 75
+
+
+def get_keyword_decisions(
+    campaigns: list,
+    current_keywords: list,
+    suggested_keywords: list,
+    negocio_data: dict,
+    search_ad_groups: list,
+) -> list:
+    """
+    Envía keywords actuales + sugerencias del Keyword Planner a Haiku y recibe
+    decisiones de qué keywords agregar a campañas Search (Reservaciones).
+
+    Args:
+        campaigns:         Lista de campañas con métricas actuales.
+        current_keywords:  Keywords activas en campañas Search (de fetch_keyword_data).
+        suggested_keywords: Sugerencias del Keyword Planner (de suggest_additional_keywords).
+        negocio_data:      Datos del negocio desde Sheets.
+        search_ad_groups:  Ad groups de campañas Search con resource_name.
+
+    Returns:
+        Lista de decisiones validadas:
+        [{"action": "add",
+          "campaign_id": str,
+          "ad_group_resource": str,
+          "keyword_text": str,
+          "match_type": "PHRASE",
+          "reason": str,
+          "confidence": int}]
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.warning("Keyword engine: ANTHROPIC_API_KEY no configurada — skip")
+        return []
+
+    if not search_ad_groups:
+        logger.warning("Keyword engine: sin ad groups Search — skip")
+        return []
+
+    prompt = _build_keyword_prompt(
+        campaigns, current_keywords, suggested_keywords, negocio_data, search_ad_groups
+    )
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text
+        logger.debug("Keyword engine raw response: %s", text[:400])
+        return _parse_keyword_decisions(text, current_keywords, search_ad_groups)
+    except Exception as e:
+        logger.error("Keyword engine error: %s", e)
+        return []
+
+
+def _build_keyword_prompt(
+    campaigns: list,
+    current_keywords: list,
+    suggested_keywords: list,
+    negocio_data: dict,
+    search_ad_groups: list,
+) -> str:
+    # ── Keywords actuales ──────────────────────────────────────────────────────
+    kw_lines = []
+    for kw in current_keywords:
+        cost  = float(kw.get("cost_micros", 0)) / 1_000_000
+        conv  = float(kw.get("conversions", 0))
+        cpa   = round(cost / conv, 0) if conv > 0 else None
+        kw_lines.append(
+            f"  - \"{kw.get('text', '')}\" [{kw.get('campaign_name', '')}]"
+            f" gasto=${cost:.0f} conv={conv:.0f} CPA=${cpa if cpa else 'N/A'}"
+        )
+    kw_str = "\n".join(kw_lines) if kw_lines else "  (sin datos de keywords)"
+
+    # ── Sugerencias del Keyword Planner ───────────────────────────────────────
+    sug_lines = []
+    for s in suggested_keywords[:20]:
+        sug_lines.append(
+            f"  - \"{s.get('keyword', '')}\" búsquedas/mes≈{s.get('avg_monthly_searches', 0)}"
+            f" competencia={s.get('competition', 'N/A')}"
+        )
+    sug_str = "\n".join(sug_lines) if sug_lines else "  (sin sugerencias disponibles)"
+
+    # ── Ad groups disponibles ──────────────────────────────────────────────────
+    ag_lines = []
+    for ag in search_ad_groups:
+        ag_lines.append(
+            f"  - campaign_id={ag['campaign_id']} campaign=\"{ag['campaign_name']}\""
+            f" ad_group_resource=\"{ag['adgroup_resource']}\""
+        )
+    ag_str = "\n".join(ag_lines) if ag_lines else "  (sin ad groups)"
+
+    # ── Datos de negocio ───────────────────────────────────────────────────────
+    nd = negocio_data or {}
+    comensales  = nd.get("comensales_total", "n/d")
+    venta_local = float(nd.get("venta_local_total", 0) or 0)
+    negocio_str = f"  Comensales últimos 7 días: {comensales} | Venta local: ${venta_local:,.0f} MXN"
+
+    return f"""Eres el agente de optimización de keywords de Thai Thai, restaurante tailandés en Mérida, Yucatán.
+
+## CONTEXTO DEL NEGOCIO
+- Restaurante tailandés — mucha gente en Mérida NO conoce la comida thai
+- Platos estrella: Pad Thai, curry verde, curry rojo, spring rolls, soup de coco (Tom Kha)
+- Ubicación: Calle 30 No. 351, Col. Emiliano Zapata Norte, Mérida
+- Objetivo de la campaña Search (Reservaciones): atraer gente que busca dónde comer o reservar
+- Mercado: turistas nacionales e internacionales + locales en Mérida
+
+## KEYWORDS ACTUALES EN CAMPAÑAS SEARCH
+{kw_str}
+
+## SUGERENCIAS DEL KEYWORD PLANNER
+{sug_str}
+
+## AD GROUPS DISPONIBLES (solo agregar a estos)
+{ag_str}
+
+## DATOS DEL NEGOCIO (últimos 7 días)
+{negocio_str}
+
+## INSTRUCCIONES
+Responde SOLO con JSON válido (sin markdown, sin texto adicional).
+
+Decide cuáles keywords agregar. Máximo {_MAX_KW_PER_CYCLE} keywords por ciclo.
+
+REGLAS:
+1. Solo agregar keywords con intención local clara: incluir "mérida", "yucatán", o nombre del plato
+2. No duplicar keywords que ya existen
+3. Preferir PHRASE match — captura variaciones naturales
+4. Solo agregar a los ad_group_resource listados arriba (usa el valor exacto)
+5. Keywords educativas tienen valor: "qué es pad thai", "comida tailandesa mérida"
+6. Confianza: refleja qué tan seguro estás (0-100). Mínimo 75 para ejecutar.
+7. Si no hay keywords claras para agregar, devuelve lista vacía
+
+Formato:
+{{
+  "keyword_decisions": [
+    {{
+      "action": "add",
+      "campaign_id": "<campaign_id exacto del ad group>",
+      "ad_group_resource": "<ad_group_resource exacto de arriba>",
+      "keyword_text": "<keyword en español>",
+      "match_type": "PHRASE",
+      "reason": "<una frase explicando el porqué>",
+      "confidence": <entero 0-100>
+    }}
+  ]
+}}"""
+
+
+def _parse_keyword_decisions(
+    text: str,
+    current_keywords: list,
+    search_ad_groups: list,
+) -> list:
+    """
+    Extrae y valida las decisiones de keywords de la respuesta de Haiku.
+    """
+    # Conjunto de keywords existentes (para evitar duplicados)
+    existing_kw = {kw.get("text", "").lower().strip() for kw in current_keywords}
+
+    # Conjunto de ad_group_resources válidos
+    valid_ag_resources = {ag["adgroup_resource"] for ag in search_ad_groups}
+
+    try:
+        start = text.find("{")
+        end   = text.rfind("}") + 1
+        if start < 0 or end <= start:
+            logger.warning("Keyword engine: respuesta sin JSON válido")
+            return []
+        data = json.loads(text[start:end])
+    except json.JSONDecodeError as e:
+        logger.warning("Keyword engine: JSON inválido — %s", e)
+        return []
+
+    raw_decisions = data.get("keyword_decisions", [])
+    if not isinstance(raw_decisions, list):
+        return []
+
+    validated = []
+    seen_kws  = set()  # evitar duplicados dentro del mismo ciclo
+
+    for d in raw_decisions:
+        if len(validated) >= _MAX_KW_PER_CYCLE:
+            break
+        try:
+            action          = str(d.get("action", "")).lower()
+            campaign_id     = str(d.get("campaign_id", ""))
+            ag_resource     = str(d.get("ad_group_resource", ""))
+            keyword_text    = str(d.get("keyword_text", "")).strip()
+            match_type      = str(d.get("match_type", "PHRASE")).upper()
+            reason          = str(d.get("reason", ""))[:200]
+            confidence      = int(d.get("confidence", 0))
+
+            if action != "add":
+                continue
+            if not keyword_text or not ag_resource:
+                continue
+            if ag_resource not in valid_ag_resources:
+                logger.debug("Keyword engine: ad_group_resource inválido '%s' — skip", ag_resource)
+                continue
+            if keyword_text.lower() in existing_kw or keyword_text.lower() in seen_kws:
+                logger.debug("Keyword engine: '%s' ya existe — skip", keyword_text)
+                continue
+            if match_type not in ("PHRASE", "EXACT", "BROAD"):
+                match_type = "PHRASE"
+            if confidence < _MIN_KW_CONFIDENCE:
+                logger.debug("Keyword engine: '%s' confianza=%d < %d — skip", keyword_text, confidence, _MIN_KW_CONFIDENCE)
+                continue
+
+            seen_kws.add(keyword_text.lower())
+            validated.append({
+                "action":           "add",
+                "campaign_id":      campaign_id,
+                "ad_group_resource": ag_resource,
+                "keyword_text":     keyword_text,
+                "match_type":       match_type,
+                "reason":           reason,
+                "confidence":       confidence,
+            })
+
+        except Exception as e:
+            logger.debug("Keyword engine: error procesando decisión — %s", e)
+            continue
+
+    logger.info(
+        "Keyword engine: %d keyword(s) validada(s) de %d recibidas",
+        len(validated), len(raw_decisions),
+    )
+    return validated

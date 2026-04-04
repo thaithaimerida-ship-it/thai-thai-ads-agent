@@ -1472,6 +1472,92 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             logger.warning("Fase 7 (AI decisions): error no crítico — %s", _ai_exc)
 
         # ====================================================================
+        # FASE 7B — AI Keyword Decisions (Haiku + Keyword Planner)
+        #
+        # Haiku recibe las keywords actuales de campañas Search + sugerencias
+        # del Keyword Planner y decide cuáles agregar.
+        # Solo aplica a campañas SEARCH (Reservaciones), no Smart Campaigns.
+        # Máximo 5 keywords por ciclo, confianza mínima 75%.
+        # ====================================================================
+        _kw_decisions_executed: list = []
+        try:
+            from engine.decision_engine import get_keyword_decisions as _get_kw_decisions
+            from engine.ads_client import fetch_search_ad_groups as _fetch_search_ag
+            from engine.keyword_planner import suggest_additional_keywords as _suggest_kw
+            from agents.executor import Executor as _KWExecutor
+
+            _auto_exec_kw = os.getenv("AUTO_EXECUTE_ENABLED", "false").lower() == "true"
+            _kw_enabled   = os.getenv("BUDGET_CHANGE_ENABLED", "true").lower() == "true"
+
+            if _auto_exec_kw and _kw_enabled:
+                # Fetch ad groups de campañas Search (con resource_name)
+                _search_ag = _fetch_search_ag(client, target_id)
+
+                if _search_ag:
+                    # Keywords actuales filtradas a campañas Search
+                    _search_kws = [
+                        kw for kw in keywords
+                        if any(ag["campaign_id"] == kw.get("campaign_id") for ag in _search_ag)
+                    ]
+
+                    # Semillas: top 5 keywords por conversiones
+                    _top_kws = sorted(
+                        _search_kws, key=lambda k: float(k.get("conversions", 0)), reverse=True
+                    )[:5]
+                    _seed_texts = [kw["text"] for kw in _top_kws if kw.get("text")]
+
+                    # Sugerencias del Keyword Planner (opcional — si falla, continúa sin ellas)
+                    _kw_suggestions: list = []
+                    if _seed_texts:
+                        try:
+                            _kw_suggestions = _suggest_kw(
+                                _seed_texts, min_searches=50, max_results=15
+                            )
+                        except Exception as _kp_err:
+                            logger.debug("Fase 7B: Keyword Planner no disponible — %s", _kp_err)
+
+                    # Decisiones AI
+                    _kw_ai_decisions = _get_kw_decisions(
+                        campaigns=campaigns,
+                        current_keywords=_search_kws,
+                        suggested_keywords=_kw_suggestions,
+                        negocio_data=_negocio_data_6x,
+                        search_ad_groups=_search_ag,
+                    )
+
+                    if _kw_ai_decisions:
+                        _kw_exec = _KWExecutor()
+                        for _kd in _kw_ai_decisions:
+                            _kd_conf = int(_kd.get("confidence", 0))
+                            if _kd_conf < 75:
+                                continue
+                            _kw_result = _kw_exec.add_keyword(
+                                _kd["ad_group_resource"],
+                                _kd["keyword_text"],
+                                _kd.get("match_type", "PHRASE"),
+                            )
+                            _kw_decisions_executed.append({
+                                **_kd,
+                                "exec_result": _kw_result,
+                            })
+
+                        if _kw_decisions_executed:
+                            results["ai_keyword_decisions"] = _kw_decisions_executed
+                            _kw_ok = sum(
+                                1 for d in _kw_decisions_executed
+                                if d.get("exec_result", {}).get("status") == "executed"
+                            )
+                            print(f"Fase 7B (AI Keywords): {_kw_ok} keyword(s) agregada(s) de {len(_kw_ai_decisions)} decisiones Haiku")
+            else:
+                logger.debug(
+                    "Fase 7B: deshabilitada — AUTO_EXECUTE_ENABLED=%s BUDGET_CHANGE_ENABLED=%s",
+                    _auto_exec_kw, _kw_enabled,
+                )
+
+        except Exception as _kw_ai_exc:
+            logger.warning("Fase 7B (AI Keywords): error no crítico — %s", _kw_ai_exc)
+
+        # ====================================================================
         # MÓDULO GEO — Auditoría de Geotargeting
         #
         # Módulo oficial del agente MVP. Evalúa todas las campañas activas en
@@ -1862,6 +1948,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _run_summary["keyword_proposals"]    = _pending_kw_proposals
             _run_summary["executed_budget"]      = _auto_executed_budget
             _run_summary["ai_decisions"]         = _ai_decisions_executed
+            _run_summary["ai_keyword_decisions"] = _kw_decisions_executed
             _run_summary["budget_proposals"]     = _pending_ba_proposals
             _run_summary["ba2_proposals"]        = _pending_ba2_proposals
             _run_summary["ba2_freed_budget_mxn"] = budget_scale_result.get("freed_budget_mxn", 0.0)

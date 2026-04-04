@@ -525,6 +525,45 @@ def fetch_keyword_data(client: GoogleAdsClient, customer_id: str, date_range: st
         print(f"Error fetching keywords: {e}")
         return []
 
+def fetch_search_ad_groups(client: GoogleAdsClient, customer_id: str) -> list:
+    """
+    Retorna ad groups activos de campañas Search (SEARCH channel) con su resource_name.
+    Usado por el Keyword Decision Engine para saber dónde agregar keywords.
+
+    Retorna lista de dicts:
+        adgroup_id, adgroup_name, adgroup_resource, campaign_id, campaign_name
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    query = """
+        SELECT
+          ad_group.id,
+          ad_group.name,
+          ad_group.resource_name,
+          campaign.id,
+          campaign.name,
+          campaign.advertising_channel_type
+        FROM ad_group
+        WHERE campaign.status = 'ENABLED'
+          AND ad_group.status = 'ENABLED'
+          AND campaign.advertising_channel_type = 'SEARCH'
+    """
+    try:
+        response = ga_service.search(customer_id=customer_id, query=query)
+        ad_groups = []
+        for row in response:
+            ad_groups.append({
+                "adgroup_id":       str(row.ad_group.id),
+                "adgroup_name":     row.ad_group.name,
+                "adgroup_resource": row.ad_group.resource_name,
+                "campaign_id":      str(row.campaign.id),
+                "campaign_name":    row.campaign.name,
+            })
+        return ad_groups
+    except Exception as e:
+        print(f"fetch_search_ad_groups error: {e}")
+        return []
+
+
 def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, date_range: str = "YESTERDAY"):
     """
     Obtiene datos de search terms para el rango de fechas indicado.

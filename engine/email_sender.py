@@ -2402,6 +2402,44 @@ def _build_daily_summary_html(run: dict) -> str:
             f'</td></tr>'
         )
 
+    # ── SECCIÓN 2D: Keywords agregadas por AI ───────────────────────────────────
+    _kw_ai_decisions = run.get("ai_keyword_decisions", []) or []
+    _kw_executed = [d for d in _kw_ai_decisions if d.get("exec_result", {}).get("status") == "executed"]
+    if _kw_executed:
+        _kw_rows = ""
+        for _kd in _kw_executed:
+            _kd_text   = str(_kd.get("keyword_text", "—"))
+            _kd_camp   = str(_kd.get("exec_result", {}).get("campaign_name", _kd.get("campaign_id", "—")))
+            _kd_conf   = int(_kd.get("confidence", 0))
+            _kd_reason = str(_kd.get("reason", ""))[:160]
+            _kd_match  = str(_kd.get("match_type", "PHRASE"))
+            _kd_conf_color = "#15803d" if _kd_conf >= 85 else "#d97706"
+            _kw_rows += (
+                f'<tr style="border-bottom:1px solid #f0f0f0;">'
+                f'<td style="padding:10px 0;">'
+                f'<p style="margin:0 0 3px 0;font-size:13px;font-weight:bold;color:#111;">'
+                f'🔑 &ldquo;{_kd_text}&rdquo;'
+                f'<span style="margin-left:8px;background:#0369a120;color:#0369a1;'
+                f'padding:2px 6px;border-radius:3px;font-size:10px;font-weight:bold;">'
+                f'{_kd_match}</span></p>'
+                f'<p style="margin:0 0 2px 0;font-size:11px;color:#6b7280;">'
+                f'Agregada a: <strong>{_kd_camp}</strong>'
+                f' &nbsp;·&nbsp; Confianza: <strong style="color:{_kd_conf_color};">{_kd_conf}%</strong></p>'
+                f'<p style="margin:0;font-size:12px;color:#374151;">{_kd_reason}</p>'
+                f'</td></tr>'
+            )
+        _kw_ai_block = (
+            f'<tr><td style="padding:14px 20px 4px 20px;">'
+            f'<p style="margin:0 0 6px 0;font-size:12px;font-weight:bold;color:#6b7280;'
+            f'text-transform:uppercase;letter-spacing:0.5px;">'
+            f'🔑 Keywords agregadas por AI ({len(_kw_executed)})</p>'
+            f'<p style="margin:0 0 8px 0;font-size:11px;color:#6b7280;">'
+            f'Haiku analizó el Keyword Planner + rendimiento actual y agregó estas keywords a tus campañas Search.</p>'
+            f'<table width="100%" cellpadding="0" cellspacing="0">{_kw_rows}</table>'
+            f'</td></tr>'
+        )
+        _ai_block = _ai_block + _kw_ai_block
+
     # ── SECCIÓN 3: Alertas GEO ───────────────────────────────────────────────────
     _geo_alerts_email = run.get("geo_issues_for_email", [])
     _geo_email_block = ""
