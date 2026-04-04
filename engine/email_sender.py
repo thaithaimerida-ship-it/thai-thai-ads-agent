@@ -1548,22 +1548,42 @@ def generate_daily_insight(
     import os
     import anthropic as _anthropic
 
-    _spend = float((ads_data or {}).get("spend_mxn", 0) or 0)
-    _conv  = float((ads_data or {}).get("conversions", 0) or 0)
-    _pedir = int((ga4_data or {}).get("click_pedir", 0) or 0)
+    _spend    = float((ads_data or {}).get("spend_mxn", 0) or 0)
+    _conv     = float((ads_data or {}).get("conversions", 0) or 0)
+    _pedir    = int((ga4_data or {}).get("click_pedir", 0) or 0)
     _reservar = int((ga4_data or {}).get("click_reservar", 0) or 0)
-    _views = int((ga4_data or {}).get("page_views", 0) or 0)
-    _coms  = (sheets_data or {}).get("comensales")
+    _views    = int((ga4_data or {}).get("page_views", 0) or 0)
+
+    # Nuevo formato: resumen_negocio_para_agente
+    _sd = sheets_data or {}
+    _coms           = _sd.get("comensales_total")          # personas en restaurante
+    _venta_local    = float(_sd.get("venta_local_total", 0) or 0)      # tarjeta+efectivo
+    _venta_del_neto = float(_sd.get("venta_plataformas_neto", 0) or 0) # post-comisión
+    _comision_pct   = float(_sd.get("comision_delivery_pct", 0) or 0)
+    _ticket         = float(_sd.get("ingreso_por_comensal", 0) or 0)
 
     # Necesitamos al menos un dato de cada fuente para que el cruce tenga sentido
-    has_ads = _spend > 0 or _conv > 0
-    has_ga4 = _pedir > 0 or _reservar > 0 or _views > 0
+    has_ads    = _spend > 0 or _conv > 0
+    has_ga4    = _pedir > 0 or _reservar > 0 or _views > 0
     has_sheets = _coms is not None
     if not (has_ads and (has_ga4 or has_sheets)):
         return None
 
     _clics_web = _pedir + _reservar
-    _sheets_str = f"{int(_coms)} comensales reales" if has_sheets else "sin dato de comensales"
+
+    # Descripción de ventas con formato nuevo
+    _sheets_parts = []
+    if _coms is not None:
+        _sheets_parts.append(f"{int(_coms)} comensales en restaurante")
+        if _ticket > 0:
+            _sheets_parts.append(f"ticket promedio ${_ticket:,.0f}")
+    if _venta_local > 0:
+        _sheets_parts.append(f"venta local ${_venta_local:,.0f} (tarjeta+efectivo)")
+    if _venta_del_neto > 0:
+        _sheets_parts.append(
+            f"delivery neto ${_venta_del_neto:,.0f} (después de {_comision_pct:.0f}% comisión plataformas)"
+        )
+    _sheets_str = ", ".join(_sheets_parts) if _sheets_parts else "sin dato de ventas"
 
     if _conv > 0:
         _ads_str = (
@@ -1575,7 +1595,7 @@ def generate_daily_insight(
 
     # Contexto de campaña Local (acciones físicas en Google Maps)
     _local_str = ""
-    _ldir = int((local_data or {}).get("local_directions_count", 0) or 0)
+    _ldir   = int((local_data or {}).get("local_directions_count", 0) or 0)
     _lspend = float((local_data or {}).get("local_campaign_spend", 0) or 0)
     if _ldir > 0 and _lspend > 0:
         _cpd = _lspend / _ldir
@@ -1593,6 +1613,8 @@ def generate_daily_insight(
         f"(pedir: {_pedir}, reservar: {_reservar}) en GA4, "
         f"y {_sheets_str} según el corte de caja."
         f"{_local_str} "
+        "Importante: los comensales son personas que comieron en el restaurante (campaña Local). "
+        "La venta delivery (neto) es lo que Thai Thai recibe después de comisiones de Rappi/Uber. "
         "Escribe UNA SOLA oración ejecutiva correlacionando estos datos para el dueño. "
         "Si recibes datos de local_directions (intenciones de visita física), úsalos para "
         "resaltar el tráfico peatonal como un éxito de la campaña Local. "
@@ -1653,9 +1675,18 @@ def _build_daily_summary_html(run: dict) -> str:
     _ads_spend    = float(_ads_24h.get("spend_mxn", 0) or 0)
     _ads_conv     = float(_ads_24h.get("conversions", 0) or 0)
     _landing_ms   = run.get("landing_response_ms")
-    _ventas_ayer  = run.get("ventas_ayer", {})
-    _coms_ayer    = _ventas_ayer.get("comensales")
-    _coms_obj     = int(_ventas_ayer.get("objetivo", 35) or 35)
+    _ventas_ayer        = run.get("ventas_ayer", {}) or {}
+    # Nuevo formato: resumen_negocio_para_agente
+    _coms_ayer          = _ventas_ayer.get("comensales_total")          # personas en restaurante
+    _coms_obj           = 35                                             # objetivo fijo diario
+    _coms_prom          = _ventas_ayer.get("comensales_promedio_diario") # solo útil si days>1
+    _venta_local        = float(_ventas_ayer.get("venta_local_total", 0) or 0)   # tarjeta+efectivo
+    _venta_plat_bruto   = float(_ventas_ayer.get("venta_plataformas_bruto", 0) or 0)  # col H
+    _venta_plat_neto    = float(_ventas_ayer.get("venta_plataformas_neto", 0) or 0)   # post-comisión
+    _comision_del_pct   = float(_ventas_ayer.get("comision_delivery_pct", 0) or 0)
+    _ingreso_por_coms   = float(_ventas_ayer.get("ingreso_por_comensal", 0) or 0)
+    _venta_neta_prom    = float(_ventas_ayer.get("venta_neta_promedio_diario", 0) or 0)
+    _por_canal          = _ventas_ayer.get("por_canal", []) or []
 
     # GA4 web traffic (Sección 0: Movimiento en la Web)
     _ga4_web      = run.get("ga4_web")
@@ -2010,19 +2041,35 @@ def _build_daily_summary_html(run: dict) -> str:
     _land_val = f"<strong style='color:{_land_color};'>{_land_icon} {_land_label}</strong>"
     _land_sub = f"Carga: {_ms_display} · Estado: {_land_status_text}"
 
-    # Ventas ayer card
+    # ── Card: Comensales (restaurante físico — campaña Local) ───────────────
     if _coms_ayer is None:
         _ven_val = "<span style='color:#9ca3af;'>N/D</span>"
         _ven_sub = "Sheets no disponible"
     elif _coms_ayer >= _coms_obj:
         _ven_val = f"<strong style='color:#16a34a;'>{_coms_ayer}</strong> / {_coms_obj} obj 🟢"
-        _ven_sub = "Sobre objetivo"
+        _ven_sub = f"Sobre objetivo · ticket ${_ingreso_por_coms:,.0f}" if _ingreso_por_coms else "Sobre objetivo"
     elif _coms_ayer >= 30:
         _ven_val = f"<strong style='color:#d97706;'>{_coms_ayer}</strong> / {_coms_obj} obj 🟡"
-        _ven_sub = "Bajo objetivo"
+        _ven_sub = f"Bajo objetivo · ticket ${_ingreso_por_coms:,.0f}" if _ingreso_por_coms else "Bajo objetivo"
     else:
         _ven_val = f"<strong style='color:#dc2626;'>{_coms_ayer}</strong> / {_coms_obj} obj 🔴"
-        _ven_sub = "Bajo equilibrio"
+        _ven_sub = f"Bajo equilibrio · ticket ${_ingreso_por_coms:,.0f}" if _ingreso_por_coms else "Bajo equilibrio"
+
+    # ── Card: Venta local (tarjeta + efectivo) ──────────────────────────────
+    if _venta_local > 0:
+        _vlocal_val = f"<strong>${_venta_local:,.0f}</strong>"
+        _vlocal_sub = "Tarjeta + efectivo"
+    else:
+        _vlocal_val = "<span style='color:#9ca3af;'>N/D</span>"
+        _vlocal_sub = "Sin dato"
+
+    # ── Card: Delivery (plataformas) ────────────────────────────────────────
+    if _venta_plat_bruto > 0:
+        _del_val = f"<strong>${_venta_plat_neto:,.0f}</strong> neto"
+        _del_sub = f"Bruto ${_venta_plat_bruto:,.0f} · comisión {_comision_del_pct:.0f}%"
+    else:
+        _del_val = "<span style='color:#9ca3af;'>N/D</span>"
+        _del_sub = "Sin pedidos delivery"
 
     def _card(icon_label: str, val: str, sub: str) -> str:
         return (
@@ -2034,6 +2081,46 @@ def _build_daily_summary_html(run: dict) -> str:
             f'</td>'
         )
 
+    # ── Desglose por canal (Rappi, Uber, BBVA, etc.) ────────────────────────
+    if _por_canal:
+        _canal_rows = ""
+        for _c in _por_canal[:8]:  # max 8 canales
+            _f   = _c.get("fuente", "—")
+            _n   = float(_c.get("neto", 0))
+            _b   = float(_c.get("bruto", 0))
+            _pct = float(_c.get("comision_pct", 0))
+            if _pct > 0:
+                _canal_detail = f"${_n:,.0f} neto · {_pct:.0f}% comisión"
+            else:
+                _canal_detail = f"${_n:,.0f} neto"
+            _canal_rows += (
+                f'<tr style="border-top:1px solid #f0f0f0;">'
+                f'<td style="padding:5px 8px;color:#374151;font-size:12px;">{_f}</td>'
+                f'<td style="text-align:right;padding:5px 8px;font-size:12px;font-weight:bold;">'
+                f'${_b:,.0f}</td>'
+                f'<td style="text-align:right;padding:5px 8px;font-size:12px;color:#6b7280;">'
+                f'{_canal_detail}</td>'
+                f'</tr>'
+            )
+        _canales_block = f"""
+  <tr><td style="padding:8px 20px 14px 20px;">
+    <p style="margin:0 0 6px 0;font-size:12px;font-weight:bold;color:#6b7280;
+              text-transform:uppercase;letter-spacing:0.5px;">💳 Desglose por Canal</p>
+    <table width="100%" style="border-collapse:collapse;font-size:13px;">
+      <tr style="background:#f9fafb;">
+        <th style="text-align:left;padding:5px 8px;color:#6b7280;font-size:11px;font-weight:bold;
+                   border-bottom:1px solid #e5e7eb;">Canal</th>
+        <th style="text-align:right;padding:5px 8px;color:#6b7280;font-size:11px;font-weight:bold;
+                   border-bottom:1px solid #e5e7eb;">Bruto</th>
+        <th style="text-align:right;padding:5px 8px;color:#6b7280;font-size:11px;font-weight:bold;
+                   border-bottom:1px solid #e5e7eb;">Neto / Comisión</th>
+      </tr>
+      {_canal_rows}
+    </table>
+  </td></tr>"""
+    else:
+        _canales_block = ""
+
     _seccion1_block = (
         '<tr><td style="padding:14px 20px 6px 20px;">'
         '<p style="margin:0 0 8px 0;font-size:12px;font-weight:bold;color:#6b7280;'
@@ -2041,12 +2128,17 @@ def _build_daily_summary_html(run: dict) -> str:
         '<table width="100%" cellpadding="0" cellspacing="4">'
         '<tr>'
         + _card("📢 Google Ads 24h", _ads_val, _ads_sub)
-        + '<td style="width:6px;"></td>'
+        + '<td style="width:4px;"></td>'
         + _card("🌐 Landing", _land_val, _land_sub)
-        + '<td style="width:6px;"></td>'
-        + _card("🍽️ Comensales Ayer", _ven_val, _ven_sub)
+        + '<td style="width:4px;"></td>'
+        + _card("🍽️ Comensales", _ven_val, _ven_sub)
+        + '<td style="width:4px;"></td>'
+        + _card("🏪 Venta Local", _vlocal_val, _vlocal_sub)
+        + '<td style="width:4px;"></td>'
+        + _card("🛵 Delivery", _del_val, _del_sub)
         + '</tr></table>'
         '</td></tr>'
+        + _canales_block
     )
 
     # ── GA4: Movimiento en la Web (24h) — tabla siempre visible ─────────────────
