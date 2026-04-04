@@ -1536,6 +1536,11 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                                 _kd["keyword_text"],
                                 _kd.get("match_type", "PHRASE"),
                             )
+                            if _kw_result.get("status") != "executed":
+                                logger.warning(
+                                    "Fase 7B: add_keyword '%s' error — %s",
+                                    _kd["keyword_text"], _kw_result.get("error", "unknown"),
+                                )
                             _kw_decisions_executed.append({
                                 **_kd,
                                 "exec_result": _kw_result,
