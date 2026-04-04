@@ -1942,7 +1942,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             # Corridas compensatorias siempre envían — son el fallback explícito
             _already_sent = (
                 False if run_type == "compensatory"
-                else _mem_daily.has_recent_alert("daily_summary", 20)
+                else _mem_daily.has_recent_alert("daily_summary", 1)
             )
 
             _email_sent = False
