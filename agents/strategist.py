@@ -206,6 +206,8 @@ class Strategist:
             })
 
         # 3. SCALE campaigns — con ROI real por canal de negocio
+        # Nota: delivery = pedidos Rappi/Uber (NO comensales físicos)
+        #       local    = comensales que comieron en el restaurante (tarjeta + efectivo)
         _negocio = {}
         try:
             from engine.sheets_client import resumen_negocio_para_agente
@@ -213,8 +215,8 @@ class Strategist:
         except Exception:
             pass
 
-        _roi_delivery = _negocio.get("roi_real_delivery", 0)
-        _roi_local    = _negocio.get("roi_real_local", 0)
+        _roi_delivery = _negocio.get("roi_data_delivery", {})
+        _roi_local    = _negocio.get("roi_data_local", {})
 
         for camp in campaigns:
             spend = camp.get("cost_micros", 0) / 1_000_000
@@ -223,12 +225,47 @@ class Strategist:
             if conversions > 0:
                 cpa = spend / conversions
                 if cpa < 12 and spend > 100:
-                    # Determinar ROI real del canal según tipo de campaña
                     name_lower = name.lower()
                     is_delivery = any(w in name_lower for w in ("delivery", "rappi", "uber", "pedido", "domicilio"))
-                    roi_neto = _roi_delivery if is_delivery else _roi_local
-                    roi_ratio = round(roi_neto / spend, 2) if spend > 0 else 0
-                    roi_label = f"ROI real {roi_ratio}x (neto ${roi_neto:,.0f} vs gasto ${spend:,.0f})" if roi_neto > 0 else ""
+
+                    if is_delivery and _roi_delivery:
+                        # ROI delivery: usa neto (después de comisiones Rappi/Uber)
+                        roi_neto = _roi_delivery.get("neto", 0)
+                        comision_pct = _roi_delivery.get("comision_pct", 0)
+                        roi_ratio = round(roi_neto / spend, 2) if spend > 0 else 0
+                        roi_label = (
+                            f"ROI delivery {roi_ratio}x | neto ${roi_neto:,.0f} "
+                            f"(comisión plataformas {comision_pct}%) vs gasto ads ${spend:,.0f}"
+                        )
+                        roi_evidence = {
+                            "tipo": "delivery",
+                            "venta_bruto": _roi_delivery.get("bruto", 0),
+                            "venta_neto": roi_neto,
+                            "comision_pct": comision_pct,
+                            "roi_ratio": roi_ratio,
+                            "nota": "neto = después de comisiones Rappi/Uber",
+                        }
+                    elif not is_delivery and _roi_local:
+                        # ROI local: tarjeta + efectivo de comensales en restaurante
+                        venta_local = _roi_local.get("venta", 0)
+                        comensales  = _roi_local.get("comensales", 0)
+                        roi_ratio = round(venta_local / spend, 2) if spend > 0 else 0
+                        costo_por_comensal = round(spend / comensales, 2) if comensales > 0 else 0
+                        roi_label = (
+                            f"ROI local {roi_ratio}x | ventas ${venta_local:,.0f} "
+                            f"({comensales} comensales, costo/comensal ads ${costo_por_comensal}) vs gasto ${spend:,.0f}"
+                        )
+                        roi_evidence = {
+                            "tipo": "local",
+                            "venta_local": venta_local,
+                            "comensales": comensales,
+                            "costo_por_comensal_ads": costo_por_comensal,
+                            "roi_ratio": roi_ratio,
+                            "nota": "venta = tarjeta + efectivo de comensales físicos",
+                        }
+                    else:
+                        roi_label = ""
+                        roi_evidence = {}
 
                     proposals.append({
                         "decision_id": f"dec_{len(proposals)+1:03d}",
@@ -242,8 +279,7 @@ class Strategist:
                             "efficiency": round((15 - cpa) / 15 * 100, 1),
                             "conversions_7d": int(conversions),
                             "trend": "stable",
-                            "roi_neto_canal": roi_neto,
-                            "roi_ratio": roi_ratio,
+                            **roi_evidence,
                         },
                         "impact": {"estimated_new_conversions": int(conversions * 0.3), "budget_increase": round(spend * 0.3, 2), "risk": "low"},
                         "confidence": 85,

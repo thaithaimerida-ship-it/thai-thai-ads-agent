@@ -616,20 +616,13 @@ _LOCAL_FUENTES    = {"BBVA", "CAJA", "CLIP", "PAYPAL", "TRANSFERENCIA", "BANAMEX
 
 def resumen_negocio_para_agente(days: int = 7) -> dict:
     """
-    Retorna un resumen ejecutivo de negocio listo para consumir por los agentes.
+    Resumen ejecutivo de negocio para los agentes. Últimos `days` días (hasta ayer).
 
-    Agrega datos de los últimos `days` días (hasta ayer):
-      comensales_promedio_diario   — promedio diario de comensales
-      venta_neta_promedio_diario   — promedio diario de venta neta (Cortes_de_Caja col C)
-      pago_efectivo_total          — suma efectivo del periodo
-      pago_tarjeta_total           — suma tarjeta del periodo
-      pago_plataformas_total       — suma delivery apps del periodo (Rappi, Uber…)
-      ingreso_por_comensal         — venta_neta / comensales (ticket promedio real)
-      porcentaje_plataformas       — pago_plataformas / venta_bruta (% delivery)
-      por_canal                    — lista [{fuente, bruto, comision, neto, comision_pct}]
-                                     de Ingresos_BD agrupado por fuente
-      roi_real_delivery            — neto acumulado de RAPPI+UBER (ingreso real delivery)
-      roi_real_local               — neto acumulado de BBVA+CAJA+CLIP (ingreso real local)
+    CONTEXTO CLAVE para los agentes:
+      - comensales (col J) = personas que comieron EN el restaurante (campaña Local)
+      - pago_plataformas (col H) = pedidos delivery Rappi/Uber (campaña Delivery) — NO son comensales
+      - Campaña Local  → medir con comensales + tarjeta + efectivo
+      - Campaña Delivery → medir con plataformas (col H) y cruzar con neto Rappi+Uber en Ingresos_BD
 
     Retorna {} si no hay credenciales o falla la lectura.
     """
@@ -639,7 +632,7 @@ def resumen_negocio_para_agente(days: int = 7) -> dict:
         end = date.today() - timedelta(days=1)
         start = end - timedelta(days=days - 1)
 
-        # ── Cortes_de_Caja (comensales + pagos diarios) ──────────────────────
+        # ── Cortes_de_Caja ───────────────────────────────────────────────────
         try:
             ws_caja = sh.worksheet("Cortes_de_Caja")
             caja_rows = ws_caja.get_all_values()
@@ -649,39 +642,37 @@ def resumen_negocio_para_agente(days: int = 7) -> dict:
 
         diario_data = parse_diario_sheet(caja_rows)
 
-        # Filtrar por rango de fechas
-        recientes = []
-        for row in diario_data:
-            fecha_d = _parse_fecha(row["fecha"])
-            if fecha_d and start <= fecha_d <= end:
-                recientes.append(row)
+        recientes = [
+            r for r in diario_data
+            if (fd := _parse_fecha(r["fecha"])) and start <= fd <= end
+        ]
+        dias_con_datos = len(recientes) or 1
 
-        dias_con_datos = len(recientes) or 1  # evitar div/0
+        total_comensales       = sum(r["comensales_real"]   for r in recientes)
+        total_venta_neta       = sum(r["venta_neta"]        for r in recientes)
+        total_venta_bruta      = sum(r["venta_bruta"]       for r in recientes)
+        total_pago_efectivo    = sum(r["pago_efectivo"]     for r in recientes)
+        total_pago_tarjeta     = sum(r["pago_tarjeta"]      for r in recientes)
+        total_pago_plataformas = sum(r["pago_plataformas"]  for r in recientes)
 
-        total_comensales     = sum(r["comensales_real"]  for r in recientes)
-        total_venta_neta     = sum(r["venta_neta"]       for r in recientes)
-        total_venta_bruta    = sum(r["venta_bruta"]      for r in recientes)
-        total_pago_efectivo  = sum(r["pago_efectivo"]    for r in recientes)
-        total_pago_tarjeta   = sum(r["pago_tarjeta"]     for r in recientes)
-        total_pago_plataformas = sum(r["pago_plataformas"] for r in recientes)
+        # Ventas del restaurante físico (campaña Local)
+        venta_local_total = round(total_pago_tarjeta + total_pago_efectivo, 2)
+        ingreso_por_comensal = round(
+            venta_local_total / total_comensales, 2
+        ) if total_comensales > 0 else 0.0
 
-        # ── Ingresos_BD (comisiones por canal) ───────────────────────────────
+        # ── Ingresos_BD (comisiones reales por fuente) ───────────────────────
         ingresos_result = _read_ingresos_by_daterange(sh, start, end)
         por_canal = ingresos_result["por_canal"]
 
-        # ROI real por tipo de campaña
-        roi_real_delivery = round(sum(
-            c["neto"] for c in por_canal
-            if c["fuente"] in _DELIVERY_FUENTES
-        ), 2)
-        roi_real_local = round(sum(
-            c["neto"] for c in por_canal
-            if c["fuente"] in _LOCAL_FUENTES
-        ), 2)
-
-        ingreso_por_comensal = round(
-            total_venta_neta / total_comensales, 2
-        ) if total_comensales > 0 else 0.0
+        # Delivery: neto real después de comisiones Rappi/Uber
+        delivery_canales = [c for c in por_canal if c["fuente"] in _DELIVERY_FUENTES]
+        plataformas_neto  = round(sum(c["neto"]      for c in delivery_canales), 2)
+        plataformas_bruto = round(sum(c["bruto"]     for c in delivery_canales), 2)
+        plataformas_comision_total = round(sum(c["comision"] for c in delivery_canales), 2)
+        comision_delivery_pct = round(
+            plataformas_comision_total / plataformas_bruto * 100, 1
+        ) if plataformas_bruto > 0 else 0.0
 
         porcentaje_plataformas = round(
             total_pago_plataformas / total_venta_bruta * 100, 1
@@ -692,19 +683,40 @@ def resumen_negocio_para_agente(days: int = 7) -> dict:
             "fecha_inicio": start.isoformat(),
             "fecha_fin": end.isoformat(),
             "dias_con_datos": dias_con_datos,
+
+            # ── VENTAS EN RESTAURANTE (campaña Local) ─────────────────────
             "comensales_total": total_comensales,
             "comensales_promedio_diario": round(total_comensales / dias_con_datos, 1),
-            "venta_neta_total": round(total_venta_neta, 2),
-            "venta_neta_promedio_diario": round(total_venta_neta / dias_con_datos, 2),
-            "venta_bruta_total": round(total_venta_bruta, 2),
+            "venta_local_total": venta_local_total,         # tarjeta + efectivo
             "pago_efectivo_total": round(total_pago_efectivo, 2),
             "pago_tarjeta_total": round(total_pago_tarjeta, 2),
-            "pago_plataformas_total": round(total_pago_plataformas, 2),
-            "ingreso_por_comensal": ingreso_por_comensal,
+            "ingreso_por_comensal": ingreso_por_comensal,   # ticket promedio real
+
+            # ── VENTAS DELIVERY (campaña Delivery) ────────────────────────
+            "venta_plataformas_bruto": round(total_pago_plataformas, 2),  # col H Cortes_de_Caja
+            "venta_plataformas_neto": plataformas_neto,     # después de comisiones Rappi+Uber
+            "comision_delivery_pct": comision_delivery_pct,  # % comisión promedio
+
+            # ── TOTALES ───────────────────────────────────────────────────
+            "venta_neta_total": round(total_venta_neta, 2),
+            "venta_bruta_total": round(total_venta_bruta, 2),
+            "venta_neta_promedio_diario": round(total_venta_neta / dias_con_datos, 2),
             "porcentaje_plataformas": porcentaje_plataformas,
             "por_canal": por_canal,
-            "roi_real_delivery": roi_real_delivery,
-            "roi_real_local": roi_real_local,
+
+            # ── ROI PARA AGENTES ──────────────────────────────────────────
+            # El agente suma el gasto de la campaña correspondiente y calcula ROI
+            "roi_data_local": {
+                "venta": venta_local_total,
+                "comensales": total_comensales,
+                # costo_por_comensal lo calcula el agente: gasto_local / comensales
+            },
+            "roi_data_delivery": {
+                "bruto": round(total_pago_plataformas, 2),
+                "neto": plataformas_neto,
+                "comision_pct": comision_delivery_pct,
+                # roi_x lo calcula el agente: neto / gasto_delivery
+            },
         }
 
     except Exception as e:
