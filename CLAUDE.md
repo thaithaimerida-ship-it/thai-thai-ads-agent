@@ -129,18 +129,21 @@ gcloud run services update thai-thai-ads-agent \
 ### Renovar refresh token Google Ads
 Si aparece `invalid_grant` en logs:
 ```bash
-# 1. Abrir URL en navegador (cuenta administracion@thaithaimerida.com.mx):
-https://accounts.google.com/o/oauth2/auth?client_id=399022260320-3ipufkckol5sa2t1ojf8jm9bpucqdoqt.apps.googleusercontent.com&redirect_uri=urn:ietf:wg:oauth:2.0:oob&scope=https://www.googleapis.com/auth/adwords&response_type=code&access_type=offline&prompt=consent
+# IMPORTANTE: Usar cuenta thaithaimerida@gmail.com (está en test users)
+# client_id correcto: 624172071613-96hda5g04ka5cioror2nje2lcuongapt.apps.googleusercontent.com
+
+# 1. Abrir URL en navegador con cuenta thaithaimerida@gmail.com:
+https://accounts.google.com/o/oauth2/auth?client_id=624172071613-96hda5g04ka5cioror2nje2lcuongapt.apps.googleusercontent.com&redirect_uri=urn:ietf:wg:oauth:2.0:oob&scope=https://www.googleapis.com/auth/adwords&response_type=code&access_type=offline&prompt=consent
 
 # 2. Intercambiar código:
 curl -X POST https://oauth2.googleapis.com/token \
   -d "code=CÓDIGO_AQUÍ" \
-  -d "client_id=399022260320-3ipufkckol5sa2t1ojf8jm9bpucqdoqt.apps.googleusercontent.com" \
+  -d "client_id=624172071613-96hda5g04ka5cioror2nje2lcuongapt.apps.googleusercontent.com" \
   -d "client_secret=GOCSPX-XXXXXXXXX" \
   -d "redirect_uri=urn:ietf:wg:oauth:2.0:oob" \
   -d "grant_type=authorization_code"
 
-# 3. Actualizar en Cloud Run:
+# 3. Actualizar en Cloud Run y google-ads.yaml:
 gcloud run services update thai-thai-ads-agent --region us-central1 \
   --update-env-vars "GOOGLE_ADS_REFRESH_TOKEN=nuevo_token"
 ```
