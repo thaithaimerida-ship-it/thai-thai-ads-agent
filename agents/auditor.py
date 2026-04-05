@@ -1786,17 +1786,25 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     }
                     break
 
-        # ── Smart Campaign: limpieza autónoma de temas irrelevantes ──────────
-        # Ejecuta REMOVE solo si SMART_THEME_REMOVAL_ENABLED=true y hay >= 5 temas
-        # restantes después de la eliminación (guarda de seguridad).
+        # ── Smart Campaign: agregar temas relevantes + limpiar irrelevantes ──
+        # Paso 1 (ADD): agrega temas Thai relevantes que falten.
+        # Paso 2 (REMOVE): elimina temas irrelevantes SOLO si al final quedan >= min.
+        # La guarda valida el total DESPUÉS de agregar y quitar.
         smart_removals: list = []
         from config.agent_config import SMART_THEME_REMOVAL_ENABLED as _smart_removal_enabled, SMART_THEME_MIN_REMAINING as _smart_min_remaining
+        _THAI_THEMES_TO_ADD = [
+            "comida tailandesa", "pad thai", "curry thai",
+            "restaurante tailandés", "comida asiática",
+        ]
         if (
             smart_audit_result
             and not smart_audit_result.get("error")
             and _smart_removal_enabled
         ):
-            from engine.ads_client import remove_smart_campaign_theme as _rm_theme
+            from engine.ads_client import (
+                remove_smart_campaign_theme as _rm_theme,
+                add_smart_campaign_theme as _add_theme,
+            )
             for _sp in smart_audit_result.get("proposals", []):
                 if _sp.get("type") != "smart_theme_cleanup":
                     continue
@@ -1804,8 +1812,32 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 _cname          = _sp.get("campaign_name", "")
                 _total_before   = _sp.get("total_themes_before", 0)
                 _entries        = _sp.get("themes_to_remove_with_resources", [])
-                _would_remain   = _total_before - len(_entries)
+                _existing_texts = {e["theme"].lower() for e in _sp.get("themes_to_remove_with_resources", [])}
+                # Incluir también temas que ya existen (los que NO se van a quitar)
+                _existing_texts |= {
+                    t.get("theme", "").lower()
+                    for c in smart_audit_result.get("campaigns", [])
+                    if str(c.get("campaign_id", "")) == _cid
+                    for t in c.get("keyword_themes", [])
+                }
 
+                # ── Paso 1: ADD temas relevantes que falten ──────────────────
+                _added_ok  = []
+                _added_err = []
+                for _theme_txt in _THAI_THEMES_TO_ADD:
+                    if _theme_txt.lower() in _existing_texts:
+                        continue
+                    _ar = _add_theme(client, target_id, _cid, _theme_txt)
+                    if _ar.get("status") == "success":
+                        _added_ok.append(_theme_txt)
+                        _total_before += 1   # cuenta para la guarda
+                    else:
+                        _added_err.append({"theme": _theme_txt, "error": _ar.get("message")})
+                if _added_ok:
+                    print(f"Fase SMART add [{_cname}]: {len(_added_ok)} temas agregados: {_added_ok}")
+
+                # ── Paso 2: REMOVE temas irrelevantes (guarda sobre total final) ─
+                _would_remain = _total_before - len(_entries)
                 if _would_remain < _smart_min_remaining:
                     _msg = (
                         f"Guarda activada: solo quedarían {_would_remain} temas "
@@ -1817,6 +1849,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         "campaign_name": _cname,
                         "status":        "guard_blocked",
                         "message":       _msg,
+                        "added_ok":      _added_ok,
                         "themes":        [e["theme"] for e in _entries],
                     })
                     continue
@@ -1834,6 +1867,8 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     "campaign_id":   _cid,
                     "campaign_name": _cname,
                     "status":        "executed" if not _removed_err else "partial",
+                    "added_ok":      _added_ok,
+                    "added_err":     _added_err,
                     "removed_ok":    _removed_ok,
                     "removed_err":   _removed_err,
                 })
@@ -1857,14 +1892,20 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         would_auto_execute = len(results["executed"])  # risk_level==1, independiente de dry_run
 
         # ── Cobertura real por tipo de campaña ──────────────────────────────
-        # SEARCH: campañas con al menos 1 keyword con gasto en el período.
-        # (all_items usa "campaign" como nombre, no "campaign_id", por eso
-        # se deriva directamente de la lista keywords ya cargada)
+        # SEARCH: todas las campañas SEARCH evaluadas (con o sin gasto).
+        # Se usa campaigns (todas las fetched) + keywords para IDs SEARCH.
         _search_campaign_ids = {
             str(kw.get("campaign_id", ""))
             for kw in keywords
-            if kw.get("cost_micros", 0) > 0 and kw.get("campaign_id")
+            if kw.get("campaign_id")
         }
+        # Incluir campañas SEARCH sin keywords activas (ej: campaña nueva)
+        _all_campaign_ids = {
+            str(c.get("id", ""))
+            for c in campaigns
+            if c.get("id") and c.get("advertising_channel_type", "") == "SEARCH"
+        }
+        _search_campaign_ids = _search_campaign_ids | _all_campaign_ids
         # SMART: campañas auditadas por smart_campaign_auditor
         _smart_summary = (results.get("smart_audit") or {}).get("summary", {})
         _smart_count   = _smart_summary.get("campaigns_audited", 0)

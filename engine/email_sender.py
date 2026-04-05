@@ -1641,12 +1641,12 @@ def generate_daily_insight(
         _client = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         _resp = _client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
+            max_tokens=450,
             messages=[{"role": "user", "content": _prompt}],
         )
         _text = (_resp.content[0].text or "").strip()
         # Truncar si el modelo se extendió (no debería, pero por seguridad)
-        if len(_text) > 300:
+        if len(_text) > 500:
             _text = _text[:300].rsplit(" ", 1)[0] + "."
         return _text if _text else None
     except Exception as _exc:

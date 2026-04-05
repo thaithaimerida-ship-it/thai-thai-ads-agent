@@ -535,6 +535,7 @@ CAMPAIGN_GEO_OBJECTIVES: dict = {
     "22839241090": "DELIVERY",        # Thai Mérida - Delivery
     "23680871468": "RESERVACIONES",   # Thai Mérida - Reservaciones
     "22612348265": "LOCAL_DISCOVERY", # Thai Mérida - Local (objetivo por confirmar)
+    "23730364039": "LOCAL_DISCOVERY", # Thai Mérida - Experiencia 2026 (radio 15km restaurante)
 }
 
 # Horas mínimas entre alertas de geo del mismo tipo (de-duplicación).

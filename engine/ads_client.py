@@ -789,6 +789,33 @@ def separate_and_assign_budget(
         return {"status": "error", "message": str(e)}
 
 
+def add_smart_campaign_theme(client, customer_id: str, campaign_id: str, theme_text: str) -> dict:
+    """
+    Agrega un keyword theme libre a una Smart Campaign via CampaignCriterionService.
+
+    Args:
+        campaign_id:  ID numérico de la campaña (str).
+        theme_text:   Texto del tema en formato free-form (ej: "comida tailandesa").
+
+    Returns:
+        {"status": "success", "theme": theme_text, "resource_name": str}
+        {"status": "error",   "theme": theme_text, "message": str}
+    """
+    try:
+        service = client.get_service("CampaignCriterionService")
+        op = client.get_type("CampaignCriterionOperation")
+        criterion = op.create
+        criterion.campaign = client.get_service("GoogleAdsService").campaign_path(
+            customer_id, campaign_id
+        )
+        criterion.keyword_theme.free_form_keyword_theme = theme_text
+        response = service.mutate_campaign_criteria(customer_id=customer_id, operations=[op])
+        resource = response.results[0].resource_name if response.results else ""
+        return {"status": "success", "theme": theme_text, "resource_name": resource}
+    except Exception as e:
+        return {"status": "error", "theme": theme_text, "message": str(e)}
+
+
 def remove_smart_campaign_theme(client, customer_id: str, criterion_resource_name: str) -> dict:
     """
     Elimina un keyword theme de una Smart Campaign usando CampaignCriterionService.
