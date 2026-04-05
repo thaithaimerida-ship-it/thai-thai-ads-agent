@@ -629,10 +629,26 @@ def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id:
 # ── TASK 3 ──────────────────────────────────────────────────────────────────
 
 def log_agent_action(action_type: str, target: str, details_before: dict,
-                     details_after: dict, status: str, google_ads_response: dict = None,
-                     db_path: str = "thai_thai_memory.db"):
+                     details_after: dict, status: str = "executed",
+                     google_ads_response: dict = None, db_path: str = None,
+                     **kwargs):
     """Registra toda acción ejecutada en Google Ads en el audit log."""
+    if db_path is None:
+        from engine.db_sync import get_db_path
+        db_path = get_db_path()
     conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS agent_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            target TEXT,
+            details_before TEXT,
+            details_after TEXT,
+            status TEXT NOT NULL,
+            google_ads_response TEXT
+        )
+    """)
     conn.execute("""
         INSERT INTO agent_actions (timestamp, action_type, target, details_before, details_after, status, google_ads_response)
         VALUES (?, ?, ?, ?, ?, ?, ?)
