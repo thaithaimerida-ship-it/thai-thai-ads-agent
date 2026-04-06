@@ -2367,7 +2367,8 @@ def _build_daily_summary_html(run: dict) -> str:
     # Línea de contexto del día (ocupación histórica)
     _occ_ctx = run.get("occupancy_context") or {}
     _occ_context_line = ""
-    if _occ_ctx.get("data_sufficient") and _occ_ctx.get("today"):
+    # Mostrar si hay datos de Sheets O si al menos tenemos el día de hoy (aunque data_sufficient=False)
+    if _occ_ctx.get("today"):
         _occ_level_colors = {"BAJO": "#dc2626", "MEDIO": "#d97706", "ALTO": "#15803d"}
         _occ_lv = _occ_ctx.get("today_level", "")
         _occ_color = _occ_level_colors.get(_occ_lv, "#6b7280")

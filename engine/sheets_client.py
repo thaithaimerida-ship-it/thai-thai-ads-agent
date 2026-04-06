@@ -202,6 +202,7 @@ def get_occupancy_by_day_of_week(weeks: int = 8) -> dict:
         }
     """
     _DAYS_ES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    _today_name = _DAYS_ES[datetime.now().weekday()]
 
     def _level(pct: float) -> str:
         if pct < 42:
@@ -211,11 +212,16 @@ def get_occupancy_by_day_of_week(weeks: int = 8) -> dict:
         else:
             return "ALTO"
 
+    def _error_result(error: str) -> dict:
+        return {"today": _today_name, "data_sufficient": False, "error": error,
+                "today_avg_comensales": 0, "today_occupancy_pct": 0,
+                "today_level": "DESCONOCIDO", "capacity": _CAPACITY_COMENSALES, "all_days": {}}
+
     try:
         spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
         from engine.credentials import get_credentials, is_available
         if not spreadsheet_id or not is_available():
-            return {"data_sufficient": False, "error": "credentials_not_configured"}
+            return _error_result("credentials_not_configured")
 
         import gspread
         scopes = [
@@ -224,7 +230,7 @@ def get_occupancy_by_day_of_week(weeks: int = 8) -> dict:
         ]
         creds = get_credentials(scopes=scopes)
         if creds is None:
-            return {"data_sufficient": False, "error": "credentials_none"}
+            return _error_result("credentials_none")
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(spreadsheet_id)
 
@@ -260,7 +266,7 @@ def get_occupancy_by_day_of_week(weeks: int = 8) -> dict:
                 continue
 
         today_dow = datetime.now().weekday()
-        today_name = _DAYS_ES[today_dow]
+        today_name = _today_name
 
         all_days = {}
         for dow, name in enumerate(_DAYS_ES):
@@ -291,7 +297,7 @@ def get_occupancy_by_day_of_week(weeks: int = 8) -> dict:
         }
 
     except Exception as e:
-        return {"data_sufficient": False, "error": str(e)}
+        return _error_result(str(e))
 
 
 def fetch_sheets_data(days: int = 7) -> Dict:
