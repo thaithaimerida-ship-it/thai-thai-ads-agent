@@ -2363,6 +2363,25 @@ def _build_daily_summary_html(run: dict) -> str:
     _ai_decisions = run.get("ai_decisions", []) or []
     _ai_block = ""
     _ai_executed = [d for d in _ai_decisions if d.get("exec_result", {}).get("status") == "executed"]
+
+    # Línea de contexto del día (ocupación histórica)
+    _occ_ctx = run.get("occupancy_context") or {}
+    _occ_context_line = ""
+    if _occ_ctx.get("data_sufficient") and _occ_ctx.get("today"):
+        _occ_level_colors = {"BAJO": "#dc2626", "MEDIO": "#d97706", "ALTO": "#15803d"}
+        _occ_lv = _occ_ctx.get("today_level", "")
+        _occ_color = _occ_level_colors.get(_occ_lv, "#6b7280")
+        _occ_context_line = (
+            f'<tr><td style="padding:4px 20px 0 20px;">'
+            f'<p style="margin:0;font-size:11px;color:#6b7280;">'
+            f'📅 Contexto del día: <strong>{_occ_ctx["today"]}</strong>'
+            f' — ocupación histórica '
+            f'<strong style="color:{_occ_color};">{_occ_ctx["today_occupancy_pct"]}%</strong>'
+            f' ({_occ_ctx["today_avg_comensales"]} comensales avg)'
+            f' — Nivel <strong style="color:{_occ_color};">{_occ_lv}</strong>'
+            f'</p></td></tr>'
+        )
+
     if _ai_executed:
         _ai_rows = ""
         for _d in _ai_executed:
@@ -2392,6 +2411,7 @@ def _build_daily_summary_html(run: dict) -> str:
                 f'</td></tr>'
             )
         _ai_block = (
+            f'{_occ_context_line}'
             f'<tr><td style="padding:14px 20px 4px 20px;">'
             f'<p style="margin:0 0 6px 0;font-size:12px;font-weight:bold;color:#6b7280;'
             f'text-transform:uppercase;letter-spacing:0.5px;">'

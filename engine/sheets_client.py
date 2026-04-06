@@ -179,6 +179,119 @@ OBJETIVO_COMENSALES_MES = 1_200              # físicos + reservaciones
 EQUILIBRIO_COMENSALES_MES = 1_035            # punto de equilibrio mensual real
 OBJETIVO_COMENSALES_DIA = 40
 EQUILIBRIO_COMENSALES_DIA = 35               # 1,035 ÷ 30 días
+_CAPACITY_COMENSALES = 80                    # 8 mesas × 4 personas, con rotación
+
+
+def get_occupancy_by_day_of_week(weeks: int = 8) -> dict:
+    """
+    Lee Cortes_de_Caja de las últimas `weeks` semanas y calcula promedio de
+    comensales por día de la semana.
+
+    Returns:
+        {
+          "today": "Jueves",
+          "today_avg_comensales": 28,
+          "today_occupancy_pct": 35,
+          "today_level": "BAJO",
+          "capacity": 80,
+          "all_days": {
+              "Lunes": {"avg_comensales": 42, "occupancy_pct": 53, "level": "MEDIO-ALTO", "sample_size": 8},
+              ...
+          },
+          "data_sufficient": True
+        }
+    """
+    _DAYS_ES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+    def _level(pct: float) -> str:
+        if pct < 42:
+            return "BAJO"
+        elif pct <= 55:
+            return "MEDIO"
+        else:
+            return "ALTO"
+
+    try:
+        spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+        from engine.credentials import get_credentials, is_available
+        if not spreadsheet_id or not is_available():
+            return {"data_sufficient": False, "error": "credentials_not_configured"}
+
+        import gspread
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
+        ]
+        creds = get_credentials(scopes=scopes)
+        if creds is None:
+            return {"data_sufficient": False, "error": "credentials_none"}
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(spreadsheet_id)
+
+        try:
+            ws = sh.worksheet("Cortes_de_Caja")
+        except Exception:
+            ws = sh.get_worksheet(0)
+        rows = ws.get_all_values()
+
+        parsed = parse_diario_sheet(rows)
+
+        # Filtrar últimas `weeks` semanas
+        cutoff = datetime.now().date() - timedelta(weeks=weeks)
+        by_dow: Dict[int, list] = {i: [] for i in range(7)}  # 0=lunes…6=domingo
+        for r in parsed:
+            raw_fecha = r.get("fecha", "")
+            comensales = r.get("comensales_real", 0)
+            if not raw_fecha or comensales <= 0:
+                continue
+            try:
+                # Intentar varios formatos de fecha
+                for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"):
+                    try:
+                        d = datetime.strptime(str(raw_fecha).strip(), fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    continue
+                if d >= cutoff:
+                    by_dow[d.weekday()].append(comensales)
+            except Exception:
+                continue
+
+        today_dow = datetime.now().weekday()
+        today_name = _DAYS_ES[today_dow]
+
+        all_days = {}
+        for dow, name in enumerate(_DAYS_ES):
+            samples = by_dow[dow]
+            if not samples:
+                continue
+            avg = round(sum(samples) / len(samples), 1)
+            pct = round((avg / _CAPACITY_COMENSALES) * 100, 1)
+            all_days[name] = {
+                "avg_comensales": round(avg),
+                "occupancy_pct":  round(pct),
+                "level":          _level(pct),
+                "sample_size":    len(samples),
+            }
+
+        today_info = all_days.get(today_name, {})
+        min_samples = min((v["sample_size"] for v in all_days.values()), default=0)
+        data_sufficient = min_samples >= 4 and len(all_days) >= 5
+
+        return {
+            "today":                   today_name,
+            "today_avg_comensales":    today_info.get("avg_comensales", 0),
+            "today_occupancy_pct":     today_info.get("occupancy_pct", 0),
+            "today_level":             today_info.get("level", "DESCONOCIDO"),
+            "capacity":                _CAPACITY_COMENSALES,
+            "all_days":                all_days,
+            "data_sufficient":         data_sufficient,
+        }
+
+    except Exception as e:
+        return {"data_sufficient": False, "error": str(e)}
 
 
 def fetch_sheets_data(days: int = 7) -> Dict:

@@ -59,7 +59,16 @@ def get_budget_decisions(
         logger.warning("Decision engine: sin campañas — skip")
         return []
 
-    prompt = _build_decision_prompt(campaigns, negocio_data or {}, ga4_data or {})
+    # Obtener contexto de ocupación (guarda: si falla, Haiku decide sin ese contexto)
+    _occupancy = {}
+    try:
+        from engine.sheets_client import get_occupancy_by_day_of_week
+        _occupancy = get_occupancy_by_day_of_week(weeks=8)
+    except Exception as _occ_err:
+        logger.debug("Decision engine: ocupación no disponible — %s", _occ_err)
+
+    prompt = _build_decision_prompt(campaigns, negocio_data or {}, ga4_data or {},
+                                    occupancy=_occupancy)
 
     try:
         import anthropic
@@ -79,7 +88,8 @@ def get_budget_decisions(
 
 # ── Construcción del prompt ────────────────────────────────────────────────────
 
-def _build_decision_prompt(campaigns: list, negocio_data: dict, ga4_data: dict) -> str:
+def _build_decision_prompt(campaigns: list, negocio_data: dict, ga4_data: dict,
+                           occupancy: dict = None) -> str:
     # ── Datos de campañas ──────────────────────────────────────────────────────
     camps_lines = []
     for c in campaigns:
@@ -138,6 +148,32 @@ def _build_decision_prompt(campaigns: list, negocio_data: dict, ga4_data: dict) 
     avg_daily = total_ads_spend / 7 if total_ads_spend > 0 else 0
     monthly_proj = round(avg_daily * 30, 0)
 
+    # ── Contexto de ocupación por día ─────────────────────────────────────────
+    occupancy_str = ""
+    if occupancy and occupancy.get("data_sufficient"):
+        _occ_lines = "\n".join(
+            f"  {day}: {info['avg_comensales']} comensales ({info['occupancy_pct']}% capacidad) — {info['level']}"
+            for day, info in occupancy.get("all_days", {}).items()
+        )
+        occupancy_str = f"""
+
+## CONTEXTO DE OCUPACIÓN DEL RESTAURANTE
+Hoy es {occupancy['today']}.
+Promedio histórico para {occupancy['today']}: {occupancy['today_avg_comensales']} comensales ({occupancy['today_occupancy_pct']}% de capacidad).
+Nivel de ocupación hoy: {occupancy['today_level']}.
+Capacidad del restaurante: {occupancy['capacity']} comensales/día (8 mesas × 4 personas, con rotación).
+
+Ocupación por día de la semana (últimas 8 semanas):
+{_occ_lines}
+
+DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
+- Las campañas "Thai Mérida - Local" y "Thai Mérida - Experiencia 2026" buscan atraer gente FÍSICA al restaurante.
+- En días de ocupación BAJA (como {occupancy['today']} con {occupancy['today_occupancy_pct']}%), considera subir presupuesto para llenar mesas vacías.
+- En días de ocupación ALTA, no es necesario subir presupuesto — el restaurante ya atrae gente naturalmente.
+- No bajes agresivamente en días altos — mantén presencia de marca. Máximo -15% respecto al base.
+- Siempre considera el CPA: si el CPA es malo, NO subas presupuesto aunque sea día bajo.
+- Esta directiva NO aplica a campañas de Delivery ni Reservaciones — esas se optimizan por CPA solamente."""
+
     return f"""Eres el agente de optimización publicitaria de Thai Thai, restaurante tailandés en Mérida.
 
 ## CONTEXTO DEL NEGOCIO
@@ -162,6 +198,7 @@ def _build_decision_prompt(campaigns: list, negocio_data: dict, ga4_data: dict) 
 - Gasto total Ads en el período: ${total_ads_spend:,.0f} MXN
 - Proyección mensual a ritmo actual: ${monthly_proj:,.0f} MXN
 - Techo mensual: $8,000 MXN
+{occupancy_str}
 
 ## INSTRUCCIONES
 Responde SOLO con un JSON válido (sin markdown, sin texto adicional).

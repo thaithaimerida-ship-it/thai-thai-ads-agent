@@ -1995,6 +1995,12 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _run_summary["executed_budget"]      = _auto_executed_budget
             _run_summary["ai_decisions"]         = _ai_decisions_executed
             _run_summary["ai_keyword_decisions"] = _kw_decisions_executed
+            # Ocupación del día — para contexto en el correo
+            try:
+                from engine.sheets_client import get_occupancy_by_day_of_week as _get_occ
+                _run_summary["occupancy_context"] = _get_occ(weeks=8)
+            except Exception:
+                _run_summary["occupancy_context"] = {}
             _run_summary["budget_proposals"]     = _pending_ba_proposals
             _run_summary["ba2_proposals"]        = _pending_ba2_proposals
             _run_summary["ba2_freed_budget_mxn"] = budget_scale_result.get("freed_budget_mxn", 0.0)
