@@ -378,13 +378,14 @@ def fetch_sheets_data(days: int = 7) -> Dict:
         total_comensales = sum(r["comensales_real"] for r in recent_diario)
         promedio_comensales = round(total_comensales / len(recent_diario), 1)
 
-        # Use Ingresos_BD if available, else fall back to Cortes_de_Caja columns
-        if recent_ingresos:
-            total_ingresos_bruto = sum(r["ingresos_bruto"] for r in recent_ingresos)
-            total_ingresos_neto = sum(r["ingresos_neto"] for r in recent_ingresos)
-        else:
-            total_ingresos_bruto = sum(r.get("ingresos_bruto", 0) for r in recent_diario)
-            total_ingresos_neto = sum(r.get("ingresos_neto", 0) for r in recent_diario)
+        # SIEMPRE usar Cortes_de_Caja para ventas — Ingresos_BD puede estar incompleto
+        # venta_bruta = efectivo + tarjeta + plataformas (cols F+G+H)
+        # venta_neta  = col C (Venta Neta)
+        total_ingresos_bruto = sum(
+            r.get("pago_efectivo", 0) + r.get("pago_tarjeta", 0) + r.get("pago_plataformas", 0)
+            for r in recent_diario
+        )
+        total_ingresos_neto = sum(r.get("venta_neta", 0) for r in recent_diario)
 
         # Days above thresholds using fixed business constants
         dias_sobre_equilibrio = sum(1 for r in recent_diario if r["comensales_real"] >= EQUILIBRIO_COMENSALES_DIA)
@@ -658,9 +659,13 @@ def fetch_week_business_data(weeks_ago: int = 1) -> dict:
         monday = today - timedelta(days=today.weekday() + 7 * weeks_ago)
         sunday = monday + timedelta(days=6)
 
-        ingresos_sem = _read_ingresos_by_daterange(sh, monday, sunday)
-        ventas = ingresos_sem["total_neto"]
         coms_data = _read_comensales_by_daterange(sh, monday, sunday)
+        # SIEMPRE usar Cortes_de_Caja para ventas (Ingresos_BD puede estar incompleto)
+        ventas = coms_data["venta_neta_total"]
+        if ventas == 0.0:
+            # Fallback a Ingresos_BD solo si Cortes_de_Caja no tiene datos de venta
+            ingresos_sem = _read_ingresos_by_daterange(sh, monday, sunday)
+            ventas = ingresos_sem["total_neto"]
 
         total_coms = coms_data["total_comensales"]
         dias = coms_data["dias_con_datos"] or 7  # evitar div/0
