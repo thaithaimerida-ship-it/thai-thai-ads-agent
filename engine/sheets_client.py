@@ -251,15 +251,21 @@ def get_occupancy_by_day_of_week(weeks: int = 8) -> dict:
             if not raw_fecha or comensales <= 0:
                 continue
             try:
-                # Intentar varios formatos de fecha
-                for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"):
-                    try:
-                        d = datetime.strptime(str(raw_fecha).strip(), fmt).date()
-                        break
-                    except ValueError:
-                        continue
+                # Intentar formato "15 febrero 2026" (formato nativo de Cortes_de_Caja)
+                _MESES_ES = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,"julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}
+                _parts = str(raw_fecha).strip().split()
+                if len(_parts) == 3 and _parts[1].lower() in _MESES_ES:
+                    d = date(int(_parts[2]), _MESES_ES[_parts[1].lower()], int(_parts[0]))
                 else:
-                    continue
+                    # Intentar varios formatos numéricos
+                    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"):
+                        try:
+                            d = datetime.strptime(str(raw_fecha).strip(), fmt).date()
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        continue
                 if d >= cutoff:
                     by_dow[d.weekday()].append(comensales)
             except Exception:
