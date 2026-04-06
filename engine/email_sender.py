@@ -2382,6 +2382,10 @@ def _build_daily_summary_html(run: dict) -> str:
             f'</p></td></tr>'
         )
 
+    # La línea de ocupación se muestra siempre que haya datos, independiente de si Haiku ejecutó algo
+    if _occ_context_line:
+        _ai_block = _occ_context_line
+
     if _ai_executed:
         _ai_rows = ""
         for _d in _ai_executed:
@@ -2410,8 +2414,7 @@ def _build_daily_summary_html(run: dict) -> str:
                 f'<p style="margin:0 0 0 0;font-size:12px;color:#374151;">{_d_reason}</p>'
                 f'</td></tr>'
             )
-        _ai_block = (
-            f'{_occ_context_line}'
+        _ai_block += (
             f'<tr><td style="padding:14px 20px 4px 20px;">'
             f'<p style="margin:0 0 6px 0;font-size:12px;font-weight:bold;color:#6b7280;'
             f'text-transform:uppercase;letter-spacing:0.5px;">'
