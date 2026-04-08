@@ -1615,8 +1615,18 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 except Exception as _ga4_ai_err:
                     logger.debug("Fase 7: GA4 no disponible — %s", _ga4_ai_err)
 
+                # Excluir campañas pausadas de las decisiones de Haiku
+                try:
+                    from config.agent_config import CAMPAIGNS_TO_PAUSE as _CTOP_7
+                    _campaigns_for_haiku = [
+                        c for c in campaigns
+                        if str(c.get("id", "")) not in _CTOP_7
+                    ]
+                except Exception:
+                    _campaigns_for_haiku = campaigns
+
                 ai_decisions = _get_ai_decisions(
-                    campaigns=campaigns,
+                    campaigns=_campaigns_for_haiku,
                     negocio_data=_negocio_data_6x,
                     ga4_data=_ga4_for_ai,
                     quality_findings=_quality_creative_findings,
@@ -2345,7 +2355,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             # Corridas compensatorias siempre envían — son el fallback explícito
             _already_sent = (
                 False if run_type == "compensatory"
-                else _mem_daily.has_recent_alert("daily_summary", 1)  # TEMP: revertir a 20 después de prueba
+                else _mem_daily.has_recent_alert("daily_summary", 20)
             )
 
             _email_sent = False

@@ -2663,7 +2663,7 @@ def _build_daily_summary_html(run: dict) -> str:
             _d_name    = str(_d.get("campaign_name", "—"))
             _d_budget  = float(_d.get("new_budget_mxn", 0))
             _d_pct     = float(_d.get("change_pct", 0))
-            _d_reason  = str(_d.get("reason", ""))[:160]
+            _d_reason  = str(_d.get("reason", ""))[:500]
             _d_conf    = int(_d.get("confidence", 0))
             _d_old     = float(_d.get("exec_result", {}).get("old_budget_mxn") or 0)
             if _d_old == 0 and _d_pct != 0:
@@ -2712,7 +2712,7 @@ def _build_daily_summary_html(run: dict) -> str:
             _kd_text   = str(_kd.get("keyword_text", "—"))
             _kd_camp   = str(_kd.get("exec_result", {}).get("campaign_name", _kd.get("campaign_id", "—")))
             _kd_conf   = int(_kd.get("confidence", 0))
-            _kd_reason = str(_kd.get("reason", ""))[:160]
+            _kd_reason = str(_kd.get("reason", ""))[:500]
             _kd_match  = str(_kd.get("match_type", "PHRASE"))
             _kd_conf_color = "#15803d" if _kd_conf >= 85 else "#d97706"
             _kw_rows += (

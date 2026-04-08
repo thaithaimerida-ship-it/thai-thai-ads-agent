@@ -371,6 +371,8 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
         str(c.get("id", "")): float(c.get("daily_budget_mxn") or 0)
         for c in campaigns
     }
+    # Mapa campaign_id → datos de campaña (CPA, nombre) para guardrails
+    campaign_map = {str(c.get("id", "")): c for c in campaigns}
 
     try:
         # Intentar extraer JSON aunque haya texto alrededor
@@ -423,6 +425,39 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                 change_pct = 0
                 reason     = "Rechazado por guardrail: gasto mensual sobre ritmo."
                 confidence = 100  # certeza total — es una regla dura
+
+            # Guardrail duro: SOBRE_RITMO + reduce → proteger si CPA < cpa_ideal
+            if action == "reduce" and _mbs_gr.get("pace") == "SOBRE_RITMO":
+                try:
+                    from config.agent_config import CAMPAIGN_TYPE_CONFIG as _CTC
+                    _camp_data = campaign_map.get(campaign_id, {})
+                    _camp_name_lower = campaign_name.lower()
+                    if "delivery" in _camp_name_lower:
+                        _ctype = "delivery"
+                    elif "reservacion" in _camp_name_lower or "reservación" in _camp_name_lower:
+                        _ctype = "reservaciones"
+                    elif "local" in _camp_name_lower or "experiencia" in _camp_name_lower:
+                        _ctype = "local"
+                    else:
+                        _ctype = "default"
+                    _cpa_ideal = float((_CTC.get(_ctype) or _CTC["default"]).get("cpa_ideal", 35.0))
+                    _cost      = float(_camp_data.get("cost_micros", 0)) / 1_000_000
+                    _conv      = float(_camp_data.get("conversions", 0))
+                    _cpa_real  = (_cost / _conv) if _conv > 0 else None
+                    if _cpa_real is not None and _cpa_real < _cpa_ideal:
+                        logger.warning(
+                            "Decision engine: %s — reduce rechazado (CPA $%.0f < ideal $%.0f, SOBRE_RITMO)",
+                            campaign_name, _cpa_real, _cpa_ideal,
+                        )
+                        action     = "hold"
+                        change_pct = 0
+                        reason     = (
+                            f"Protegida: CPA excelente (${_cpa_real:.0f}), "
+                            f"no se reduce aunque esté SOBRE_RITMO."
+                        )
+                        confidence = 100
+                except Exception as _gr2_exc:
+                    logger.debug("Guardrail CPA-protect: error no crítico — %s", _gr2_exc)
 
             if action == "hold":
                 # hold no necesita más validación
