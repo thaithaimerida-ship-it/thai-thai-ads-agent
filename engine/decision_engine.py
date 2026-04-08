@@ -187,32 +187,41 @@ DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
         quality_str = "\n".join(_qlines) if _qlines else "  (sin findings)"
 
     return f"""Eres el agente de optimización publicitaria de Thai Thai, restaurante tailandés en Mérida.
+Presupuesto mensual Google Ads: $8,000 MXN. Objetivo: maximizar comensales + pedidos rentables.
 
-## CONTEXTO DEL NEGOCIO
-- Presupuesto mensual Google Ads: $8,000 MXN
-- Objetivo: atraer comensales al restaurante + pedidos online por landing page
-- Comensales en restaurante = margen alto (sin comisión de plataformas)
-- Delivery (Rappi/Uber) cobra ~30% de comisión sobre venta bruta
-- Campaña "Local": mide "cómo llegar" en Google Maps. 0 conversiones en Ads es NORMAL — la gente busca y va al restaurante, no compra online.
-- Campaña "Delivery": mide clicks en landing page para pedidos.
-- Campaña "Reservaciones": mide clicks en botón de reservar.
+FILOSOFÍA DE DECISIÓN:
+- Realidad > Google Ads: los datos de Sheets (ventas reales, comensales) prevalecen sobre métricas de Ads.
+- Diagnóstico antes de acción: identifica la causa raíz antes de mover presupuesto. Si el problema es el anuncio o la landing, no es problema de presupuesto.
+- Conquista de mercado: si hay Impression Share perdida por presupuesto (LOST_IS_BUDGET_HIGH) y el canal es rentable, escalar tiene sentido.
+- Eficiencia: cada peso debe ir donde genera más valor real al negocio, no solo donde Google reporta más clics.
 
-## DATOS DE CAMPAÑAS (ventana actual)
-{campaigns_str}
-
-## DATOS DEL NEGOCIO (Sheets, últimos 7 días)
+════════════════════════════════════════════════════════
+BLOQUE 1 — REALIDAD DEL NEGOCIO ⭐ MÁXIMA PRIORIDAD
+Fuente: Google Sheets / Cortes_de_Caja + ocupación histórica
+Si estos datos contradicen Google Ads, SHEETS GANA.
+════════════════════════════════════════════════════════
 {negocio_str}
-
-## TRÁFICO WEB GA4 (últimas 24h)
-{ga4_str}
-
-## PRESUPUESTO MENSUAL
-- Gasto total Ads en el período: ${total_ads_spend:,.0f} MXN
-- Proyección mensual a ritmo actual: ${monthly_proj:,.0f} MXN
-- Techo mensual: $8,000 MXN
 {occupancy_str}
 
-## CALIDAD Y VISIBILIDAD (findings Fase 6D)
+════════════════════════════════════════════════════════
+BLOQUE 2 — SALUD DEL SISTEMA
+Fuente: GA4 (comportamiento web)
+Si la web no convierte, escalar presupuesto no sirve.
+════════════════════════════════════════════════════════
+{ga4_str}
+
+════════════════════════════════════════════════════════
+BLOQUE 3 — RENDIMIENTO PUBLICITARIO
+Fuente: Google Ads API
+Gasto total período: ${total_ads_spend:,.0f} MXN · Proyección mensual: ${monthly_proj:,.0f} MXN · Techo: $8,000 MXN
+════════════════════════════════════════════════════════
+{campaigns_str}
+
+════════════════════════════════════════════════════════
+BLOQUE 4 — CALIDAD DE ANUNCIOS (explica el "por qué")
+Fuente: Quality Score + Ad Strength + Impression Share
+Úsalo para diagnosticar causas, no como señal primaria de presupuesto.
+════════════════════════════════════════════════════════
 {quality_str}
 
 ## INSTRUCCIONES
@@ -228,7 +237,7 @@ REGLAS DURAS (no negociables):
 2. Nunca bajar a menos de $20 MXN/día
 3. El gasto mensual total proyectado no puede superar $8,000 MXN
 4. Campaña Local con 0 conversiones en Ads NO es señal negativa si hay comensales reales
-5. ROI de Delivery se calcula con el neto (después de comisión), no el bruto
+5. ROI de Delivery se calcula con el bruto de plataformas (Cortes_de_Caja col H)
 6. Si no tienes evidencia suficiente para una campaña, usa "hold"
 7. Confianza: refleja qué tan seguro estás de la decisión (0-100)
 
@@ -238,6 +247,7 @@ REGLAS DE DIAGNÓSTICO CAUSAL (calidad y visibilidad):
 10. Si una campaña tiene LOST_IS_RANK_HIGH → "hold" (primero mejorar calidad/rank, no el presupuesto)
 11. Si una campaña tiene QS_LANDING_WEAK → "hold" (el problema está en la landing page)
 12. Si una campaña tiene QS_LOW → mencionar en reason que el Quality Score necesita mejora
+13. OBLIGATORIO: cada decisión DEBE estar respaldada por datos de AL MENOS 3 fuentes distintas. En "reason" citar las fuentes usadas (ej: "Sheets: 42 comensales, GA4: 0 clics pedir, Ads: CPA $85"). Llenar "sources" con la lista de fuentes consultadas.
 
 Formato de respuesta:
 {{
@@ -248,8 +258,9 @@ Formato de respuesta:
       "campaign_name": "<nombre de la campaña>",
       "new_budget_mxn": <número — presupuesto diario nuevo en MXN>,
       "change_pct": <número — % de cambio, positivo=subir, negativo=bajar, 0 si hold>,
-      "reason": "<una frase en español explicando el porqué>",
-      "confidence": <entero 0-100>
+      "reason": "<frase en español citando fuentes: Sheets / GA4 / Ads / Calidad / Ocupación>",
+      "confidence": <entero 0-100>,
+      "sources": ["Sheets", "GA4", "Ads"]
     }}
   ]
 }}"""
@@ -296,8 +307,11 @@ def _parse_decisions(text: str, campaigns: list) -> list:
             campaign_name= str(d.get("campaign_name", ""))
             new_budget   = float(d.get("new_budget_mxn", 0))
             change_pct   = float(d.get("change_pct", 0))
-            reason       = str(d.get("reason", ""))[:200]
+            reason       = str(d.get("reason", ""))[:300]
             confidence   = int(d.get("confidence", 0))
+            sources      = d.get("sources", [])
+            if not isinstance(sources, list):
+                sources = []
 
             # Validaciones básicas
             if action not in ("scale", "reduce", "hold"):
@@ -310,6 +324,7 @@ def _parse_decisions(text: str, campaigns: list) -> list:
                     "action": "hold", "campaign_id": campaign_id,
                     "campaign_name": campaign_name, "new_budget_mxn": 0,
                     "change_pct": 0, "reason": reason, "confidence": confidence,
+                    "sources": sources,
                 })
                 continue
 
@@ -364,6 +379,7 @@ def _parse_decisions(text: str, campaigns: list) -> list:
                 "change_pct":    change_pct,
                 "reason":        reason,
                 "confidence":    confidence,
+                "sources":       sources,
             })
 
         except Exception as e:

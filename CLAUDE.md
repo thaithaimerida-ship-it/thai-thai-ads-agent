@@ -29,7 +29,16 @@ Toda recomendación debe responder: **¿Dónde está el siguiente peso mejor inv
 ### Decision Engine — Claude Haiku
 Dos funciones en `engine/decision_engine.py`:
 
-1. **`get_budget_decisions(campaigns, negocio_data, ga4_data, quality_findings)`** — Haiku decide escalar/reducir/hold por campaña cruzando Ads + Sheets + GA4 + **Quality Score + Ad Strength + Impression Share**. Guardrails: ±20% max, $20 mín/día, cap $8,000/mes, confianza ≥ 70%. **Reglas causales 8-12**: hold si AD_STRENGTH_POOR, scale si LOST_IS_BUDGET, hold si QS_LANDING_WEAK.
+1. **`get_budget_decisions(campaigns, negocio_data, ga4_data, quality_findings)`** — Haiku decide escalar/reducir/hold por campaña cruzando Ads + Sheets + GA4 + **Quality Score + Ad Strength + Impression Share**. Guardrails: ±20% max, $20 mín/día, cap $8,000/mes, confianza ≥ 70%.
+
+   **Prompt jerarquizado en 4 bloques** (orden de prioridad):
+   - Bloque 1 — REALIDAD DEL NEGOCIO ⭐ (Sheets + Ocupación) — si contradice Ads, Sheets gana
+   - Bloque 2 — SALUD DEL SISTEMA (GA4 + Landing) — si la web no convierte, no escalar
+   - Bloque 3 — RENDIMIENTO PUBLICITARIO (Campañas + Presupuesto)
+   - Bloque 4 — CALIDAD DE ANUNCIOS (Quality Score + Ad Strength + IS) — explica el "por qué"
+
+   **Reglas causales 8-12**: hold si AD_STRENGTH_POOR, scale si LOST_IS_BUDGET, hold si QS_LANDING_WEAK.
+   **Regla 13**: cada decisión DEBE estar respaldada por ≥3 fuentes distintas. El JSON incluye campo `"sources": [...]`.
 
 2. **`get_keyword_decisions(campaigns, current_keywords, suggested_keywords, negocio_data, search_ad_groups)`** — Haiku decide qué keywords agregar a campañas Search cruzando keywords actuales + sugerencias del Keyword Planner. Guardrails: máx 5 por ciclo, confianza ≥ 75%, solo campañas Search, no duplicar existentes.
 
