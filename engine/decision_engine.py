@@ -107,29 +107,27 @@ def _build_decision_prompt(campaigns: list, negocio_data: dict, ga4_data: dict,
 
     # ── Datos de negocio (Sheets 7d) ──────────────────────────────────────────
     nd = negocio_data
-    comensales    = nd.get("comensales_total", "n/d")
-    venta_local   = nd.get("venta_local_total", 0)
-    plat_bruto    = nd.get("venta_plataformas_bruto", 0)
-    plat_neto     = nd.get("venta_plataformas_neto", 0)
-    comision_pct  = nd.get("comision_delivery_pct", 0)
-    ticket_avg    = nd.get("ingreso_por_comensal", 0)
-    venta_neta    = nd.get("venta_neta_total", 0)
+    comensales      = nd.get("comensales_total", "n/d")
+    venta_local     = nd.get("venta_local_total", 0)
+    plat_bruto      = nd.get("venta_plataformas_bruto", 0)
+    venta_total_dia = nd.get("venta_total_dia", 0)
+    venta_neta      = nd.get("venta_neta_total", 0)
 
     # Calcular gasto total de Ads (proxy del período)
     total_ads_spend = sum(float(c.get("cost_micros", 0)) / 1_000_000 for c in campaigns)
 
     # ROI aproximado por canal
     roi_local = round(float(venta_local or 0) / total_ads_spend, 1) if total_ads_spend > 0 else "n/d"
-    roi_del   = round(float(plat_neto or 0) / total_ads_spend, 1) if total_ads_spend > 0 else "n/d"
+    roi_del   = round(float(plat_bruto or 0) / total_ads_spend, 1) if total_ads_spend > 0 else "n/d"
 
     negocio_str = (
         f"  Últimos 7 días:\n"
         f"  - Comensales en restaurante: {comensales}\n"
         f"  - Venta local (tarjeta+efectivo): ${float(venta_local or 0):,.0f} MXN"
         f"  (ROI vs Ads: {roi_local}x)\n"
-        f"  - Plataformas bruto/neto: ${float(plat_bruto or 0):,.0f}/${float(plat_neto or 0):,.0f} MXN"
-        f"  (comisión {float(comision_pct or 0):.0f}%, ROI neto vs Ads: {roi_del}x)\n"
-        f"  - Ticket promedio: ${float(ticket_avg or 0):,.0f}/comensal\n"
+        f"  - Plataformas bruto: ${float(plat_bruto or 0):,.0f} MXN"
+        f"  (ROI bruto vs Ads: {roi_del}x)\n"
+        f"  - Venta total del período: ${float(venta_total_dia or 0):,.0f} MXN\n"
         f"  - Venta neta total: ${float(venta_neta or 0):,.0f} MXN"
     )
 

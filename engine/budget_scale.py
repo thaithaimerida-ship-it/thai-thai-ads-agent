@@ -15,7 +15,7 @@ Cruce con datos de negocio (negocio_data de Sheets):
   Cuando negocio_data está disponible, se abre una vía alternativa de elegibilidad
   para campañas que Google Ads reporta con 0 conversiones pero que demuestran
   ROI real en el negocio:
-    - Delivery: venta_plataformas_neto / gasto_ads > 5x → candidata a escalar
+    - Delivery: venta_plataformas_bruto / gasto_ads > 5x → candidata a escalar
     - Local:    comensales > 0 y venta_local / gasto_ads > 3x → candidata a escalar
   Estas propuestas incluyen roi_real, venta_real y fuente_datos="sheets+ads".
 """
@@ -44,8 +44,8 @@ def _roi_real_ratio(
         venta = float(negocio_data.get("venta_local_total") or 0)
         campo = "venta_local_total"
     elif campaign_type == "delivery":
-        venta = float(negocio_data.get("venta_plataformas_neto") or 0)
-        campo = "venta_plataformas_neto"
+        venta = float(negocio_data.get("venta_plataformas_bruto") or 0)
+        campo = "venta_plataformas_bruto"
     else:
         return None, None, None
 

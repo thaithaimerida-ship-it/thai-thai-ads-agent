@@ -110,6 +110,15 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         _ads_24h = {
             "spend_mxn":   round(sum(c.get("cost_micros", 0) / 1_000_000 for c in campaigns), 2),
             "conversions": round(sum(float(c.get("conversions", 0)) for c in campaigns), 1),
+            "por_campana": [
+                {
+                    "name":        c.get("name", "—"),
+                    "spend_mxn":   round(c.get("cost_micros", 0) / 1_000_000, 2),
+                    "conversions": round(float(c.get("conversions", 0)), 1),
+                }
+                for c in campaigns
+                if c.get("cost_micros", 0) > 0
+            ],
         }
 
         memory = get_memory_system()
@@ -786,10 +795,10 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             from engine.sheets_client import resumen_negocio_para_agente as _rna_6x
             _negocio_data_6x = _rna_6x(days=7) or {}
             logger.info(
-                "Datos de negocio (7d): comensales=%s venta_local=$%.0f delivery_neto=$%.0f",
+                "Datos de negocio (7d): comensales=%s venta_local=$%.0f delivery_bruto=$%.0f",
                 _negocio_data_6x.get("comensales_total", "n/d"),
                 float(_negocio_data_6x.get("venta_local_total") or 0),
-                float(_negocio_data_6x.get("venta_plataformas_neto") or 0),
+                float(_negocio_data_6x.get("venta_plataformas_bruto") or 0),
             )
         except Exception as _nd_exc:
             logger.warning("Datos de negocio para fases 6A/6B/6C: no disponibles — %s", _nd_exc)

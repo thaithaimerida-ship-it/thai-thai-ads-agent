@@ -168,7 +168,7 @@ def detect_campaign_issues(campaigns: list, negocio_data: dict = None) -> list:
                 venta_local = float(negocio_data.get("venta_local_total") or 0)
 
                 if comensales > 0 and venta_local > 0:
-                    ingreso_por_comensal = float(negocio_data.get("ingreso_por_comensal") or 0)
+                    venta_total_dia = float(negocio_data.get("venta_total_dia") or 0)
                     candidates.append({
                         "signal":                  "CH3_INFO",
                         "campaign_id":             cid,
@@ -183,13 +183,13 @@ def detect_campaign_issues(campaigns: list, negocio_data: dict = None) -> list:
                         "fuente_datos":            "sheets+ads",
                         "comensales_real":         comensales,
                         "venta_local_real":        round(venta_local, 2),
-                        "ingreso_por_comensal":    round(ingreso_por_comensal, 2),
+                        "venta_total_dia":         round(venta_total_dia, 2),
                         "reason": (
                             f"[{campaign_type}] 0 conversiones en Google Ads — "
                             f"normal para campaña de visitas (Maps/offline) | "
                             f"negocio activo: {comensales} comensales, "
                             f"${venta_local:.0f} venta local, "
-                            f"${ingreso_por_comensal:.0f}/comensal | "
+                            f"${venta_total_dia:.0f} venta total | "
                             f"gasto Ads ${cost:.0f} MXN"
                         ),
                     })

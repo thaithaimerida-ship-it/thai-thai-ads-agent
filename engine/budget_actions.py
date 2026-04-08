@@ -24,7 +24,7 @@ Guardrail ROI real (Sheets):
   Si negocio_data está disponible, una campaña con CPA alto en Google Ads
   NO se propone para reducción si el ROI real del negocio es bueno:
     - Local:    venta_local_total / gasto_ads > 3x
-    - Delivery: venta_plataformas_neto / gasto_ads > 5x
+    - Delivery: venta_plataformas_bruto / gasto_ads > 5x
   Esto protege campañas cuyas conversiones se miden fuera de Google Ads
   (Google Maps, visitas físicas, offline) pero que generan ingresos reales.
 
@@ -100,7 +100,7 @@ def _roi_real_ratio(
     Retorna (roi_ratio, venta_real_mxn, campo_sheets) o (None, None, None).
 
     - Local:    venta_local_total (tarjeta + efectivo) / ads_cost
-    - Delivery: venta_plataformas_neto (neto tras comisiones) / ads_cost
+    - Delivery: venta_plataformas_bruto (col H Cortes_de_Caja) / ads_cost
 
     Nota: los ingresos son totales del negocio, no atribuibles 100% a Ads.
     El ratio es un proxy de salud del canal, no atribución directa.
@@ -112,8 +112,8 @@ def _roi_real_ratio(
         venta = float(negocio_data.get("venta_local_total") or 0)
         campo = "venta_local_total"
     elif campaign_type == "delivery":
-        venta = float(negocio_data.get("venta_plataformas_neto") or 0)
-        campo = "venta_plataformas_neto"
+        venta = float(negocio_data.get("venta_plataformas_bruto") or 0)
+        campo = "venta_plataformas_bruto"
     else:
         return None, None, None
 

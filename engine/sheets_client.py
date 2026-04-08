@@ -559,6 +559,7 @@ def _read_comensales_by_daterange(sh, start: date, end: date) -> dict:
     COL_EFECTIVO     = 5   # F — Efectivo
     COL_TARJETA      = 6   # G — Tarjeta
     COL_PLATAFORMAS  = 7   # H — Otros (Rappi, Uber, delivery apps)
+    COL_PROPINAS     = 8   # I — Propinas
     COL_COMENSALES   = 9   # J — No. de Comensales
 
     _empty = {
@@ -566,7 +567,8 @@ def _read_comensales_by_daterange(sh, start: date, end: date) -> dict:
         "dias_sobre_objetivo": 0, "dias_sobre_equilibrio": 0,
         "venta_neta_total": 0.0, "venta_bruta_total": 0.0,
         "pago_efectivo_total": 0.0, "pago_tarjeta_total": 0.0,
-        "pago_plataformas_total": 0.0,
+        "pago_plataformas_total": 0.0, "propinas_total": 0.0,
+        "venta_total_dia": 0.0,
     }
 
     try:
@@ -585,6 +587,7 @@ def _read_comensales_by_daterange(sh, start: date, end: date) -> dict:
     pago_efectivo    = 0.0
     pago_tarjeta     = 0.0
     pago_plataformas = 0.0
+    propinas         = 0.0
 
     def _v(row, col):
         return _safe_float(row[col]) if col < len(row) else 0.0
@@ -603,6 +606,7 @@ def _read_comensales_by_daterange(sh, start: date, end: date) -> dict:
         pago_efectivo    += _v(row, COL_EFECTIVO)
         pago_tarjeta     += _v(row, COL_TARJETA)
         pago_plataformas += _v(row, COL_PLATAFORMAS)
+        propinas         += _v(row, COL_PROPINAS)
         dias_con_datos   += 1
         if coms >= OBJETIVO_COMENSALES_DIA:
             dias_sobre_obj += 1
@@ -619,6 +623,8 @@ def _read_comensales_by_daterange(sh, start: date, end: date) -> dict:
         "pago_efectivo_total":   round(pago_efectivo, 2),
         "pago_tarjeta_total":    round(pago_tarjeta, 2),
         "pago_plataformas_total": round(pago_plataformas, 2),
+        "propinas_total":        round(propinas, 2),
+        "venta_total_dia":       round(pago_efectivo + pago_tarjeta + pago_plataformas + propinas, 2),
     }
 
 
@@ -818,22 +824,8 @@ def resumen_negocio_para_agente(days: int = 7) -> dict:
 
         # Ventas del restaurante físico (campaña Local)
         venta_local_total = round(total_pago_tarjeta + total_pago_efectivo, 2)
-        ingreso_por_comensal = round(
-            venta_local_total / total_comensales, 2
-        ) if total_comensales > 0 else 0.0
-
-        # ── Ingresos_BD: comisiones reales por fuente (delivery) ─────────────
-        ingresos_result = _read_ingresos_by_daterange(sh, start, end)
-        por_canal = ingresos_result["por_canal"]
-
-        # Delivery: neto real después de comisiones Rappi/Uber
-        delivery_canales = [c for c in por_canal if c["fuente"] in _DELIVERY_FUENTES]
-        plataformas_neto  = round(sum(c["neto"]      for c in delivery_canales), 2)
-        plataformas_bruto = round(sum(c["bruto"]     for c in delivery_canales), 2)
-        plataformas_comision_total = round(sum(c["comision"] for c in delivery_canales), 2)
-        comision_delivery_pct = round(
-            plataformas_comision_total / plataformas_bruto * 100, 1
-        ) if plataformas_bruto > 0 else 0.0
+        propinas_total    = coms_data.get("propinas_total", 0.0)
+        venta_total_dia   = coms_data.get("venta_total_dia", 0.0)
 
         porcentaje_plataformas = round(
             total_pago_plataformas / total_venta_bruta * 100, 1
@@ -851,32 +843,25 @@ def resumen_negocio_para_agente(days: int = 7) -> dict:
             "venta_local_total": venta_local_total,         # tarjeta + efectivo
             "pago_efectivo_total": round(total_pago_efectivo, 2),
             "pago_tarjeta_total": round(total_pago_tarjeta, 2),
-            "ingreso_por_comensal": ingreso_por_comensal,   # ticket promedio real
+            "propinas_total": propinas_total,
+            "venta_total_dia": venta_total_dia,             # efectivo + tarjeta + plataformas + propinas
 
             # ── VENTAS DELIVERY (campaña Delivery) ────────────────────────
             "venta_plataformas_bruto": round(total_pago_plataformas, 2),  # col H Cortes_de_Caja
-            "venta_plataformas_neto": plataformas_neto,     # después de comisiones Rappi+Uber
-            "comision_delivery_pct": comision_delivery_pct,  # % comisión promedio
 
             # ── TOTALES ───────────────────────────────────────────────────
             "venta_neta_total": round(total_venta_neta, 2),
             "venta_bruta_total": round(total_venta_bruta, 2),
             "venta_neta_promedio_diario": round(total_venta_neta / dias_con_datos, 2),
             "porcentaje_plataformas": porcentaje_plataformas,
-            "por_canal": por_canal,
 
             # ── ROI PARA AGENTES ──────────────────────────────────────────
-            # El agente suma el gasto de la campaña correspondiente y calcula ROI
             "roi_data_local": {
                 "venta": venta_local_total,
                 "comensales": total_comensales,
-                # costo_por_comensal lo calcula el agente: gasto_local / comensales
             },
             "roi_data_delivery": {
                 "bruto": round(total_pago_plataformas, 2),
-                "neto": plataformas_neto,
-                "comision_pct": comision_delivery_pct,
-                # roi_x lo calcula el agente: neto / gasto_delivery
             },
         }
 
