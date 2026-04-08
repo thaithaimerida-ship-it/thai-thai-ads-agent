@@ -1583,11 +1583,11 @@ def generate_daily_insight(
 
     if _conv > 0:
         _ads_str = (
-            f"Hoy gastamos ${_spend:.0f} MXN en Ads y obtuvimos {_conv:.0f} conversiones "
+            f"Ayer se invirtieron ${_spend:.0f} MXN en Ads y se obtuvieron {_conv:.0f} conversiones "
             f"(CPA ${_spend / _conv:.0f} MXN)"
         )
     else:
-        _ads_str = f"Hoy gastamos ${_spend:.0f} MXN en Ads sin conversiones registradas"
+        _ads_str = f"Ayer se invirtieron ${_spend:.0f} MXN en Ads sin conversiones registradas"
 
     # Contexto de campaña Local (acciones físicas en Google Maps)
     _local_str = ""
@@ -1654,7 +1654,7 @@ def generate_daily_insight(
 
     _prompt = (
         _CONTEXTO_NEGOCIO
-        + "DATOS DE HOY:\n"
+        + "DATOS DE AYER (últimas 24 horas — período real de los datos de Ads):\n"
         + f"{_ads_str}. "
         + f"Web (GA4): {_views} vistas, {_clics_web} clics de intención "
         + f"(pedir: {_pedir}, reservar: {_reservar}). "
@@ -2629,8 +2629,9 @@ def _build_daily_summary_html(run: dict) -> str:
     _ai_reduce_executed = [d for d in _ai_executed if d.get("action") == "reduce"]
     if _ai_reduce_executed:
         action = "El agente ya ajustó presupuestos para controlar el gasto mensual."
-    if human_pending > 0:
-        _pending_note = f"Hay {human_pending} keyword(s) esperando tu aprobación en el correo."
+    _kw_pending_count = len(_kw_proposals)  # solo keywords visibles en la sección manual
+    if _kw_pending_count > 0:
+        _pending_note = f"Hay {_kw_pending_count} keyword(s) esperando tu aprobación en el correo."
         action = (action + " " + _pending_note).strip() if action not in ("No.", "") else _pending_note
 
     # Línea de contexto del día (ocupación histórica)

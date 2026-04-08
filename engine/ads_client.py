@@ -1632,6 +1632,62 @@ def update_rsa_headlines(client, customer_id: str, ad_group_resource: str,
         return {"status": "error", "message": str(e)}
 
 
+def replace_rsa_headlines(client, customer_id: str, ad_group_resource: str,
+                          ad_id: str, new_headlines: list) -> dict:
+    """
+    Reemplaza los headlines de un RSA con la lista exacta proporcionada.
+    NO concatena con los headlines actuales — envía new_headlines como lista final.
+    Valida: max 30 chars, no vacíos, deduplicados, máximo 15 headlines.
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        ad_service = client.get_service("AdGroupAdService")
+        # Obtener resource_name del ad
+        query = f"""
+            SELECT ad_group_ad.ad.id,
+                   ad_group_ad.resource_name
+            FROM ad_group_ad
+            WHERE ad_group_ad.ad.id = {ad_id}
+        """
+        resource_name = None
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            resource_name = row.ad_group_ad.resource_name
+            break
+        if not resource_name:
+            return {"status": "error", "message": f"Ad {ad_id} no encontrado"}
+
+        # Construir lista final: deduplicar, filtrar vacíos y > 30 chars, truncar a 15
+        seen = set()
+        final_headlines = []
+        for h in new_headlines:
+            if not h or not isinstance(h, str):
+                continue
+            h = h.strip()
+            if len(h) > 30 or h in seen:
+                continue
+            seen.add(h)
+            final_headlines.append(h)
+            if len(final_headlines) >= 15:
+                break
+
+        if not final_headlines:
+            return {"status": "skipped", "reason": "no headlines válidos tras filtros"}
+
+        # Build operation — enviar SOLO final_headlines (replace real)
+        operation = client.get_type("AdGroupAdOperation")
+        aga = operation.update
+        aga.resource_name = resource_name
+        for h_text in final_headlines:
+            h = aga.ad.responsive_search_ad.headlines.add()
+            h.text = h_text
+        operation.update_mask.paths[:] = ["ad.responsive_search_ad.headlines"]
+        ad_service.mutate_ad_group_ads(customer_id=customer_id, operations=[operation])
+        return {"status": "success", "replaced_with": final_headlines}
+    except Exception as e:
+        _ads_logger.warning("replace_rsa_headlines: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
 def update_rsa_descriptions(client, customer_id: str, ad_group_resource: str,
                             ad_id: str, new_descriptions: list) -> dict:
     """

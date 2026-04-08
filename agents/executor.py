@@ -141,18 +141,17 @@ class Executor:
             return {"status": "error", "action": "add_ad_headlines", "error": str(e)}
 
     def replace_rsa_headlines(self, ad_group_resource, ad_id, new_headlines):
-        """Agrega headlines optimizados para mejorar QS (misma API que add, intención distinta)."""
-        from engine.ads_client import update_rsa_headlines
+        """Reemplaza headlines de un RSA con lista optimizada para QS. Replace real, no append."""
+        from engine.ads_client import replace_rsa_headlines as _replace_fn
         client = self._get_client()
-        valid = [h for h in new_headlines if len(h) <= 30]
-        invalid = [h for h in new_headlines if len(h) > 30]
-        if invalid:
-            logger.warning("replace_rsa_headlines: %d headlines exceden 30 chars — descartados", len(invalid))
-        if not valid:
-            return {"status": "skipped", "action": "replace_rsa_headlines", "reason": "no headlines válidos"}
+        # Guardrail: solo RSA válidos — ad_group_resource y ad_id deben existir
+        if not ad_group_resource or not ad_id or str(ad_id) in ("0", ""):
+            return {"status": "skipped", "action": "replace_rsa_headlines", "reason": "RSA inválido (sin resource o ad_id)"}
+        if not new_headlines:
+            return {"status": "skipped", "action": "replace_rsa_headlines", "reason": "lista de headlines vacía"}
         try:
-            result = update_rsa_headlines(client, self.customer_id, ad_group_resource, ad_id, valid)
-            self._log_action("replace_rsa_headlines", ad_id, {"ad_group": ad_group_resource, "headlines": valid}, result.get("status"))
+            result = _replace_fn(client, self.customer_id, ad_group_resource, ad_id, new_headlines)
+            self._log_action("replace_rsa_headlines", ad_id, {"ad_group": ad_group_resource, "headlines": new_headlines}, result.get("status"))
             return {"status": result.get("status", "error"), "action": "replace_rsa_headlines", "ad_id": ad_id, "detail": result}
         except Exception as e:
             return {"status": "error", "action": "replace_rsa_headlines", "error": str(e)}

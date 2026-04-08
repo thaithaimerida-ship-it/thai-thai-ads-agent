@@ -1386,7 +1386,14 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 _ktext = _kw.get("keyword_text", "")
                 _base  = {"campaign_id": _cid, "campaign_name": _cname, "keyword_text": _ktext}
                 if _qs and _qs < 7:
-                    _quality_creative_findings.append({**_base, "type": "QS_LOW", "quality_score": _qs})
+                    _quality_creative_findings.append({
+                        **_base,
+                        "type": "QS_LOW",
+                        "quality_score": _qs,
+                        "creative_quality_score":  _kw.get("creative_quality_score"),
+                        "post_click_quality_score": _kw.get("post_click_quality_score"),
+                        "search_predicted_ctr":    _kw.get("search_predicted_ctr"),
+                    })
                 if _kw.get("creative_quality_score") == "BELOW_AVERAGE":
                     _quality_creative_findings.append({**_base, "type": "QS_CREATIVE_WEAK"})
                 if _kw.get("post_click_quality_score") == "BELOW_AVERAGE":
@@ -1464,6 +1471,9 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 # - Anuncios de campañas con QS bajo marcados como AVERAGE para pasar el filtro
                 _ah_for_remediation = []
                 for _ad_r in _ah_data:
+                    # Filtro RSA válido: requiere ad_id y ad_group_resource no vacíos
+                    if not _ad_r.get("ad_group_resource") or not _ad_r.get("ad_id") or str(_ad_r.get("ad_id", "0")) == "0":
+                        continue
                     if _ad_r.get("ad_strength") in ("POOR", "AVERAGE"):
                         _ah_for_remediation.append(_ad_r)
                     elif str(_ad_r.get("campaign_id", "")) in _qs_trigger_camps:
@@ -2377,7 +2387,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             # Corridas compensatorias siempre envían — son el fallback explícito
             _already_sent = (
                 False if run_type == "compensatory"
-                else _mem_daily.has_recent_alert("daily_summary", 1)  # TEMP: revertir a 20 después de prueba
+                else _mem_daily.has_recent_alert("daily_summary", 20)
             )
 
             _email_sent = False
