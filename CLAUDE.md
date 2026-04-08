@@ -15,13 +15,13 @@ Toda recomendación debe responder: **¿Dónde está el siguiente peso mejor inv
 
 ---
 
-## Estado post-sesión — 4 abril 2026
+## Estado post-sesión — 7 abril 2026
 
 ### Sub-agentes activos (5 funcionando)
 | Sub-agente | Archivo | Estado |
 |---|---|---|
-| Auditor | `agents/auditor.py` | ✅ Activo — ~2100 líneas, 7 fases + AI |
-| Executor | `agents/executor.py` | ✅ Activo — block_keyword, update_budget, pause_adgroup, add_keyword, remove_theme |
+| Auditor | `agents/auditor.py` | ✅ Activo — Fases 3A-7B + GEO + SMART + **6D Quality/Creative** |
+| Executor | `agents/executor.py` | ✅ Activo — block_keyword, update_budget, pause_adgroup, add_keyword, remove_theme, **add_ad_headlines, add_ad_descriptions, remove_ad_asset** |
 | Strategist | `agents/strategist.py` | ✅ Activo |
 | Reporter | `agents/reporter.py` | ✅ Activo — snapshots GCS |
 | Builder | `agents/builder.py` | ✅ Activo — crea campañas desde lenguaje natural |
@@ -29,43 +29,79 @@ Toda recomendación debe responder: **¿Dónde está el siguiente peso mejor inv
 ### Decision Engine — Claude Haiku
 Dos funciones en `engine/decision_engine.py`:
 
-1. **`get_budget_decisions(campaigns, negocio_data, ga4_data)`** — Haiku decide escalar/reducir/hold por campaña cruzando Ads + Sheets + GA4. Guardrails: ±20% max, $20 mín/día, cap $8,000/mes, confianza ≥ 70%.
+1. **`get_budget_decisions(campaigns, negocio_data, ga4_data, quality_findings)`** — Haiku decide escalar/reducir/hold por campaña cruzando Ads + Sheets + GA4 + **Quality Score + Ad Strength + Impression Share**. Guardrails: ±20% max, $20 mín/día, cap $8,000/mes, confianza ≥ 70%. **Reglas causales 8-12**: hold si AD_STRENGTH_POOR, scale si LOST_IS_BUDGET, hold si QS_LANDING_WEAK.
 
 2. **`get_keyword_decisions(campaigns, current_keywords, suggested_keywords, negocio_data, search_ad_groups)`** — Haiku decide qué keywords agregar a campañas Search cruzando keywords actuales + sugerencias del Keyword Planner. Guardrails: máx 5 por ciclo, confianza ≥ 75%, solo campañas Search, no duplicar existentes.
+
+### Remediación Creativa Autónoma — Claude Sonnet 4.6
+`engine/creative_remediation.py` — Cuando el Auditor detecta Ad Strength POOR/AVERAGE:
+1. Sonnet genera headlines (≤30 chars) y descriptions (≤90 chars) basados en keywords ganadoras + contexto del negocio
+2. Executor los agrega automáticamente al RSA existente
+3. Al día siguiente, si Google rechazó un headline → Executor lo elimina → Sonnet genera reemplazo
+4. Guardrails: máx 5 headlines + 2 descriptions por ciclo, no duplicar existentes
+
+### Fase 6D — Quality & Creative Health (nueva 7 abril 2026)
+Lee 3 fuentes nuevas de Google Ads API y clasifica 11 tipos de findings:
+- **Quality Score**: QS_LOW (<4), QS_CREATIVE_WEAK, QS_LANDING_WEAK, QS_CTR_WEAK
+- **Ad Health**: AD_STRENGTH_POOR, AD_STRENGTH_AVERAGE, AD_DISAPPROVED, AD_IN_REVIEW
+- **Impression Share**: LOW_IMPRESSION_SHARE (<30%), LOST_IS_RANK_HIGH (>30%), LOST_IS_BUDGET_HIGH (>20%)
+- Findings alimentan a Haiku (reglas causales) y al correo diario
+
+### 12 consultas GAQL activas
+| # | Función | Qué consulta |
+|---|---|---|
+| 1 | `fetch_campaign_data` | Gasto, conversiones, clicks, impressiones, presupuesto |
+| 2 | `fetch_keyword_data` | Keywords con métricas |
+| 3 | `fetch_search_term_data` | Search terms que activaron anuncios |
+| 4 | `fetch_search_ad_groups` | Ad groups activos en campañas Search |
+| 5 | `fetch_campaign_metrics_range` | Comparativo semana vs semana (tracking) |
+| 6 | `fetch_adgroup_metrics` | Métricas por ad group |
+| 7 | `fetch_campaign_budget_info` | Presupuesto actual por campaña |
+| 8 | `fetch_campaign_geo_criteria` | Geo targeting por campaña |
+| 9 | `fetch_conversion_actions` | Acciones de conversión activas |
+| 10 | `fetch_keyword_quality_scores` | **Quality Score 1-10 + creative/landing/CTR** |
+| 11 | `fetch_ad_health` | **Ad Strength, approval status, headlines/descriptions** |
+| 12 | `fetch_impression_share` | **IS%, perdido por rank, perdido por budget** |
 
 ### Auto-ejecución activa
 - `AUTO_EXECUTE_ENABLED=true` — kill switch global
 - `BUDGET_CHANGE_ENABLED=true` — kill switch de presupuestos
 - **Fase 6B.AUTO**: ejecuta propuestas BA1 (reducción) ≤20% sin aprobación
 - **Fase 6C.AUTO**: ejecuta propuestas BA2 (escala) ≤20% sin aprobación
+- **Fase 6D**: remediación creativa autónoma (agrega headlines/descriptions, elimina rechazados)
 - **Fase 7**: presupuestos via Claude Haiku — ejecuta si confianza ≥ 70%
 - **Fase 7B**: keywords via Claude Haiku + Keyword Planner — ejecuta si confianza ≥ 75%
 
-### Credenciales centralizadas
-`engine/credentials.py` — loader único de service account credentials:
-1. Producción (Cloud Run): lee `GOOGLE_CREDENTIALS_JSON` (JSON compacto en env var)
-2. Local: lee archivo `ga4-credentials.json`
+### Google Sheets — Cortes de Caja (ÚNICA fuente de ventas)
+`engine/sheets_client.py` lee SOLO `Cortes_de_Caja` (no toca Ingresos_BD — esa pestaña es solo contable):
+- Efectivo (col F), Tarjeta (col G), Plataformas (col H), Propinas (col I, negativo)
+- Venta Total del Día = Efectivo + Tarjeta + Plataformas + Propinas
+- Comensales (col J), objetivos de ventas y equilibrio
+- `resumen_negocio_para_agente(days=N)` — función canónica, 100% Cortes_de_Caja
 
-Usado por `ga4_client.py` y `sheets_client.py`.
-
-### Google Sheets — Cortes de Caja
-`engine/sheets_client.py` lee `Cortes_de_Caja` completo:
-- Ventas totales, venta local (tarjeta + efectivo), plataformas bruto/neto
-- Comensales totales y promedio diario
-- Comisión delivery %, ingreso por comensal
-- `resumen_negocio_para_agente(days=N)` — función canónica que retorna dict cruzado
+### Correo diario — Secciones
+1. **Movimiento en la Web (GA4 24h)** — usuarios, clicks pedir/reservar
+2. **Salud de Canales** — cards: Google Ads 24h, Landing, Comensales, **Venta Total**
+3. **Gasto por Campaña (24h)** — tabla con gasto/conv/CPA por campaña individual
+4. **Desglose de Ventas del Día** — Efectivo/Tarjeta/Plataformas/Propinas/Total (Cortes_de_Caja)
+5. **🎨 Salud de Anuncios y Calidad** — Quality Score, Ad Strength, Impression Share, acciones creativas
+6. **Propuestas** — keywords, presupuestos, geo (con botones Aprobar/Rechazar)
+7. **Decisiones AI** — Haiku budget/keywords ejecutadas
+8. **Lectura del Agente** — insight cruzado Ads+GA4+Sheets generado por Haiku
+9. **Contexto del día** — ocupación histórica del día de la semana
 
 ### Blended ROAS implementado
 ROI cruzado en `engine/budget_actions.py` y `engine/budget_scale.py`:
 - Local/default: `venta_local_total / ads_cost`
-- Delivery: `venta_plataformas_neto / ads_cost` (post-comisión, no bruto)
+- Delivery: `venta_plataformas_bruto / ads_cost` (Cortes_de_Caja col H)
 - BA1 protege campañas si ROI ≥ 3x (local) o ≥ 5x (delivery)
 - BA2 escala campañas con ROI alto aunque Ads muestre 0 conversiones
 
-### Signals cruzadas con negocio real
-- **CH3_INFO**: campaña Local con 0 conv Ads pero comensales reales → nota informativa, no alerta
-- **Protección BA1**: no reduce campaña si venta real es buena
-- **Elegibilidad BA2 Vía 2**: escala por Sheets aunque no haya conv en Ads
+### Presupuesto dinámico por ocupación
+`sheets_client.get_occupancy_by_day_of_week(weeks=8)` — Haiku recibe ocupación histórica por día:
+- Días de ocupación BAJA → considerar subir presupuesto campañas locales
+- Días de ocupación ALTA → mantener, restaurante llena naturalmente
+- Solo aplica a campañas Local/Experiencia, no Delivery/Reservaciones
 
 ---
 
@@ -154,25 +190,26 @@ gcloud run services update thai-thai-ads-agent --region us-central1 \
 
 ```
 agents/
-  auditor.py             ← ciclo completo de auditoría (Fases 1-7B + GEO + email)
-  executor.py            ← ejecuta acciones en Google Ads API
+  auditor.py             ← ciclo completo de auditoría (Fases 3A-7B + GEO + SMART + 6D Quality/Creative)
+  executor.py            ← ejecuta acciones en Google Ads API (keywords, budget, adgroups, headlines, descriptions)
   strategist.py          ← análisis y propuestas
   reporter.py            ← reportes y snapshots GCS
   builder.py             ← crea campañas desde lenguaje natural
 engine/
-  ads_client.py          ← Google Ads API v23 (NO TOCAR — funciona)
+  ads_client.py          ← Google Ads API — 12 queries GAQL + mutations (budget, keywords, RSA assets, geo)
+  creative_remediation.py ← Sonnet 4.6 genera headlines/descriptions para anuncios POOR/AVERAGE
   credentials.py         ← loader centralizado de service account (GOOGLE_CREDENTIALS_JSON o archivo)
-  decision_engine.py     ← Claude Haiku: get_budget_decisions() + get_keyword_decisions()
+  decision_engine.py     ← Claude Haiku: budget + keywords + diagnóstico causal (quality_findings)
   budget_actions.py      ← BA1: detectar campañas para reducir (con ROI real de Sheets)
   budget_scale.py        ← BA2: detectar campañas para escalar (Vía 1 Ads + Vía 2 Sheets)
   campaign_health.py     ← CH1/CH3: CPA crítico y campañas sin conversiones
   risk_classifier.py     ← RISK_EXECUTE / RISK_PROPOSE / RISK_OBSERVE / RISK_BLOCK
   keyword_planner.py     ← sugerencias de keywords via Google Ads API
   ga4_client.py          ← datos GA4
-  sheets_client.py       ← Google Sheets (Cortes_de_Caja completo)
+  sheets_client.py       ← Google Sheets (Cortes_de_Caja ÚNICO — no toca Ingresos_BD)
   memory.py              ← SQLite (dedup, historial, propuestas)
   db_sync.py             ← sincroniza SQLite ↔ GCS
-  email_sender.py        ← correo diario + correo semanal + alertas
+  email_sender.py        ← correo diario + correo semanal + alertas + sección Salud de Anuncios
   activity_log.py        ← registro de runs
   landing_page_auditor.py
   analyzer.py
@@ -202,6 +239,7 @@ main.py                  ← FastAPI (~535 líneas): /health, /mission-control, 
 | Thai Mérida - Local | 22612348265 | ~$267/día | Smart (Maps/offline) |
 | Thai Mérida - Delivery | 22839241090 | ~$267/día | Smart (Gloria Food) |
 | Thai Mérida - Reservaciones | 23680871468 | variable | Search (keywords manuales) |
+| Thai Mérida - Experiencia 2026 | 23730364039 | variable | Search |
 
 **Nota sobre Local**: 0 conversiones en Google Ads es NORMAL — mide "cómo llegar" en Maps, no compras web. La evidencia real son los comensales en Sheets. El agente ya protege esta campaña de reducciones incorrectas.
 
@@ -331,7 +369,13 @@ Nunca ejecutar automáticamente: cambios de bidding strategy, activar/desactivar
 ---
 
 ## Rol del agente
-Thai Thai Ads Agent es un operador semi-autónomo de crecimiento rentable para Google Ads y conversión web.
+Thai Thai Ads Agent es un operador **autónomo** de crecimiento rentable para Google Ads y conversión web.
+
+Opera en 4 capas de inteligencia:
+1. **Financiera** — presupuestos, CPA, ROI cruzado con ventas reales
+2. **Keywords** — bloquear desperdicio, agregar keywords con Keyword Planner + Haiku
+3. **Calidad** — Quality Score, Impression Share, diagnóstico causal (tracking → landing → anuncio → rank → budget)
+4. **Creativa** — detectar anuncios débiles, generar copy con Sonnet, autocorregir rechazos
 
 **El éxito se mide por cuánto trabajo útil resuelve, cuánto desperdicio evita, cuánta estabilidad protege y qué tan bien ayuda a invertir mejor el siguiente peso.**
 
