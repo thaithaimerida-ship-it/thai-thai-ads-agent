@@ -86,7 +86,7 @@ def get_budget_decisions(
         )
         text = response.content[0].text
         logger.debug("Decision engine raw response: %s", text[:500])
-        return _parse_decisions(text, campaigns, monthly_budget_status=monthly_budget_status)
+        return _parse_decisions(text, campaigns, monthly_budget_status=monthly_budget_status, quality_findings=quality_findings)
     except Exception as e:
         logger.error("Decision engine error: %s", e)
         return []
@@ -360,7 +360,7 @@ Formato de respuesta:
 
 # ── Parser y validador de respuesta ──────────────────────────────────────────
 
-def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = None) -> list:
+def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = None, quality_findings: list = None) -> list:
     """
     Extrae y valida las decisiones del JSON retornado por Haiku.
     Aplica guardrails de seguridad sobre cada decisión.
@@ -391,8 +391,16 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
         logger.warning("Decision engine: 'decisions' no es lista")
         return []
 
-    validated = []
-    seen_ids  = set()  # máximo 1 decisión por campaña
+    # Campañas con LOST_IS_BUDGET_HIGH — candidatas a redistribución en SOBRE_RITMO
+    _lost_is_camp_ids = {
+        str(f.get("campaign_id"))
+        for f in (quality_findings or [])
+        if f.get("type") == "LOST_IS_BUDGET_HIGH" and f.get("campaign_id")
+    }
+
+    validated        = []
+    _deferred_scales = []  # scales diferidos para validación de redistribución
+    seen_ids         = set()  # máximo 1 decisión por campaña
 
     for d in raw_decisions:
         try:
@@ -412,19 +420,28 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                 logger.debug("Decision engine: action inválida '%s' → hold", action)
                 action = "hold"
 
-            # Guardrail duro: SOBRE_RITMO → bloquear cualquier scale
-            _mbs_gr = monthly_budget_status or {}
+            # Guardrail duro: SOBRE_RITMO → bloquear scale salvo redistribución IS
+            _mbs_gr   = monthly_budget_status or {}
+            _is_deferred = False
             if action == "scale" and _mbs_gr.get("pace") == "SOBRE_RITMO":
-                logger.warning(
-                    "Decision engine: %s — scale rechazado por guardrail SOBRE_RITMO (acumulado $%.0f / $%.0f)",
-                    campaign_name,
-                    _mbs_gr.get("spend_so_far", 0),
-                    _mbs_gr.get("monthly_cap", 10000),
-                )
-                action     = "hold"
-                change_pct = 0
-                reason     = "Rechazado por guardrail: gasto mensual sobre ritmo."
-                confidence = 100  # certeza total — es una regla dura
+                if campaign_id in _lost_is_camp_ids:
+                    # Diferir: posible redistribución — se evalúa tras procesar todos los reduces
+                    _is_deferred = True
+                    logger.info(
+                        "Decision engine: %s — scale diferido (LOST_IS_BUDGET_HIGH + SOBRE_RITMO, pendiente redistribución)",
+                        campaign_name,
+                    )
+                else:
+                    logger.warning(
+                        "Decision engine: %s — scale rechazado por guardrail SOBRE_RITMO (acumulado $%.0f / $%.0f)",
+                        campaign_name,
+                        _mbs_gr.get("spend_so_far", 0),
+                        _mbs_gr.get("monthly_cap", 10000),
+                    )
+                    action     = "hold"
+                    change_pct = 0
+                    reason     = "Rechazado por guardrail: gasto mensual sobre ritmo."
+                    confidence = 100  # certeza total — es una regla dura
 
             # Guardrail duro: SOBRE_RITMO + reduce → proteger si CPA < cpa_ideal
             if action == "reduce" and _mbs_gr.get("pace") == "SOBRE_RITMO":
@@ -512,20 +529,63 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                 )
 
             seen_ids.add(campaign_id)
-            validated.append({
-                "action":        action,
-                "campaign_id":   campaign_id,
-                "campaign_name": campaign_name,
+            _decision_entry = {
+                "action":         action,
+                "campaign_id":    campaign_id,
+                "campaign_name":  campaign_name,
                 "new_budget_mxn": new_budget,
-                "change_pct":    change_pct,
-                "reason":        reason,
-                "confidence":    confidence,
-                "sources":       sources,
-            })
+                "change_pct":     change_pct,
+                "reason":         reason,
+                "confidence":     confidence,
+                "sources":        sources,
+            }
+            if _is_deferred:
+                _deferred_scales.append(_decision_entry)
+            else:
+                validated.append(_decision_entry)
 
         except Exception as e:
             logger.debug("Decision engine: error procesando decisión — %s", e)
             continue
+
+    # ── Post-procesamiento: redistribución SOBRE_RITMO ───────────────────────
+    # Permite scales diferidos SOLO si el ahorro de reduces los cubre (net = 0)
+    if _deferred_scales and _mbs_gr.get("pace") == "SOBRE_RITMO":
+        _saves_daily = sum(
+            budget_map.get(d["campaign_id"], 0) - d["new_budget_mxn"]
+            for d in validated
+            if d["action"] == "reduce" and d["new_budget_mxn"] > 0
+        )
+        _needs_daily = sum(
+            d["new_budget_mxn"] - budget_map.get(d["campaign_id"], 0)
+            for d in _deferred_scales
+        )
+        if _needs_daily <= _saves_daily and _saves_daily > 0:
+            logger.info(
+                "Decision engine: redistribución aprobada — scales=$%.0f/día ≤ reduces=$%.0f/día",
+                _needs_daily, _saves_daily,
+            )
+            validated.extend(_deferred_scales)
+        else:
+            logger.warning(
+                "Decision engine: redistribución insuficiente — scales=$%.0f/día > reduces=$%.0f/día → scales bloqueados",
+                _needs_daily, _saves_daily,
+            )
+            for _ds in _deferred_scales:
+                validated.append({
+                    **_ds,
+                    "action":         "hold",
+                    "new_budget_mxn": 0,
+                    "change_pct":     0,
+                    "reason":         (
+                        f"Scale rechazado: redistribución insuficiente "
+                        f"(necesita ${_needs_daily:.0f}/día, ahorra ${_saves_daily:.0f}/día por reduces)."
+                    ),
+                    "confidence": 100,
+                })
+    elif _deferred_scales:
+        # No SOBRE_RITMO — permitir todos los scales diferidos
+        validated.extend(_deferred_scales)
 
     logger.info(
         "Decision engine: %d decisión(es) validada(s) de %d recibidas",

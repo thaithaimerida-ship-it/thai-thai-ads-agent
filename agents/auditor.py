@@ -1447,14 +1447,32 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     "result":        {"status": "alert_only"},
                 })
 
-            # 2) AD_STRENGTH_POOR/AVERAGE — remediación con Sonnet
+            # 2) AD_STRENGTH_POOR/AVERAGE o QS bajo — remediación con Sonnet
             _weak_strength_types = {"AD_STRENGTH_POOR", "AD_STRENGTH_AVERAGE"}
             _has_weak_ads = any(f["type"] in _weak_strength_types for f in _quality_creative_findings)
-            if _has_weak_ads and _ah_data and _kq_data:
+
+            # QS_LOW/QS_CREATIVE_WEAK también activan remediación para anuncios de esas campañas
+            _qs_trigger_camps = {
+                str(f.get("campaign_id"))
+                for f in _quality_creative_findings
+                if f["type"] in ("QS_LOW", "QS_CREATIVE_WEAK") and f.get("campaign_id")
+            }
+
+            if (_has_weak_ads or _qs_trigger_camps) and _ah_data and _kq_data:
+                # Construir lista de anuncios para remediación:
+                # - Todos los POOR/AVERAGE (comportamiento original)
+                # - Anuncios de campañas con QS bajo marcados como AVERAGE para pasar el filtro
+                _ah_for_remediation = []
+                for _ad_r in _ah_data:
+                    if _ad_r.get("ad_strength") in ("POOR", "AVERAGE"):
+                        _ah_for_remediation.append(_ad_r)
+                    elif str(_ad_r.get("campaign_id", "")) in _qs_trigger_camps:
+                        _ah_for_remediation.append({**_ad_r, "ad_strength": "AVERAGE"})
+
                 try:
                     from engine.creative_remediation import remediate_weak_ads as _remediate
                     from agents.executor import Executor as _CreativeExec
-                    _remediation_proposals = _remediate(_ah_data, _kq_data, negocio_data=_negocio_data_6x)
+                    _remediation_proposals = _remediate(_ah_for_remediation, _kq_data, negocio_data=_negocio_data_6x)
                     if _remediation_proposals:
                         if _auto_exec_creative:
                             _ce = _CreativeExec()
@@ -2355,7 +2373,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             # Corridas compensatorias siempre envían — son el fallback explícito
             _already_sent = (
                 False if run_type == "compensatory"
-                else _mem_daily.has_recent_alert("daily_summary", 1)  # TEMP: revertir a 20 después de prueba
+                else _mem_daily.has_recent_alert("daily_summary", 20)
             )
 
             _email_sent = False
