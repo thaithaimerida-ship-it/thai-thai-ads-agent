@@ -107,13 +107,59 @@ class Executor:
         except Exception as e:
             return {"status": "error", "action": "remove_theme", "error": str(e)}
 
+    def add_ad_headlines(self, ad_group_resource, ad_id, new_headlines):
+        from engine.ads_client import update_rsa_headlines
+        client = self._get_client()
+        # Validar max 30 chars
+        valid = [h for h in new_headlines if len(h) <= 30]
+        invalid = [h for h in new_headlines if len(h) > 30]
+        if invalid:
+            logger.warning("add_ad_headlines: %d headlines exceden 30 chars — descartados", len(invalid))
+        if not valid:
+            return {"status": "skipped", "action": "add_ad_headlines", "reason": "no headlines válidos"}
+        try:
+            result = update_rsa_headlines(client, self.customer_id, ad_group_resource, ad_id, valid)
+            self._log_action("add_ad_headlines", ad_id, {"ad_group": ad_group_resource, "headlines": valid}, result.get("status"))
+            return {"status": result.get("status", "error"), "action": "add_ad_headlines", "ad_id": ad_id, "detail": result}
+        except Exception as e:
+            return {"status": "error", "action": "add_ad_headlines", "error": str(e)}
+
+    def add_ad_descriptions(self, ad_group_resource, ad_id, new_descriptions):
+        from engine.ads_client import update_rsa_descriptions
+        client = self._get_client()
+        valid = [d for d in new_descriptions if len(d) <= 90]
+        invalid = [d for d in new_descriptions if len(d) > 90]
+        if invalid:
+            logger.warning("add_ad_descriptions: %d descriptions exceden 90 chars — descartadas", len(invalid))
+        if not valid:
+            return {"status": "skipped", "action": "add_ad_descriptions", "reason": "no descriptions válidas"}
+        try:
+            result = update_rsa_descriptions(client, self.customer_id, ad_group_resource, ad_id, valid)
+            self._log_action("add_ad_descriptions", ad_id, {"ad_group": ad_group_resource, "descriptions": valid}, result.get("status"))
+            return {"status": result.get("status", "error"), "action": "add_ad_descriptions", "ad_id": ad_id, "detail": result}
+        except Exception as e:
+            return {"status": "error", "action": "add_ad_descriptions", "error": str(e)}
+
+    def remove_ad_asset(self, ad_group_resource, ad_id, asset_text, asset_type):
+        from engine.ads_client import remove_rsa_asset
+        client = self._get_client()
+        try:
+            result = remove_rsa_asset(client, self.customer_id, ad_group_resource, ad_id, asset_text, asset_type)
+            self._log_action("remove_ad_asset", ad_id, {"text": asset_text, "type": asset_type}, result.get("status"))
+            return {"status": result.get("status", "error"), "action": "remove_ad_asset", "ad_id": ad_id, "detail": result}
+        except Exception as e:
+            return {"status": "error", "action": "remove_ad_asset", "error": str(e)}
+
     def execute_approved(self, actions):
         dispatch = {
-            "block_keyword": lambda a: self.block_keyword(a["campaign_id"], a["keyword"]),
-            "update_budget": lambda a: self.update_budget(a["campaign_id"], a["new_budget_mxn"], a.get("reason", "")),
-            "pause_adgroup": lambda a: self.pause_adgroup(a["campaign_id"], a["adgroup_id"], a.get("reason", "")),
-            "add_keyword": lambda a: self.add_keyword(a["ad_group_resource"], a["keyword_text"], a.get("match_type", "PHRASE"), a.get("cpc_bid_micros")),
-            "remove_theme": lambda a: self.remove_theme(a["criterion_resource_name"]),
+            "block_keyword":      lambda a: self.block_keyword(a["campaign_id"], a["keyword"]),
+            "update_budget":      lambda a: self.update_budget(a["campaign_id"], a["new_budget_mxn"], a.get("reason", "")),
+            "pause_adgroup":      lambda a: self.pause_adgroup(a["campaign_id"], a["adgroup_id"], a.get("reason", "")),
+            "add_keyword":        lambda a: self.add_keyword(a["ad_group_resource"], a["keyword_text"], a.get("match_type", "PHRASE"), a.get("cpc_bid_micros")),
+            "remove_theme":       lambda a: self.remove_theme(a["criterion_resource_name"]),
+            "add_ad_headlines":   lambda a: self.add_ad_headlines(a["ad_group_resource"], a["ad_id"], a["headlines"]),
+            "add_ad_descriptions": lambda a: self.add_ad_descriptions(a["ad_group_resource"], a["ad_id"], a["descriptions"]),
+            "remove_ad_asset":    lambda a: self.remove_ad_asset(a["ad_group_resource"], a["ad_id"], a["asset_text"], a["asset_type"]),
         }
         results = []
         for action in actions:

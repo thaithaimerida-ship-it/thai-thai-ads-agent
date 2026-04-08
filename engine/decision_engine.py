@@ -31,6 +31,7 @@ def get_budget_decisions(
     campaigns: list,
     negocio_data: dict,
     ga4_data: dict,
+    quality_findings: list = None,
 ) -> list:
     """
     Envía toda la data a Claude Haiku y recibe decisiones estructuradas de presupuesto.
@@ -68,7 +69,8 @@ def get_budget_decisions(
         logger.debug("Decision engine: ocupación no disponible — %s", _occ_err)
 
     prompt = _build_decision_prompt(campaigns, negocio_data or {}, ga4_data or {},
-                                    occupancy=_occupancy)
+                                    occupancy=_occupancy,
+                                    quality_findings=quality_findings)
 
     try:
         import anthropic
@@ -89,7 +91,7 @@ def get_budget_decisions(
 # ── Construcción del prompt ────────────────────────────────────────────────────
 
 def _build_decision_prompt(campaigns: list, negocio_data: dict, ga4_data: dict,
-                           occupancy: dict = None) -> str:
+                           occupancy: dict = None, quality_findings: list = None) -> str:
     # ── Datos de campañas ──────────────────────────────────────────────────────
     camps_lines = []
     for c in campaigns:
@@ -172,6 +174,18 @@ DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
 - Siempre considera el CPA: si el CPA es malo, NO subas presupuesto aunque sea día bajo.
 - Esta directiva NO aplica a campañas de Delivery ni Reservaciones — esas se optimizan por CPA solamente."""
 
+    # ── Calidad y Visibilidad (Fase 6D findings) ──────────────────────────────
+    quality_str = "  (sin datos de calidad disponibles)"
+    if quality_findings:
+        _qf_by_camp: dict = {}
+        for qf in quality_findings:
+            camp = qf.get("campaign_name") or qf.get("campaign_id", "—")
+            _qf_by_camp.setdefault(camp, []).append(qf.get("type", ""))
+        _qlines = []
+        for camp, types in _qf_by_camp.items():
+            _qlines.append(f"  - {camp}: {', '.join(types)}")
+        quality_str = "\n".join(_qlines) if _qlines else "  (sin findings)"
+
     return f"""Eres el agente de optimización publicitaria de Thai Thai, restaurante tailandés en Mérida.
 
 ## CONTEXTO DEL NEGOCIO
@@ -198,6 +212,9 @@ DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
 - Techo mensual: $8,000 MXN
 {occupancy_str}
 
+## CALIDAD Y VISIBILIDAD (findings Fase 6D)
+{quality_str}
+
 ## INSTRUCCIONES
 Responde SOLO con un JSON válido (sin markdown, sin texto adicional).
 
@@ -214,6 +231,13 @@ REGLAS DURAS (no negociables):
 5. ROI de Delivery se calcula con el neto (después de comisión), no el bruto
 6. Si no tienes evidencia suficiente para una campaña, usa "hold"
 7. Confianza: refleja qué tan seguro estás de la decisión (0-100)
+
+REGLAS DE DIAGNÓSTICO CAUSAL (calidad y visibilidad):
+8. Si una campaña tiene AD_STRENGTH_POOR o AD_DISAPPROVED → "hold" (el problema es el anuncio, no el presupuesto)
+9. Si una campaña tiene LOST_IS_BUDGET_HIGH → considera "scale" (hay mercado sin capturar por presupuesto)
+10. Si una campaña tiene LOST_IS_RANK_HIGH → "hold" (primero mejorar calidad/rank, no el presupuesto)
+11. Si una campaña tiene QS_LANDING_WEAK → "hold" (el problema está en la landing page)
+12. Si una campaña tiene QS_LOW → mencionar en reason que el Quality Score necesita mejora
 
 Formato de respuesta:
 {{

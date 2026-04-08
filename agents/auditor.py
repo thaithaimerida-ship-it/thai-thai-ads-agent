@@ -1326,6 +1326,137 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             logger.warning("Fase 6C.AUTO: error no crítico — %s", _ba2_auto_exc)
 
         # ====================================================================
+        # FASE 6D — Quality & Creative Health
+        #
+        # Lee Quality Score, Ad Strength e Impression Share.
+        # Clasifica findings y ejecuta remediación creativa autónoma.
+        # Si falla: loggear warning y continuar con findings vacíos.
+        # NUNCA tumba la auditoría.
+        # ====================================================================
+        _quality_creative_findings: list = []
+        _creative_actions: list = []
+        try:
+            from engine.ads_client import (
+                fetch_keyword_quality_scores as _fetch_kq,
+                fetch_ad_health as _fetch_ah,
+                fetch_impression_share as _fetch_is,
+            )
+
+            _kq_data = _fetch_kq(client, target_id)
+            _ah_data = _fetch_ah(client, target_id)
+            _is_data = _fetch_is(client, target_id)
+
+            # ── Findings Quality Score ────────────────────────────────────
+            for _kw in _kq_data:
+                _qs    = _kw.get("quality_score")
+                _cname = _kw.get("campaign_name", "")
+                _cid   = _kw.get("campaign_id", "")
+                _ktext = _kw.get("keyword_text", "")
+                _base  = {"campaign_id": _cid, "campaign_name": _cname, "keyword_text": _ktext}
+                if _qs and _qs < 4:
+                    _quality_creative_findings.append({**_base, "type": "QS_LOW", "quality_score": _qs})
+                if _kw.get("creative_quality_score") == "BELOW_AVERAGE":
+                    _quality_creative_findings.append({**_base, "type": "QS_CREATIVE_WEAK"})
+                if _kw.get("post_click_quality_score") == "BELOW_AVERAGE":
+                    _quality_creative_findings.append({**_base, "type": "QS_LANDING_WEAK"})
+                if _kw.get("search_predicted_ctr") == "BELOW_AVERAGE":
+                    _quality_creative_findings.append({**_base, "type": "QS_CTR_WEAK"})
+
+            # ── Findings Ad Health ────────────────────────────────────────
+            for _ad in _ah_data:
+                _strength  = _ad.get("ad_strength")
+                _approval  = str(_ad.get("approval_status") or "").upper()
+                _ad_base   = {
+                    "campaign_id":   _ad.get("campaign_id", ""),
+                    "campaign_name": _ad.get("campaign_name", ""),
+                    "ad_group_name": _ad.get("ad_group_name", ""),
+                    "ad_id":         _ad.get("ad_id", ""),
+                }
+                if _strength == "POOR":
+                    _quality_creative_findings.append({**_ad_base, "type": "AD_STRENGTH_POOR"})
+                elif _strength == "AVERAGE":
+                    _quality_creative_findings.append({**_ad_base, "type": "AD_STRENGTH_AVERAGE"})
+                if "DISAPPROVED" in _approval:
+                    _quality_creative_findings.append({**_ad_base, "type": "AD_DISAPPROVED"})
+                elif "REVIEW" in _approval and "DISAPPROVED" not in _approval:
+                    _quality_creative_findings.append({**_ad_base, "type": "AD_IN_REVIEW"})
+
+            # ── Findings Impression Share ─────────────────────────────────
+            for _camp_is in _is_data:
+                _sis  = float(_camp_is.get("search_impression_share") or 0)
+                _rank = float(_camp_is.get("search_rank_lost_impression_share") or 0)
+                _bud  = float(_camp_is.get("search_budget_lost_impression_share") or 0)
+                _is_base = {
+                    "campaign_id":   _camp_is.get("campaign_id", ""),
+                    "campaign_name": _camp_is.get("campaign_name", ""),
+                    "search_impression_share":             _sis,
+                    "search_rank_lost_impression_share":   _rank,
+                    "search_budget_lost_impression_share": _bud,
+                }
+                if _sis < 0.30:
+                    _quality_creative_findings.append({**_is_base, "type": "LOW_IMPRESSION_SHARE"})
+                if _rank > 0.30:
+                    _quality_creative_findings.append({**_is_base, "type": "LOST_IS_RANK_HIGH"})
+                if _bud > 0.20:
+                    _quality_creative_findings.append({**_is_base, "type": "LOST_IS_BUDGET_HIGH"})
+
+            results["quality_creative_findings"] = _quality_creative_findings
+            logger.info("Fase 6D: %d findings de calidad/visibilidad", len(_quality_creative_findings))
+
+            # ── Autocorrección creativa ───────────────────────────────────
+            _auto_exec_creative = os.getenv("AUTO_EXECUTE_ENABLED", "false").lower() == "true"
+
+            # 1) AD_DISAPPROVED — registrar alertas
+            for _d_finding in [f for f in _quality_creative_findings if f["type"] == "AD_DISAPPROVED"]:
+                _creative_actions.append({
+                    "action":        "alert_disapproved",
+                    "ad_id":         _d_finding.get("ad_id"),
+                    "campaign_name": _d_finding.get("campaign_name"),
+                    "result":        {"status": "alert_only"},
+                })
+
+            # 2) AD_STRENGTH_POOR/AVERAGE — remediación con Sonnet
+            _weak_strength_types = {"AD_STRENGTH_POOR", "AD_STRENGTH_AVERAGE"}
+            _has_weak_ads = any(f["type"] in _weak_strength_types for f in _quality_creative_findings)
+            if _has_weak_ads and _ah_data and _kq_data:
+                try:
+                    from engine.creative_remediation import remediate_weak_ads as _remediate
+                    from agents.executor import Executor as _CreativeExec
+                    _remediation_proposals = _remediate(_ah_data, _kq_data, negocio_data=_negocio_data_6x)
+                    if _remediation_proposals:
+                        if _auto_exec_creative:
+                            _ce = _CreativeExec()
+                            for _prop in _remediation_proposals:
+                                if _prop["action"] == "add_headlines":
+                                    _cr = _ce.add_ad_headlines(
+                                        _prop["ad_group_resource"], _prop["ad_id"], _prop["headlines"]
+                                    )
+                                elif _prop["action"] == "add_descriptions":
+                                    _cr = _ce.add_ad_descriptions(
+                                        _prop["ad_group_resource"], _prop["ad_id"], _prop["descriptions"]
+                                    )
+                                else:
+                                    _cr = {"status": "unsupported"}
+                                _creative_actions.append({**_prop, "result": _cr})
+                        else:
+                            for _prop in _remediation_proposals:
+                                _creative_actions.append({
+                                    **_prop,
+                                    "result": {"status": "dry_run",
+                                               "note": "AUTO_EXECUTE_ENABLED=false"},
+                                })
+                except Exception as _rem_exc:
+                    logger.warning("Fase 6D: remediación creativa falló — %s", _rem_exc)
+
+            results["creative_actions"] = _creative_actions
+            logger.info("Fase 6D: %d acciones creativas", len(_creative_actions))
+
+        except Exception as _6d_exc:
+            logger.warning("Fase 6D: error no crítico — %s", _6d_exc)
+            results["quality_creative_findings"] = []
+            results["creative_actions"] = []
+
+        # ====================================================================
         # FASE 7 — DECISIONES DE PRESUPUESTO CON AI (Claude Haiku)
         #
         # Haiku recibe toda la data disponible (Ads + GA4 + Sheets) y decide
@@ -1373,6 +1504,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     campaigns=campaigns,
                     negocio_data=_negocio_data_6x,
                     ga4_data=_ga4_for_ai,
+                    quality_findings=_quality_creative_findings,
                 )
 
                 if ai_decisions:
@@ -2015,8 +2147,10 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _run_summary["ba2_freed_budget_mxn"] = budget_scale_result.get("freed_budget_mxn", 0.0)
             _run_summary["geo_issues_for_email"] = _geo_issues_for_email
             # Sección 1: Salud de Canales
-            _run_summary["ads_24h"]              = _ads_24h
-            _run_summary["landing_response_ms"]  = _landing_response_ms
+            _run_summary["ads_24h"]                    = _ads_24h
+            _run_summary["landing_response_ms"]        = _landing_response_ms
+            _run_summary["quality_creative_findings"]  = results.get("quality_creative_findings", [])
+            _run_summary["creative_actions"]           = results.get("creative_actions", [])
             # Smart audit data completa — para mostrar issues inline en el correo diario
             # (no retener hasta el reporte semanal del lunes)
             _run_summary["smart_audit"]    = results.get("smart_audit")

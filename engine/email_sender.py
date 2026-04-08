@@ -1708,8 +1708,10 @@ def _build_daily_summary_html(run: dict) -> str:
     _ga4_pedir    = int(_ga4_web.get("click_pedir", 0) or 0)      if _ga4_ok else 0
     _ga4_reservar = int(_ga4_web.get("click_reservar", 0) or 0)   if _ga4_ok else 0
     _ga4_activos  = int(_ga4_web.get("usuarios_activos", 0) or 0) if _ga4_ok else 0
-    _recently_approved = int(run.get("recently_approved_count", 0) or 0)
-    _agent_insight = run.get("agent_insight")
+    _recently_approved       = int(run.get("recently_approved_count", 0) or 0)
+    _agent_insight           = run.get("agent_insight")
+    _quality_findings        = run.get("quality_creative_findings", []) or []
+    _creative_actions_email  = run.get("creative_actions", []) or []
 
     _smart_issues_email = detail.get("smart_issues", 0)
 
@@ -2179,6 +2181,137 @@ def _build_daily_summary_html(run: dict) -> str:
         + _canales_block
     )
 
+    # ── Salud de Anuncios y Calidad (Fase 6D) ──────────────────────────────────
+    def _quality_table_row(cells: list) -> str:
+        return "<tr>" + "".join(
+            f'<td style="padding:5px 8px;font-size:12px;{s}">{v}</td>'
+            for v, s in cells
+        ) + "</tr>"
+
+    def _th(label: str) -> str:
+        return (
+            f'<th style="text-align:left;padding:5px 8px;color:#6b7280;font-size:11px;'
+            f'font-weight:bold;border-bottom:1px solid #e5e7eb;">{label}</th>'
+        )
+
+    # Sub-sección 1: Quality Score (keywords con QS < 7)
+    _qs_findings = [f for f in _quality_findings if f.get("type") == "QS_LOW"
+                    or f.get("quality_score", 10) < 7]
+    if _qs_findings:
+        _qs_rows = ""
+        for _qf in _qs_findings[:10]:
+            _qs_val = _qf.get("quality_score")
+            _qs_color = "color:#dc2626;font-weight:bold;" if (_qs_val and _qs_val < 4) else ""
+            _qs_rows += _quality_table_row([
+                (_qf.get("keyword_text", "—"), "color:#374151;"),
+                (_qf.get("campaign_name", "—"), "color:#6b7280;"),
+                (str(_qs_val) if _qs_val else "—", _qs_color),
+                (_qf.get("creative_quality_score") or "—", ""),
+                (_qf.get("post_click_quality_score") or "—", ""),
+                (_qf.get("search_predicted_ctr") or "—", ""),
+            ])
+        _qs_block = f"""
+    <p style="margin:8px 0 4px 0;font-size:11px;font-weight:bold;color:#6b7280;">Quality Score (keywords &lt; 7)</p>
+    <table width="100%" style="border-collapse:collapse;font-size:12px;">
+      <tr style="background:#f9fafb;">{_th("Keyword")}{_th("Campaña")}{_th("QS")}{_th("Anuncio")}{_th("Landing")}{_th("CTR")}</tr>
+      {_qs_rows}
+    </table>"""
+    else:
+        _qs_block = '<p style="margin:8px 0;font-size:12px;color:#16a34a;">✅ Quality Score OK — sin keywords críticas</p>'
+
+    # Sub-sección 2: Estado de Anuncios
+    _ad_findings = [f for f in _quality_findings if f.get("type") in
+                    ("AD_STRENGTH_POOR", "AD_STRENGTH_AVERAGE", "AD_DISAPPROVED", "AD_IN_REVIEW")]
+    if _ad_findings:
+        _ad_rows = ""
+        for _af in _ad_findings[:10]:
+            _af_type = _af.get("type", "")
+            _af_color = "color:#dc2626;font-weight:bold;" if "POOR" in _af_type or "DISAPPROVED" in _af_type else ""
+            _ad_rows += _quality_table_row([
+                (_af.get("campaign_name", "—"), "color:#374151;"),
+                (_af.get("ad_group_name", "—"), "color:#6b7280;"),
+                (_af_type.replace("AD_", "").replace("_", " "), _af_color),
+            ])
+        _ad_block = f"""
+    <p style="margin:8px 0 4px 0;font-size:11px;font-weight:bold;color:#6b7280;">Estado de Anuncios</p>
+    <table width="100%" style="border-collapse:collapse;font-size:12px;">
+      <tr style="background:#f9fafb;">{_th("Campaña")}{_th("Ad Group")}{_th("Estado")}</tr>
+      {_ad_rows}
+    </table>"""
+    else:
+        _ad_block = '<p style="margin:8px 0;font-size:12px;color:#16a34a;">✅ Anuncios — sin alertas de Ad Strength ni rechazos</p>'
+
+    # Sub-sección 3: Impression Share
+    _is_findings = [f for f in _quality_findings if f.get("type") in
+                    ("LOW_IMPRESSION_SHARE", "LOST_IS_RANK_HIGH", "LOST_IS_BUDGET_HIGH")]
+    if _is_findings:
+        _is_rows = ""
+        _seen_is_camps = set()
+        for _isf in _is_findings:
+            _camp_key = _isf.get("campaign_id", "")
+            if _camp_key in _seen_is_camps:
+                continue
+            _seen_is_camps.add(_camp_key)
+            _sis   = _isf.get("search_impression_share", 0)
+            _rlost = _isf.get("search_rank_lost_impression_share", 0)
+            _blost = _isf.get("search_budget_lost_impression_share", 0)
+            _is_rows += _quality_table_row([
+                (_isf.get("campaign_name", "—"), "color:#374151;"),
+                (f"{_sis*100:.0f}%" if _sis else "—", "color:#374151;font-weight:bold;"),
+                (f"{_rlost*100:.0f}%" if _rlost else "—", "color:#d97706;" if _rlost > 0.30 else ""),
+                (f"{_blost*100:.0f}%" if _blost else "—", "color:#d97706;" if _blost > 0.20 else ""),
+            ])
+        _is_block = f"""
+    <p style="margin:8px 0 4px 0;font-size:11px;font-weight:bold;color:#6b7280;">Visibilidad (Impression Share)</p>
+    <table width="100%" style="border-collapse:collapse;font-size:12px;">
+      <tr style="background:#f9fafb;">{_th("Campaña")}{_th("IS %")}{_th("Perdido Rank")}{_th("Perdido Budget")}</tr>
+      {_is_rows}
+    </table>"""
+    else:
+        _is_block = '<p style="margin:8px 0;font-size:12px;color:#16a34a;">✅ Impression Share — sin alertas de visibilidad</p>'
+
+    # Sub-sección 4: Acciones Creativas del Día
+    _exec_creative = [a for a in _creative_actions_email
+                      if a.get("action") not in ("alert_disapproved",)]
+    _alert_creative = [a for a in _creative_actions_email if a.get("action") == "alert_disapproved"]
+    if _exec_creative or _alert_creative:
+        _ca_lines = ""
+        for _ca in _exec_creative[:8]:
+            _ca_status = (_ca.get("result") or {}).get("status", "—")
+            _ca_icon   = "✅" if _ca_status in ("success", "dry_run") else "⚠️"
+            _ca_camp   = _ca.get("campaign_name", "—")
+            _ca_act    = _ca.get("action", "").replace("_", " ")
+            _ca_items  = _ca.get("headlines") or _ca.get("descriptions") or []
+            _ca_items_str = ", ".join(f'"{x}"' for x in _ca_items[:3])
+            _ca_lines += (
+                f'<li style="font-size:12px;margin-bottom:4px;">'
+                f'{_ca_icon} <strong>{_ca_camp}</strong> — {_ca_act}: {_ca_items_str}'
+                f' <span style="color:#9ca3af;">({_ca_status})</span></li>'
+            )
+        for _ca in _alert_creative[:5]:
+            _ca_lines += (
+                f'<li style="font-size:12px;margin-bottom:4px;color:#dc2626;">'
+                f'⚠️ Anuncio RECHAZADO en <strong>{_ca.get("campaign_name","—")}</strong>'
+                f' (ad_id: {_ca.get("ad_id","—")})</li>'
+            )
+        _creative_act_block = f'<ul style="margin:4px 0;padding-left:16px;">{_ca_lines}</ul>'
+    else:
+        _creative_act_block = '<p style="font-size:12px;color:#16a34a;">✅ Todos los anuncios en buen estado — sin acciones creativas</p>'
+
+    if _quality_findings or _creative_actions_email:
+        _quality_block = f"""
+  <tr><td style="padding:14px 20px 6px 20px;">
+    <p style="margin:0 0 8px 0;font-size:12px;font-weight:bold;color:#6b7280;
+              text-transform:uppercase;letter-spacing:0.5px;">🎨 Salud de Anuncios y Calidad</p>
+    {_qs_block}
+    {_ad_block}
+    {_is_block}
+    <p style="margin:8px 0 4px 0;font-size:11px;font-weight:bold;color:#6b7280;">Acciones Creativas del Día</p>
+    {_creative_act_block}
+  </td></tr>"""
+    else:
+        _quality_block = ""
+
     # ── GA4: Movimiento en la Web (24h) — tabla siempre visible ─────────────────
     def _ga4_val(v: int) -> str:
         return "N/A" if not _ga4_ok else str(v)
@@ -2584,6 +2717,12 @@ def _build_daily_summary_html(run: dict) -> str:
 
   <!-- Separador -->
   <tr><td style="padding:8px 20px 0 20px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>
+
+  <!-- SECCIÓN: Salud de Anuncios y Calidad (Fase 6D) -->
+  {_quality_block}
+
+  <!-- Separador (solo si hay bloque de calidad) -->
+  {'<tr><td style="padding:8px 20px 0 20px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>' if _quality_block else ''}
 
   <!-- ¿Qué significa esto para mí hoy? -->
   <tr>

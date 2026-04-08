@@ -1403,3 +1403,311 @@ def update_ad_schedule(client, customer_id: str, campaign_id: str,
         return {"status": "success", "day": day_of_week, "hours": f"{start_hour}-{end_hour}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+import logging as _logging
+_ads_logger = _logging.getLogger(__name__)
+
+
+# ── QUALITY SCORE / AD HEALTH / IMPRESSION SHARE (solo lectura) ───────────────
+
+def fetch_keyword_quality_scores(client, customer_id: str) -> list:
+    """
+    Lee Quality Score y subcomponentes de keywords activas (últimos 30 días).
+    Retorna lista vacía si la API falla — nunca lanza excepción.
+    """
+    _ENUM_STR = {0: None, 1: "BELOW_AVERAGE", 2: "AVERAGE", 3: "ABOVE_AVERAGE"}
+
+    def _enum_to_str(val):
+        if val is None:
+            return None
+        v = int(val)
+        return _ENUM_STR.get(v, str(val))
+
+    query = """
+        SELECT
+          ad_group_criterion.keyword.text,
+          ad_group_criterion.quality_info.quality_score,
+          ad_group_criterion.quality_info.creative_quality_score,
+          ad_group_criterion.quality_info.post_click_quality_score,
+          ad_group_criterion.quality_info.search_predicted_ctr,
+          campaign.id, campaign.name,
+          ad_group.id, ad_group.name,
+          metrics.cost_micros, metrics.conversions
+        FROM keyword_view
+        WHERE ad_group_criterion.status = 'ENABLED'
+          AND campaign.status = 'ENABLED'
+          AND segments.date DURING LAST_30_DAYS
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        results = []
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            agc = row.ad_group_criterion
+            qi  = agc.quality_info
+            qs  = qi.quality_score if qi.quality_score else None
+            results.append({
+                "keyword_text":            agc.keyword.text,
+                "quality_score":           qs,
+                "creative_quality_score":  _enum_to_str(qi.creative_quality_score),
+                "post_click_quality_score": _enum_to_str(qi.post_click_quality_score),
+                "search_predicted_ctr":    _enum_to_str(qi.search_predicted_ctr),
+                "campaign_id":             str(row.campaign.id),
+                "campaign_name":           row.campaign.name,
+                "ad_group_id":             str(row.ad_group.id),
+                "ad_group_name":           row.ad_group.name,
+                "cost_micros":             row.metrics.cost_micros,
+                "conversions":             row.metrics.conversions,
+            })
+        return results
+    except Exception as e:
+        _ads_logger.warning("fetch_keyword_quality_scores: %s", e)
+        return []
+
+
+def fetch_ad_health(client, customer_id: str) -> list:
+    """
+    Lee Ad Strength, estado y política de anuncios de todas las campañas activas.
+    Para Smart Campaigns sin RSA, ad_strength = None. Nunca lanza excepción.
+    """
+    _STRENGTH_MAP = {0: None, 1: "POOR", 2: "AVERAGE", 3: "GOOD", 4: "EXCELLENT", 5: "NO_ADS"}
+
+    query = """
+        SELECT
+          ad_group_ad.ad.id,
+          ad_group_ad.ad.responsive_search_ad.ad_strength,
+          ad_group_ad.status,
+          ad_group_ad.policy_summary.approval_status,
+          ad_group_ad.ad.responsive_search_ad.headlines,
+          ad_group_ad.ad.responsive_search_ad.descriptions,
+          ad_group_ad.ad.final_urls,
+          campaign.id, campaign.name,
+          ad_group.id, ad_group.name
+        FROM ad_group_ad
+        WHERE ad_group_ad.status IN ('ENABLED', 'PAUSED')
+          AND campaign.status = 'ENABLED'
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        results = []
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            aga = row.ad_group_ad
+            ad  = aga.ad
+            try:
+                rsa = ad.responsive_search_ad
+                strength_val = int(rsa.ad_strength) if rsa.ad_strength else 0
+                ad_strength  = _STRENGTH_MAP.get(strength_val)
+                headlines    = [h.text for h in rsa.headlines if h.text]
+                descriptions = [d.text for d in rsa.descriptions if d.text]
+            except Exception:
+                ad_strength  = None
+                headlines    = []
+                descriptions = []
+
+            results.append({
+                "ad_id":           str(ad.id),
+                "ad_strength":     ad_strength,
+                "ad_status":       str(aga.status.name) if aga.status else None,
+                "approval_status": str(aga.policy_summary.approval_status.name)
+                                   if aga.policy_summary and aga.policy_summary.approval_status else None,
+                "headlines":       headlines,
+                "descriptions":    descriptions,
+                "final_urls":      list(ad.final_urls) if ad.final_urls else [],
+                "campaign_id":     str(row.campaign.id),
+                "campaign_name":   row.campaign.name,
+                "ad_group_id":     str(row.ad_group.id),
+                "ad_group_name":   row.ad_group.name,
+                "ad_group_resource": row.ad_group.resource_name,
+            })
+        return results
+    except Exception as e:
+        _ads_logger.warning("fetch_ad_health: %s", e)
+        return []
+
+
+def fetch_impression_share(client, customer_id: str) -> list:
+    """
+    Lee métricas de Impression Share por campaña activa (últimos 7 días).
+    Los valores son fracción 0-1. Retorna [] si falla.
+    """
+    query = """
+        SELECT
+          campaign.id, campaign.name,
+          metrics.search_impression_share,
+          metrics.search_top_impression_rate,
+          metrics.search_rank_lost_impression_share,
+          metrics.search_budget_lost_impression_share
+        FROM campaign
+        WHERE campaign.status = 'ENABLED'
+          AND segments.date DURING LAST_7_DAYS
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        results = []
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            m = row.metrics
+            results.append({
+                "campaign_id":   str(row.campaign.id),
+                "campaign_name": row.campaign.name,
+                "search_impression_share":             m.search_impression_share,
+                "search_top_impression_rate":          m.search_top_impression_rate,
+                "search_rank_lost_impression_share":   m.search_rank_lost_impression_share,
+                "search_budget_lost_impression_share": m.search_budget_lost_impression_share,
+            })
+        return results
+    except Exception as e:
+        _ads_logger.warning("fetch_impression_share: %s", e)
+        return []
+
+
+def update_rsa_headlines(client, customer_id: str, ad_group_resource: str,
+                         ad_id: str, new_headlines: list) -> dict:
+    """
+    Agrega headlines a un RSA existente. Valida max 30 chars. No duplica.
+    Retorna dict con status y resultado.
+    """
+    try:
+        ga_service   = client.get_service("GoogleAdsService")
+        ad_service   = client.get_service("AdGroupAdService")
+        # Leer RSA actual
+        query = f"""
+            SELECT ad_group_ad.ad.id,
+                   ad_group_ad.ad.responsive_search_ad.headlines,
+                   ad_group_ad.resource_name
+            FROM ad_group_ad
+            WHERE ad_group_ad.ad.id = {ad_id}
+        """
+        current_headlines = []
+        resource_name     = None
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            resource_name = row.ad_group_ad.resource_name
+            current_headlines = [h.text for h in row.ad_group_ad.ad.responsive_search_ad.headlines if h.text]
+            break
+        if not resource_name:
+            return {"status": "error", "message": f"Ad {ad_id} no encontrado"}
+
+        # Filtrar: max 30 chars, sin duplicar
+        to_add = [h for h in new_headlines if len(h) <= 30 and h not in current_headlines]
+        if not to_add:
+            return {"status": "skipped", "reason": "no headlines nuevos válidos"}
+
+        # Build operation
+        operation = client.get_type("AdGroupAdOperation")
+        aga       = operation.update
+        aga.resource_name = resource_name
+        combined = current_headlines + to_add
+        for h_text in combined:
+            h = aga.ad.responsive_search_ad.headlines.add()
+            h.text = h_text
+        client.copy_from(
+            operation.update_mask,
+            protobuf_helpers.field_mask(None, aga._pb)
+        )
+        operation.update_mask.paths[:] = ["ad.responsive_search_ad.headlines"]
+        ad_service.mutate_ad_group_ads(customer_id=customer_id, operations=[operation])
+        return {"status": "success", "added": to_add}
+    except Exception as e:
+        _ads_logger.warning("update_rsa_headlines: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+def update_rsa_descriptions(client, customer_id: str, ad_group_resource: str,
+                            ad_id: str, new_descriptions: list) -> dict:
+    """
+    Agrega descriptions a un RSA existente. Valida max 90 chars. No duplica.
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        ad_service = client.get_service("AdGroupAdService")
+        query = f"""
+            SELECT ad_group_ad.ad.id,
+                   ad_group_ad.ad.responsive_search_ad.descriptions,
+                   ad_group_ad.resource_name
+            FROM ad_group_ad
+            WHERE ad_group_ad.ad.id = {ad_id}
+        """
+        current_descs = []
+        resource_name = None
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            resource_name = row.ad_group_ad.resource_name
+            current_descs = [d.text for d in row.ad_group_ad.ad.responsive_search_ad.descriptions if d.text]
+            break
+        if not resource_name:
+            return {"status": "error", "message": f"Ad {ad_id} no encontrado"}
+
+        to_add = [d for d in new_descriptions if len(d) <= 90 and d not in current_descs]
+        if not to_add:
+            return {"status": "skipped", "reason": "no descriptions nuevas válidas"}
+
+        operation = client.get_type("AdGroupAdOperation")
+        aga = operation.update
+        aga.resource_name = resource_name
+        combined = current_descs + to_add
+        for d_text in combined:
+            d = aga.ad.responsive_search_ad.descriptions.add()
+            d.text = d_text
+        operation.update_mask.paths[:] = ["ad.responsive_search_ad.descriptions"]
+        ad_service.mutate_ad_group_ads(customer_id=customer_id, operations=[operation])
+        return {"status": "success", "added": to_add}
+    except Exception as e:
+        _ads_logger.warning("update_rsa_descriptions: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+def remove_rsa_asset(client, customer_id: str, ad_group_resource: str,
+                     ad_id: str, asset_text: str, asset_type: str) -> dict:
+    """
+    Elimina un headline o description específico de un RSA.
+    asset_type: "headline" | "description"
+    Guardrail: mínimo 3 headlines / 2 descriptions después de eliminar.
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        ad_service = client.get_service("AdGroupAdService")
+        query = f"""
+            SELECT ad_group_ad.ad.id,
+                   ad_group_ad.ad.responsive_search_ad.headlines,
+                   ad_group_ad.ad.responsive_search_ad.descriptions,
+                   ad_group_ad.resource_name
+            FROM ad_group_ad
+            WHERE ad_group_ad.ad.id = {ad_id}
+        """
+        resource_name = None
+        current_heads = []
+        current_descs = []
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            resource_name = row.ad_group_ad.resource_name
+            current_heads = [h.text for h in row.ad_group_ad.ad.responsive_search_ad.headlines if h.text]
+            current_descs = [d.text for d in row.ad_group_ad.ad.responsive_search_ad.descriptions if d.text]
+            break
+        if not resource_name:
+            return {"status": "error", "message": f"Ad {ad_id} no encontrado"}
+
+        if asset_type == "headline":
+            new_list = [h for h in current_heads if h != asset_text]
+            if len(new_list) < 3:
+                return {"status": "blocked", "reason": "quedarían menos de 3 headlines"}
+            operation = client.get_type("AdGroupAdOperation")
+            aga = operation.update
+            aga.resource_name = resource_name
+            for h_text in new_list:
+                h = aga.ad.responsive_search_ad.headlines.add()
+                h.text = h_text
+            operation.update_mask.paths[:] = ["ad.responsive_search_ad.headlines"]
+        else:
+            new_list = [d for d in current_descs if d != asset_text]
+            if len(new_list) < 2:
+                return {"status": "blocked", "reason": "quedarían menos de 2 descriptions"}
+            operation = client.get_type("AdGroupAdOperation")
+            aga = operation.update
+            aga.resource_name = resource_name
+            for d_text in new_list:
+                d = aga.ad.responsive_search_ad.descriptions.add()
+                d.text = d_text
+            operation.update_mask.paths[:] = ["ad.responsive_search_ad.descriptions"]
+
+        ad_service.mutate_ad_group_ads(customer_id=customer_id, operations=[operation])
+        return {"status": "success", "removed": asset_text}
+    except Exception as e:
+        _ads_logger.warning("remove_rsa_asset: %s", e)
+        return {"status": "error", "message": str(e)}
