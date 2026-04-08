@@ -2082,7 +2082,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 if "local" in _c.get("campaign_name", "").lower():
                     _local_data_for_insight = {
                         "local_directions_count": _c.get("local_directions_count"),
-                        "local_campaign_spend":   _c.get("metrics_7d", {}).get("cost_mxn"),
+                        "local_campaign_spend":   round((_c.get("metrics_7d", {}).get("cost_mxn") or 0) / 7, 2),
                     }
                     break
 
@@ -2267,6 +2267,9 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             )
 
         results["summary"]["proposals_emailed"] = proposals_emailed
+        # keyword_proposals_count = solo las que llegan al correo (≤ MAX_PROPOSALS_PER_EMAIL)
+        # Evita que activity_log cuente propuestas que el usuario nunca ve ni puede aprobar
+        results["summary"]["keyword_proposals_count"] = len(_pending_kw_proposals) if _pending_kw_proposals else 0
         if email_error:
             results["summary"]["email_error"] = True
 

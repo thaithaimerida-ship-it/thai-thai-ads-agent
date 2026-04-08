@@ -144,7 +144,7 @@ def _derive_run_summary(audit_results: dict, session_id: str, run_type: str = "d
     auto_exec_disabled = summary.get("by_reason", {}).get("auto_execute_disabled", 0)
 
     # ── Pendientes de validación humana ───────────────────────────────────────
-    keyword_pending = summary.get("proposed_for_approval", 0)
+    keyword_pending = summary.get("keyword_proposals_count", summary.get("proposed_for_approval", 0))
 
     ba_pending = 0
     if "budget_actions" in audit_results:
