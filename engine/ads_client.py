@@ -1416,7 +1416,7 @@ def fetch_keyword_quality_scores(client, customer_id: str) -> list:
     Lee Quality Score y subcomponentes de keywords activas (últimos 30 días).
     Retorna lista vacía si la API falla — nunca lanza excepción.
     """
-    _ENUM_STR = {0: None, 1: "BELOW_AVERAGE", 2: "AVERAGE", 3: "ABOVE_AVERAGE"}
+    _ENUM_STR = {0: None, 1: None, 2: "BELOW_AVERAGE", 3: "AVERAGE", 4: "ABOVE_AVERAGE"}
 
     def _enum_to_str(val):
         if val is None:
