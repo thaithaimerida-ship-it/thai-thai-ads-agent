@@ -1673,6 +1673,9 @@ def replace_rsa_headlines(client, customer_id: str, ad_group_resource: str,
         if not final_headlines:
             return {"status": "skipped", "reason": "no headlines válidos tras filtros"}
 
+        if len(final_headlines) < 3:
+            return {"status": "skipped_insufficient_headlines", "reason": f"solo {len(final_headlines)} headline(s) válido(s) — mínimo 3 requeridos por Google Ads"}
+
         # Build operation — enviar SOLO final_headlines (replace real)
         operation = client.get_type("AdGroupAdOperation")
         aga = operation.update
