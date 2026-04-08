@@ -252,6 +252,8 @@ app.include_router(builder_router)
 app.include_router(ecosystem_router)
 app.include_router(keywords_router)
 app.include_router(campaigns_router)
+from routes.debug_fase_6d import router as debug_fase_6d_router
+app.include_router(debug_fase_6d_router)
 
 # Strategy functions delegated to agents/strategist.py
 from agents.strategist import Strategist as _Strategist
