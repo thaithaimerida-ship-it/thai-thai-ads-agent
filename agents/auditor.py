@@ -1353,7 +1353,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 _cid   = _kw.get("campaign_id", "")
                 _ktext = _kw.get("keyword_text", "")
                 _base  = {"campaign_id": _cid, "campaign_name": _cname, "keyword_text": _ktext}
-                if _qs and _qs < 4:
+                if _qs and _qs < 7:
                     _quality_creative_findings.append({**_base, "type": "QS_LOW", "quality_score": _qs})
                 if _kw.get("creative_quality_score") == "BELOW_AVERAGE":
                     _quality_creative_findings.append({**_base, "type": "QS_CREATIVE_WEAK"})

@@ -273,8 +273,10 @@ Si la web no convierte, escalar presupuesto no sirve.
 
 ════════════════════════════════════════════════════════
 BLOQUE 3 — RENDIMIENTO PUBLICITARIO
-Fuente: Google Ads API
-Gasto total período: ${total_ads_spend:,.0f} MXN · Proyección mensual: ${monthly_proj:,.0f} MXN · Techo: $10,000 MXN
+Fuente: Google Ads API (datos de AYER — 1 día)
+IMPORTANTE: Sheets = 7 días acumulados. Ads = solo AYER (1 día).
+NO compares montos directamente. Usa ROI como ratio, no diferencia absoluta.
+Gasto ayer: ${total_ads_spend:,.0f} MXN · Proyección mensual: ${monthly_proj:,.0f} MXN · Techo: $10,000 MXN
 ════════════════════════════════════════════════════════
 {campaigns_str}
 
@@ -319,7 +321,7 @@ Formato de respuesta:
       "campaign_name": "<nombre de la campaña>",
       "new_budget_mxn": <número — presupuesto diario nuevo en MXN>,
       "change_pct": <número — % de cambio, positivo=subir, negativo=bajar, 0 si hold>,
-      "reason": "<frase en español citando fuentes: Sheets / GA4 / Ads / Calidad / Ocupación>",
+      "reason": "<frase en español citando fuentes: Sheets / GA4 / Ads / Calidad / Ocupación. NO incluir proyección mensual — solo CPA, ROI, conversiones o comensales relevantes>",
       "confidence": <entero 0-100>,
       "sources": ["Sheets", "GA4", "Ads"]
     }}

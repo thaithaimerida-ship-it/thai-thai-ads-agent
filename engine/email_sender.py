@@ -1844,6 +1844,38 @@ def _build_daily_summary_html(run: dict) -> str:
     meaning = cfg["meaning"]
     action  = cfg["action"]
 
+    # ── Override de meaning si hay quality findings críticos ─────────────────
+    # Aplica a sin_acciones y con_cambios donde el texto genérico ignoraría alertas de calidad
+    if rc in ("sin_acciones", "sin_novedades", "con_cambios") and _quality_findings:
+        _qf_overrides = []
+        _lost_is = [f for f in _quality_findings if f.get("type") in ("LOST_IS_BUDGET_HIGH", "LOW_IMPRESSION_SHARE")]
+        _poor_ads_qf = [f for f in _quality_findings if f.get("type") == "AD_STRENGTH_POOR"]
+        _disapp_qf   = [f for f in _quality_findings if f.get("type") == "AD_DISAPPROVED"]
+        _qs_low_qf   = [f for f in _quality_findings if f.get("type") == "QS_LOW"]
+        if _lost_is:
+            # Intentar extraer el IS% si está disponible
+            _is_vals = [f.get("search_impression_share") for f in _lost_is if f.get("search_impression_share")]
+            if _is_vals:
+                _min_is = min(_is_vals)
+                _qf_overrides.append(
+                    f"Tus campañas Search solo capturan el {_min_is*100:.0f}% del mercado "
+                    f"— estás perdiendo el {(1-_min_is)*100:.0f}% de búsquedas por presupuesto."
+                )
+            else:
+                _qf_overrides.append("Hay campañas perdiendo Impression Share por presupuesto — considera aumentarlo.")
+        if _poor_ads_qf:
+            _qf_overrides.append(f"Hay {len(_poor_ads_qf)} anuncio(s) con Ad Strength POOR que necesitan mejora de copy.")
+        if _disapp_qf:
+            _qf_overrides.append(f"Hay {len(_disapp_qf)} anuncio(s) rechazado(s) por Google — requieren revisión urgente.")
+        if _qs_low_qf:
+            _qf_overrides.append(f"{len(_qs_low_qf)} keyword(s) con Quality Score bajo (< 7) — afecta el costo por clic.")
+        if _qf_overrides:
+            meaning = " ".join(_qf_overrides)
+            if _disapp_qf or _poor_ads_qf:
+                action = "Revisar la sección 'Salud de Anuncios y Calidad' en este correo."
+            elif _lost_is:
+                action = "Considera aprobar un aumento de presupuesto en las campañas Search afectadas."
+
     # ── Bloque de restablecimiento del sistema ───────────────────────────────
     restored_block = ""
     if system_restored and rc != "con_errores":
@@ -2163,8 +2195,8 @@ def _build_daily_summary_html(run: dict) -> str:
     if _por_campana:
         _camp_rows = ""
         for _cp in sorted(_por_campana, key=lambda x: -x.get("spend_mxn", 0)):
-            _cp_conv = _cp.get("conversions", 0)
-            _cp_conv_str = f"{_cp_conv:.0f}" if _cp_conv > 0 else "—"
+            _cp_conv = _cp.get("conversions")
+            _cp_conv_str = f"{_cp_conv:.0f}" if _cp_conv is not None else "—"
             _camp_rows += (
                 f'<tr style="border-top:1px solid #f0f0f0;">'
                 f'<td style="padding:5px 8px;color:#374151;font-size:12px;">{_cp.get("name","—")}</td>'
@@ -2579,7 +2611,10 @@ def _build_daily_summary_html(run: dict) -> str:
             _d_pct     = float(_d.get("change_pct", 0))
             _d_reason  = str(_d.get("reason", ""))[:160]
             _d_conf    = int(_d.get("confidence", 0))
-            _d_old     = float(_d.get("exec_result", {}).get("old_budget_mxn", 0))
+            _d_old     = float(_d.get("exec_result", {}).get("old_budget_mxn") or 0)
+            if _d_old == 0 and _d_pct != 0:
+                # Recalcular desde new_budget y change_pct cuando exec_result no lo trae
+                _d_old = round(_d_budget / (1 + _d_pct / 100), 2)
             _d_color   = "#15803d" if _d_action == "scale" else "#dc2626"
             _d_arrow   = "↑" if _d_action == "scale" else "↓"
             _d_conf_color = "#15803d" if _d_conf >= 80 else "#d97706" if _d_conf >= 70 else "#dc2626"
