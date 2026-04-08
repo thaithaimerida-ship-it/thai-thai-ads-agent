@@ -1467,7 +1467,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     if _ad_r.get("ad_strength") in ("POOR", "AVERAGE"):
                         _ah_for_remediation.append(_ad_r)
                     elif str(_ad_r.get("campaign_id", "")) in _qs_trigger_camps:
-                        _ah_for_remediation.append({**_ad_r, "ad_strength": "AVERAGE"})
+                        _ah_for_remediation.append({**_ad_r, "ad_strength": "AVERAGE", "_qs_triggered": True})
 
                 try:
                     from engine.creative_remediation import remediate_weak_ads as _remediate
@@ -1479,6 +1479,10 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                             for _prop in _remediation_proposals:
                                 if _prop["action"] == "add_headlines":
                                     _cr = _ce.add_ad_headlines(
+                                        _prop["ad_group_resource"], _prop["ad_id"], _prop["headlines"]
+                                    )
+                                elif _prop["action"] == "replace_headlines":
+                                    _cr = _ce.replace_rsa_headlines(
                                         _prop["ad_group_resource"], _prop["ad_id"], _prop["headlines"]
                                     )
                                 elif _prop["action"] == "add_descriptions":

@@ -140,6 +140,23 @@ class Executor:
         except Exception as e:
             return {"status": "error", "action": "add_ad_headlines", "error": str(e)}
 
+    def replace_rsa_headlines(self, ad_group_resource, ad_id, new_headlines):
+        """Agrega headlines optimizados para mejorar QS (misma API que add, intención distinta)."""
+        from engine.ads_client import update_rsa_headlines
+        client = self._get_client()
+        valid = [h for h in new_headlines if len(h) <= 30]
+        invalid = [h for h in new_headlines if len(h) > 30]
+        if invalid:
+            logger.warning("replace_rsa_headlines: %d headlines exceden 30 chars — descartados", len(invalid))
+        if not valid:
+            return {"status": "skipped", "action": "replace_rsa_headlines", "reason": "no headlines válidos"}
+        try:
+            result = update_rsa_headlines(client, self.customer_id, ad_group_resource, ad_id, valid)
+            self._log_action("replace_rsa_headlines", ad_id, {"ad_group": ad_group_resource, "headlines": valid}, result.get("status"))
+            return {"status": result.get("status", "error"), "action": "replace_rsa_headlines", "ad_id": ad_id, "detail": result}
+        except Exception as e:
+            return {"status": "error", "action": "replace_rsa_headlines", "error": str(e)}
+
     def add_ad_descriptions(self, ad_group_resource, ad_id, new_descriptions):
         from engine.ads_client import update_rsa_descriptions
         client = self._get_client()
@@ -174,6 +191,7 @@ class Executor:
             "add_keyword":        lambda a: self.add_keyword(a["ad_group_resource"], a["keyword_text"], a.get("match_type", "PHRASE"), a.get("cpc_bid_micros")),
             "remove_theme":       lambda a: self.remove_theme(a["criterion_resource_name"]),
             "add_ad_headlines":   lambda a: self.add_ad_headlines(a["ad_group_resource"], a["ad_id"], a["headlines"]),
+            "replace_headlines":  lambda a: self.replace_rsa_headlines(a["ad_group_resource"], a["ad_id"], a["headlines"]),
             "add_ad_descriptions": lambda a: self.add_ad_descriptions(a["ad_group_resource"], a["ad_id"], a["descriptions"]),
             "remove_ad_asset":    lambda a: self.remove_ad_asset(a["ad_group_resource"], a["ad_id"], a["asset_text"], a["asset_type"]),
         }

@@ -237,8 +237,11 @@ DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
         _pace        = _mbs["pace"]
         _pace_emoji  = {"SOBRE_RITMO": "🔴", "EN_RITMO": "🟢", "BAJO_RITMO": "🟡"}.get(_pace, "")
         _pace_rule   = (
-            "\n⚠️  REGLA ABSOLUTA: Estado SOBRE_RITMO — DEBES reducir presupuestos. "
-            "El techo mensual es más importante que cualquier oportunidad de escalar."
+            f"\n⚠️  REGLA SOBRE_RITMO: El gasto mensual va sobre el ritmo del techo de ${_mbs.get('monthly_cap', 10000):,.0f}.\n"
+            f"  - DEBES reducir campañas con mal rendimiento (0 conversiones, CPA alto, sin ROI en Sheets).\n"
+            f"  - PUEDES proponer \"scale\" en campañas con LOST_IS_BUDGET_HIGH si AL MISMO TIEMPO propones \"reduce\" en otras campañas por un monto igual o mayor. Esto es REDISTRIBUCIÓN, no gasto nuevo.\n"
+            f"  - El presupuesto TOTAL diario después de tus decisiones debe ser MENOR o igual a ${_mbs.get('daily_allowed', 0):,.0f}/día.\n"
+            f"  - Si no hay campaña que merezca scale, reduce todo."
             if _pace == "SOBRE_RITMO" else ""
         )
         monthly_cap_str = (

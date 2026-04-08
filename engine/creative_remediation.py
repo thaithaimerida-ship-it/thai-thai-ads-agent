@@ -49,22 +49,35 @@ def remediate_weak_ads(
     if not ad_health_data:
         return []
 
-    # Candidatos: POOR o AVERAGE con < 8 headlines o < 3 descriptions
-    candidates = [
+    # Candidatos grupo 1: POOR o AVERAGE con < 8 headlines o < 3 descriptions
+    candidates_strength = [
         ad for ad in ad_health_data
         if ad.get("ad_strength") in ("POOR", "AVERAGE")
         and (len(ad.get("headlines", [])) < 8 or len(ad.get("descriptions", [])) < 3)
     ]
+
+    # Candidatos grupo 2: marcados _qs_triggered=True (QS bajo, sin importar conteo de headlines)
+    _strength_ad_ids = {ad.get("ad_id") for ad in candidates_strength}
+    candidates_qs = [
+        ad for ad in ad_health_data
+        if ad.get("_qs_triggered") and ad.get("ad_id") not in _strength_ad_ids
+    ]
+
+    candidates = candidates_strength + candidates_qs
     if not candidates:
         return []
 
     # Índice de keywords ganadoras por campaña (QS ≥ 4, con costo)
     kw_by_campaign: dict = {}
+    # Índice de keywords con QS bajo por campaña (para remediación QS)
+    qs_low_kw_by_campaign: dict = {}
     for kw in keyword_quality_data:
         cid = kw.get("campaign_id", "")
         qs  = kw.get("quality_score") or 0
         if qs >= 4 and kw.get("cost_micros", 0) > 0:
             kw_by_campaign.setdefault(cid, []).append(kw.get("keyword_text", ""))
+        if qs and qs < 7:
+            qs_low_kw_by_campaign.setdefault(cid, []).append(kw.get("keyword_text", ""))
 
     actions = []
     try:
@@ -82,14 +95,41 @@ def remediate_weak_ads(
         existing_heads = ad.get("headlines", [])
         existing_descs = ad.get("descriptions", [])
         ad_strength    = ad.get("ad_strength", "AVERAGE")
+        is_qs_triggered = bool(ad.get("_qs_triggered"))
 
         winning_kws    = kw_by_campaign.get(campaign_id, [])[:10]
+        qs_low_kws     = qs_low_kw_by_campaign.get(campaign_id, [])[:10]
         campaign_type  = _infer_campaign_type(campaign_name)
 
         needs_headlines    = len(existing_heads) < 8
         needs_descriptions = len(existing_descs) < 3
 
-        user_prompt = f"""HEADLINES ACTUALES DEL ANUNCIO (no duplicar):
+        if is_qs_triggered:
+            user_prompt = f"""HEADLINES ACTUALES DEL ANUNCIO (no duplicar):
+{chr(10).join(f'- {h}' for h in existing_heads) if existing_heads else '(ninguno)'}
+
+KEYWORDS CON QUALITY SCORE BAJO EN ESTA CAMPAÑA (QS < 7):
+{chr(10).join(f'- {k}' for k in qs_low_kws) if qs_low_kws else '(sin datos)'}
+
+TIPO DE CAMPAÑA: {campaign_type}
+AD STRENGTH ACTUAL: {ad_strength}
+
+INSTRUCCIONES:
+Las keywords de esta campaña tienen Quality Score bajo — el copy de los headlines no es suficientemente relevante para las búsquedas de los usuarios.
+Genera headlines MÁS RELEVANTES que incluyan las keywords con QS bajo de forma natural.
+- Headlines: máximo 30 caracteres cada uno. Incorporar las keywords de forma directa y natural.
+- No duplicar headlines que ya existen.
+- No agregar descriptions en esta respuesta (dejar lista vacía).
+- Responde SOLO con JSON válido, sin markdown.
+
+Formato:
+{{
+  "new_headlines": ["headline1", "headline2"],
+  "new_descriptions": [],
+  "reasoning": "una frase explicando cómo los nuevos headlines mejoran la relevancia para las keywords"
+}}"""
+        else:
+            user_prompt = f"""HEADLINES ACTUALES DEL ANUNCIO (no duplicar):
 {chr(10).join(f'- {h}' for h in existing_heads) if existing_heads else '(ninguno)'}
 
 KEYWORDS GANADORAS DE ESTA CAMPAÑA:
@@ -144,23 +184,25 @@ Formato:
             if isinstance(d, str) and len(d) <= 90 and d not in existing_descs
         ][:_MAX_DESCRIPTIONS_PER_AD]
 
-        if valid_heads and needs_headlines:
-            actions.append({
-                "action":          "add_headlines",
-                "ad_id":           ad_id,
-                "ad_group_resource": ad_group_res,
-                "campaign_name":   campaign_name,
-                "headlines":       valid_heads,
-                "reasoning":       reasoning,
-            })
+        if valid_heads:
+            _action = "replace_headlines" if is_qs_triggered else "add_headlines"
+            if is_qs_triggered or needs_headlines:
+                actions.append({
+                    "action":            _action,
+                    "ad_id":             ad_id,
+                    "ad_group_resource": ad_group_res,
+                    "campaign_name":     campaign_name,
+                    "headlines":         valid_heads,
+                    "reasoning":         reasoning,
+                })
         if valid_descs and needs_descriptions:
             actions.append({
-                "action":          "add_descriptions",
-                "ad_id":           ad_id,
+                "action":            "add_descriptions",
+                "ad_id":             ad_id,
                 "ad_group_resource": ad_group_res,
-                "campaign_name":   campaign_name,
-                "descriptions":    valid_descs,
-                "reasoning":       reasoning,
+                "campaign_name":     campaign_name,
+                "descriptions":      valid_descs,
+                "reasoning":         reasoning,
             })
 
     return actions
