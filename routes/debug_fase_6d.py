@@ -98,23 +98,27 @@ def _debug_impression_share(client, customer_id: str) -> list:
 
 @router.get("/debug-fase-6d")
 def debug_fase_6d():
-    from engine.ads_client import get_ads_client, fetch_keyword_quality_scores
+    try:
+        from engine.ads_client import get_ads_client, fetch_keyword_quality_scores
 
-    client      = get_ads_client()
-    customer_id = os.environ["GOOGLE_ADS_TARGET_CUSTOMER_ID"]
+        client      = get_ads_client()
+        customer_id = os.environ["GOOGLE_ADS_TARGET_CUSTOMER_ID"]
 
-    kq  = fetch_keyword_quality_scores(client, customer_id)
-    ah  = _debug_ad_health(client, customer_id)
-    ims = _debug_impression_share(client, customer_id)
+        kq  = fetch_keyword_quality_scores(client, customer_id)
+        ah  = _debug_ad_health(client, customer_id)
+        ims = _debug_impression_share(client, customer_id)
 
-    return {
-        "customer_id":            customer_id,
-        "keyword_quality_scores": kq,
-        "ad_health":              ah,
-        "impression_share":       ims,
-        "counts": {
-            "keyword_quality_scores": len(kq),
-            "ad_health":              len(ah),
-            "impression_share":       len(ims),
-        },
-    }
+        return {
+            "customer_id":            customer_id,
+            "keyword_quality_scores": kq,
+            "ad_health":              ah,
+            "impression_share":       ims,
+            "counts": {
+                "keyword_quality_scores": len(kq),
+                "ad_health":              len(ah),
+                "impression_share":       len(ims),
+            },
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
