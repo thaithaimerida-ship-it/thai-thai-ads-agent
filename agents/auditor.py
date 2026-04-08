@@ -163,6 +163,38 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             logger.info("sweep_expired_proposals: %d propuesta(s) marcadas como postponed", expired_count)
 
         # ====================================================================
+        # FASE PRE-AUDIT: PAUSAR CAMPAÑAS CONFIGURADAS EN CAMPAIGNS_TO_PAUSE
+        # ====================================================================
+        _paused_campaigns_result = []
+        try:
+            from config.agent_config import CAMPAIGNS_TO_PAUSE as _CTOP
+            if _CTOP:
+                from agents.executor import Executor as _PauseExec
+                _pexec = _PauseExec()
+                for _pause_cid, _pause_cname in _CTOP.items():
+                    _camp_data = next(
+                        (c for c in campaigns if str(c.get("id", "")) == str(_pause_cid)), None
+                    )
+                    if _camp_data and str(_camp_data.get("status", "")).upper() == "ENABLED":
+                        _pr = _pexec.pause_campaign(_pause_cid)
+                        _paused_campaigns_result.append({
+                            "campaign_id":   _pause_cid,
+                            "campaign_name": _pause_cname,
+                            "result":        _pr,
+                        })
+                        logger.info(
+                            "CAMPAIGNS_TO_PAUSE: %s (%s) — %s",
+                            _pause_cname, _pause_cid, _pr.get("status"),
+                        )
+                    else:
+                        logger.debug(
+                            "CAMPAIGNS_TO_PAUSE: %s ya no está ENABLED — omitiendo", _pause_cname
+                        )
+        except Exception as _ctop_exc:
+            logger.warning("CAMPAIGNS_TO_PAUSE: error no crítico — %s", _ctop_exc)
+        results["paused_campaigns"] = _paused_campaigns_result
+
+        # ====================================================================
         # FASE 3A: DETECCIÓN DE TRACKING CRÍTICO
         #
         # NOTA IMPORTANTE: RISK_EXECUTE en este bloque = ENVIAR ALERTA
@@ -2237,6 +2269,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _run_summary["quality_creative_findings"]  = results.get("quality_creative_findings", [])
             _run_summary["creative_actions"]           = results.get("creative_actions", [])
             _run_summary["monthly_budget_status"]      = results.get("monthly_budget_status", {})
+            _run_summary["paused_campaigns"]           = results.get("paused_campaigns", [])
             # Smart audit data completa — para mostrar issues inline en el correo diario
             # (no retener hasta el reporte semanal del lunes)
             _run_summary["smart_audit"]    = results.get("smart_audit")
@@ -2312,7 +2345,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             # Corridas compensatorias siempre envían — son el fallback explícito
             _already_sent = (
                 False if run_type == "compensatory"
-                else _mem_daily.has_recent_alert("daily_summary", 20)
+                else _mem_daily.has_recent_alert("daily_summary", 1)  # TEMP: revertir a 20 después de prueba
             )
 
             _email_sent = False
