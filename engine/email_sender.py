@@ -1538,10 +1538,12 @@ def generate_daily_insight(
     ga4_data: dict | None,
     sheets_data: dict | None,
     local_data: dict | None = None,
+    quality_findings: list | None = None,
+    creative_actions: list | None = None,
 ) -> str | None:
     """
-    Pasa Ads + GA4 + Sheets a Claude Haiku y devuelve UNA oración ejecutiva
-    correlacionando los tres bloques de datos para el dueño.
+    Pasa Ads + GA4 + Sheets + calidad a Claude Haiku y devuelve UNA oración ejecutiva
+    correlacionando los datos del día para el dueño.
 
     Retorna None si faltan datos suficientes o si Haiku no responde.
     """
@@ -1554,14 +1556,12 @@ def generate_daily_insight(
     _reservar = int((ga4_data or {}).get("click_reservar", 0) or 0)
     _views    = int((ga4_data or {}).get("page_views", 0) or 0)
 
-    # Nuevo formato: resumen_negocio_para_agente
     _sd = sheets_data or {}
-    _coms           = _sd.get("comensales_total")          # personas en restaurante
-    _venta_local    = float(_sd.get("venta_local_total", 0) or 0)      # tarjeta+efectivo
-    _venta_plat     = float(_sd.get("venta_plataformas_bruto", 0) or 0)  # col H Cortes_de_Caja
-    _venta_total    = float(_sd.get("venta_total_dia", 0) or 0)
+    _coms        = _sd.get("comensales_total")
+    _venta_local = float(_sd.get("venta_local_total", 0) or 0)
+    _venta_plat  = float(_sd.get("venta_plataformas_bruto", 0) or 0)
+    _venta_total = float(_sd.get("venta_total_dia", 0) or 0)
 
-    # Necesitamos al menos un dato de cada fuente para que el cruce tenga sentido
     has_ads    = _spend > 0 or _conv > 0
     has_ga4    = _pedir > 0 or _reservar > 0 or _views > 0
     has_sheets = _coms is not None
@@ -1570,7 +1570,6 @@ def generate_daily_insight(
 
     _clics_web = _pedir + _reservar
 
-    # Descripción de ventas con formato nuevo
     _sheets_parts = []
     if _coms is not None:
         _sheets_parts.append(f"{int(_coms)} comensales en restaurante")
@@ -1604,21 +1603,53 @@ def generate_daily_insight(
             "por eso no aparecen en GA4 — es normal y esperado."
         )
 
+    # Contexto de calidad — solo si hay issues relevantes
+    _quality_str = ""
+    _qf = quality_findings or []
+    _ca = creative_actions or []
+    _qs_issues = [f for f in _qf if f.get("type") == "QS_LOW"]
+    _poor_ads  = [f for f in _qf if f.get("type") == "AD_STRENGTH_POOR"]
+    _disapp    = [f for f in _qf if f.get("type") == "AD_DISAPPROVED"]
+    _quality_parts = []
+    if _qs_issues:
+        _quality_parts.append(f"{len(_qs_issues)} keyword(s) con Quality Score bajo")
+    if _poor_ads:
+        _quality_parts.append(f"{len(_poor_ads)} anuncio(s) con Ad Strength POOR")
+    if _disapp:
+        _quality_parts.append(f"{len(_disapp)} anuncio(s) rechazado(s) por Google")
+    if _ca:
+        _exec = [a for a in _ca if isinstance(a.get("result"), dict) and a["result"].get("status") == "executed"]
+        if _exec:
+            _quality_parts.append(f"{len(_exec)} acción(es) creativa(s) ejecutada(s) automáticamente")
+    if _quality_parts:
+        _quality_str = " Calidad de anuncios: " + "; ".join(_quality_parts) + "."
+
+    # Contexto de objetivo de comensales
+    _objetivo_coms = 40
+    _coms_int = int(_coms) if _coms is not None else None
+    _coms_vs_objetivo = ""
+    if _coms_int is not None:
+        if _coms_int >= _objetivo_coms:
+            _coms_vs_objetivo = f" (objetivo diario de {_objetivo_coms} comensales: ✅ alcanzado)"
+        else:
+            _diff = _objetivo_coms - _coms_int
+            _coms_vs_objetivo = f" (objetivo diario de {_objetivo_coms} comensales: faltan {_diff})"
+
     _CONTEXTO_NEGOCIO = (
         "CONTEXTO DE NEGOCIO — Thai Thai, Mérida, Yucatán:\n"
         "Restaurante de comida tailandesa auténtica adaptada al paladar local. "
-        "Mucha gente en Mérida no conoce la comida thai; hay que educar y atraer. "
-        "Presupuesto de ads: $8,000 MXN/mes (subió de $6,000 en marzo, que fue bien). "
         "Objetivo: 40 comensales/día, 1,200/mes.\n\n"
-        "DOS CANALES CON MÁRGENES DISTINTOS:\n"
-        "1. RESTAURANTE (campaña Local): gente que VA al restaurante a comer. "
-        "   Margen alto — sin comisiones. Se mide con comensales (col J), tarjeta+efectivo, "
-        "   y 'Cómo llegar' en Google Maps. Conversiones en Google Ads, NO en GA4 (eso es normal).\n"
-        "2. ONLINE (campañas Delivery + Reservaciones): gente que PIDE por thaithaimerida.com.mx. "
-        "   Rappi/Uber cobran ~30% comisión ($200 bruto = $140 neto). "
-        "   Se mide con GA4 click_ordenar_online, click_reservar, y ventas en plataformas. "
-        "   Aunque el margen es menor, delivery amplía el alcance a gente que no vendría al restaurante.\n"
-        "Ambos canales son valiosos. El agente debe optimizar los dos, no sacrificar uno por el otro.\n\n"
+        "DOS CANALES:\n"
+        "1. RESTAURANTE (campaña Local): margen alto, sin comisiones. "
+        "   Se mide con comensales reales del corte de caja.\n"
+        "2. ONLINE (Delivery + Reservaciones): Rappi/Uber cobran ~30% comisión. "
+        "   Se mide con GA4 y ventas en plataformas.\n\n"
+        "REGLAS PARA EL INSIGHT:\n"
+        "- NO digas 'excelente eficiencia' si los comensales están bajo el objetivo de 40/día.\n"
+        "- NO menciones cifras de presupuesto mensual.\n"
+        "- SÍ menciona si el día fue bueno o malo vs el objetivo real.\n"
+        "- SÍ menciona problemas de calidad de anuncios si los hay.\n"
+        "- SÍ correlaciona Ads + GA4 + corte de caja en una sola oración.\n"
     )
 
     _prompt = (
@@ -1627,10 +1658,10 @@ def generate_daily_insight(
         + f"{_ads_str}. "
         + f"Web (GA4): {_views} vistas, {_clics_web} clics de intención "
         + f"(pedir: {_pedir}, reservar: {_reservar}). "
-        + f"Corte de caja: {_sheets_str}."
+        + f"Corte de caja: {_sheets_str}{_coms_vs_objetivo}."
         + (_local_str if _local_str else "")
+        + (_quality_str if _quality_str else "")
         + "\n\nEscribe UNA SOLA oración ejecutiva correlacionando estos datos para el dueño. "
-        "Menciona si el canal restaurante, el canal online, o ambos tuvieron buen desempeño. "
         "Sin bullets, sin saltos de línea, sin markdown. Solo la oración."
     )
 
@@ -2298,8 +2329,7 @@ def _build_daily_summary_html(run: dict) -> str:
     else:
         _creative_act_block = '<p style="font-size:12px;color:#16a34a;">✅ Todos los anuncios en buen estado — sin acciones creativas</p>'
 
-    if _quality_findings or _creative_actions_email:
-        _quality_block = f"""
+    _quality_block = f"""
   <tr><td style="padding:14px 20px 6px 20px;">
     <p style="margin:0 0 8px 0;font-size:12px;font-weight:bold;color:#6b7280;
               text-transform:uppercase;letter-spacing:0.5px;">🎨 Salud de Anuncios y Calidad</p>
@@ -2309,8 +2339,6 @@ def _build_daily_summary_html(run: dict) -> str:
     <p style="margin:8px 0 4px 0;font-size:11px;font-weight:bold;color:#6b7280;">Acciones Creativas del Día</p>
     {_creative_act_block}
   </td></tr>"""
-    else:
-        _quality_block = ""
 
     # ── GA4: Movimiento en la Web (24h) — tabla siempre visible ─────────────────
     def _ga4_val(v: int) -> str:
@@ -2721,8 +2749,8 @@ def _build_daily_summary_html(run: dict) -> str:
   <!-- SECCIÓN: Salud de Anuncios y Calidad (Fase 6D) -->
   {_quality_block}
 
-  <!-- Separador (solo si hay bloque de calidad) -->
-  {'<tr><td style="padding:8px 20px 0 20px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>' if _quality_block else ''}
+  <!-- Separador -->
+  <tr><td style="padding:8px 20px 0 20px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>
 
   <!-- ¿Qué significa esto para mí hoy? -->
   <tr>

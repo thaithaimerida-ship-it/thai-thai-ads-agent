@@ -33,11 +33,11 @@ BUDGET_CHANGE_MAX_PCT_HIGH_RISK = 40.0
 
 # Presupuesto mensual total de Google Ads (MXN).
 # El agente verifica que ninguna auto-ejecución lo supere antes de ejecutar.
-MONTHLY_ADS_BUDGET_MXN = 8_000.0
+MONTHLY_ADS_BUDGET_MXN = 10_000.0
 
 # Presupuesto diario objetivo (MXN) — referencia para escalar proporcionalmente.
-# 8000 / 30 = 266.67 → redondeado a 267.
-DAILY_ADS_BUDGET_TARGET_MXN = 267.0
+# 10000 / 30 = 333.33 → redondeado a 333.
+DAILY_ADS_BUDGET_TARGET_MXN = 333.0
 
 # CPA máximo permitido antes de que el agente considere una keyword como desperdicio
 # Se combina con KEYWORD_MIN_SPEND_TO_BLOCK

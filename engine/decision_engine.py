@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _MAX_CHANGE_PCT   = 20.0   # máximo ±% por día
 _MIN_BUDGET_MXN   = 20.0   # presupuesto diario mínimo
 _MIN_CONFIDENCE   = 70     # confianza mínima para ejecutar
-_MONTHLY_CAP_MXN  = 8_000.0
+_MONTHLY_CAP_MXN  = 10_000.0
 
 
 def get_budget_decisions(
@@ -240,7 +240,7 @@ DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
         quality_str = "\n".join(_qlines) if _qlines else "  (sin findings)"
 
     return f"""Eres el agente de optimización publicitaria de Thai Thai, restaurante tailandés en Mérida.
-Presupuesto mensual Google Ads: $8,000 MXN. Objetivo: maximizar comensales + pedidos rentables.
+Presupuesto mensual Google Ads: $10,000 MXN. Objetivo: maximizar comensales + pedidos rentables.
 
 FILOSOFÍA DE DECISIÓN:
 - Realidad > Google Ads: los datos de Sheets (ventas reales, comensales) prevalecen sobre métricas de Ads.
@@ -274,7 +274,7 @@ Si la web no convierte, escalar presupuesto no sirve.
 ════════════════════════════════════════════════════════
 BLOQUE 3 — RENDIMIENTO PUBLICITARIO
 Fuente: Google Ads API
-Gasto total período: ${total_ads_spend:,.0f} MXN · Proyección mensual: ${monthly_proj:,.0f} MXN · Techo: $8,000 MXN
+Gasto total período: ${total_ads_spend:,.0f} MXN · Proyección mensual: ${monthly_proj:,.0f} MXN · Techo: $10,000 MXN
 ════════════════════════════════════════════════════════
 {campaigns_str}
 
@@ -296,7 +296,7 @@ Analiza todos los datos y decide para cada campaña activa:
 REGLAS DURAS (no negociables):
 1. Nunca cambiar más de 20% en un día (ni subir ni bajar)
 2. Nunca bajar a menos de $20 MXN/día
-3. El gasto mensual total proyectado no puede superar $8,000 MXN
+3. El gasto mensual total proyectado no puede superar $10,000 MXN
 4. Campaña Local con 0 conversiones en Ads NO es señal negativa si hay comensales reales
 5. ROI de Delivery se calcula con el bruto de plataformas (Cortes_de_Caja col H)
 6. Si no tienes evidencia suficiente para una campaña, usa "hold"

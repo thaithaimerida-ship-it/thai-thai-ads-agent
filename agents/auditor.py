@@ -2247,6 +2247,8 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     ga4_data=_run_summary.get("ga4_web"),
                     sheets_data=_run_summary.get("ventas_ayer"),
                     local_data=_local_data_for_insight,
+                    quality_findings=_run_summary.get("quality_creative_findings"),
+                    creative_actions=_run_summary.get("creative_actions"),
                 )
             except Exception as _insight_exc:
                 logger.warning("agent_insight: no disponible — %s", _insight_exc)

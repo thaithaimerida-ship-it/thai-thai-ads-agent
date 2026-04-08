@@ -1475,7 +1475,7 @@ def fetch_ad_health(client, customer_id: str) -> list:
     query = """
         SELECT
           ad_group_ad.ad.id,
-          ad_group_ad.ad.responsive_search_ad.ad_strength,
+          ad_group_ad.ad_strength,
           ad_group_ad.status,
           ad_group_ad.policy_summary.approval_status,
           ad_group_ad.ad.responsive_search_ad.headlines,
@@ -1493,14 +1493,13 @@ def fetch_ad_health(client, customer_id: str) -> list:
         for row in ga_service.search(customer_id=customer_id, query=query):
             aga = row.ad_group_ad
             ad  = aga.ad
+            strength_val = int(aga.ad_strength) if aga.ad_strength else 0
+            ad_strength  = _STRENGTH_MAP.get(strength_val)
             try:
-                rsa = ad.responsive_search_ad
-                strength_val = int(rsa.ad_strength) if rsa.ad_strength else 0
-                ad_strength  = _STRENGTH_MAP.get(strength_val)
+                rsa          = ad.responsive_search_ad
                 headlines    = [h.text for h in rsa.headlines if h.text]
                 descriptions = [d.text for d in rsa.descriptions if d.text]
             except Exception:
-                ad_strength  = None
                 headlines    = []
                 descriptions = []
 
@@ -1539,6 +1538,7 @@ def fetch_impression_share(client, customer_id: str) -> list:
           metrics.search_budget_lost_impression_share
         FROM campaign
         WHERE campaign.status = 'ENABLED'
+          AND campaign.advertising_channel_type = 'SEARCH'
           AND segments.date DURING LAST_7_DAYS
     """
     try:

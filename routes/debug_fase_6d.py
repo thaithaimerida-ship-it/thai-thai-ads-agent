@@ -1,14 +1,12 @@
 """
 Ruta de diagnóstico temporal — GET /debug-fase-6d
 
-Ejecuta las 3 queries GAQL de Fase 6D sin try/except para exponer
-errores reales. Solo para debugging — no usar en producción.
-
-fetch_keyword_quality_scores: se llama directamente (ya lanza si falla).
-fetch_ad_health y fetch_impression_share: lógica inlineada sin try/except
-para ver el error crudo de la API en lugar del [] silencioso.
+Ejecuta las 3 queries GAQL de Fase 6D de forma independiente.
+Cada una tiene su propio try/except — si una falla, las otras siguen.
+Retorna el resultado o el error individual de cada query.
 """
 import os
+import traceback
 from fastapi import APIRouter
 
 router = APIRouter(tags=["debug"])
@@ -17,11 +15,11 @@ _STRENGTH_MAP = {0: None, 1: "POOR", 2: "AVERAGE", 3: "GOOD", 4: "EXCELLENT", 5:
 
 
 def _debug_ad_health(client, customer_id: str) -> list:
-    """fetch_ad_health sin try/except — muestra el error real."""
+    """fetch_ad_health sin try/except externo — muestra el error real de GAQL."""
     query = """
         SELECT
           ad_group_ad.ad.id,
-          ad_group_ad.ad.responsive_search_ad.ad_strength,
+          ad_group_ad.ad_strength,
           ad_group_ad.status,
           ad_group_ad.policy_summary.approval_status,
           ad_group_ad.ad.responsive_search_ad.headlines,
@@ -38,15 +36,14 @@ def _debug_ad_health(client, customer_id: str) -> list:
     for row in ga_service.search(customer_id=customer_id, query=query):
         aga = row.ad_group_ad
         ad  = aga.ad
+        strength_val = int(aga.ad_strength) if aga.ad_strength else 0
+        ad_strength  = _STRENGTH_MAP.get(strength_val)
         try:
             rsa          = ad.responsive_search_ad
-            strength_val = int(rsa.ad_strength) if rsa.ad_strength else 0
-            ad_strength  = _STRENGTH_MAP.get(strength_val)
             headlines    = [h.text for h in rsa.headlines if h.text]
             descriptions = [d.text for d in rsa.descriptions if d.text]
         except Exception:
-            # Smart Campaigns no tienen RSA — esto es esperado por fila, no un error GAQL
-            ad_strength  = None
+            # Smart Campaigns no tienen RSA — esperado por fila, no error GAQL
             headlines    = []
             descriptions = []
 
@@ -69,7 +66,7 @@ def _debug_ad_health(client, customer_id: str) -> list:
 
 
 def _debug_impression_share(client, customer_id: str) -> list:
-    """fetch_impression_share sin try/except — muestra el error real."""
+    """fetch_impression_share sin try/except externo — muestra el error real de GAQL."""
     query = """
         SELECT
           campaign.id, campaign.name,
@@ -79,6 +76,7 @@ def _debug_impression_share(client, customer_id: str) -> list:
           metrics.search_budget_lost_impression_share
         FROM campaign
         WHERE campaign.status = 'ENABLED'
+          AND campaign.advertising_channel_type = 'SEARCH'
           AND segments.date DURING LAST_7_DAYS
     """
     ga_service = client.get_service("GoogleAdsService")
@@ -98,27 +96,33 @@ def _debug_impression_share(client, customer_id: str) -> list:
 
 @router.get("/debug-fase-6d")
 def debug_fase_6d():
+    from engine.ads_client import get_ads_client, fetch_keyword_quality_scores
+
+    client      = get_ads_client()
+    customer_id = os.environ["GOOGLE_ADS_TARGET_CUSTOMER_ID"]
+
+    # Cada query es independiente — si una falla, las otras siguen
     try:
-        from engine.ads_client import get_ads_client, fetch_keyword_quality_scores
-
-        client      = get_ads_client()
-        customer_id = os.environ["GOOGLE_ADS_TARGET_CUSTOMER_ID"]
-
-        kq  = fetch_keyword_quality_scores(client, customer_id)
-        ah  = _debug_ad_health(client, customer_id)
-        ims = _debug_impression_share(client, customer_id)
-
-        return {
-            "customer_id":            customer_id,
-            "keyword_quality_scores": kq,
-            "ad_health":              ah,
-            "impression_share":       ims,
-            "counts": {
-                "keyword_quality_scores": len(kq),
-                "ad_health":              len(ah),
-                "impression_share":       len(ims),
-            },
-        }
+        kq = fetch_keyword_quality_scores(client, customer_id)
+        kq_result = {"data": kq, "count": len(kq)}
     except Exception as e:
-        import traceback
-        return {"error": str(e), "traceback": traceback.format_exc()}
+        kq_result = {"error": str(e), "traceback": traceback.format_exc()}
+
+    try:
+        ah = _debug_ad_health(client, customer_id)
+        ah_result = {"data": ah, "count": len(ah)}
+    except Exception as e:
+        ah_result = {"error": str(e), "traceback": traceback.format_exc()}
+
+    try:
+        ims = _debug_impression_share(client, customer_id)
+        ims_result = {"data": ims, "count": len(ims)}
+    except Exception as e:
+        ims_result = {"error": str(e), "traceback": traceback.format_exc()}
+
+    return {
+        "customer_id":            customer_id,
+        "keyword_quality_scores": kq_result,
+        "ad_health":              ah_result,
+        "impression_share":       ims_result,
+    }
