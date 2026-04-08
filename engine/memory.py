@@ -928,3 +928,71 @@ def get_memory_system() -> MemorySystem:
     if _memory_system is None:
         _memory_system = MemorySystem()
     return _memory_system
+
+
+# ── Memoria de acciones recientes para contexto de Haiku ──────────────────────
+
+_BUDGET_ACTION_TYPES = (
+    "budget_auto_executed",
+    "budget_scale_auto_executed",
+    "ai_budget_decision",
+    "budget_action",
+)
+
+
+def get_recent_actions_with_outcomes(days: int = 2) -> list:
+    """
+    Retorna acciones de presupuesto ejecutadas en las últimas N días.
+    Usado para dar contexto de memoria a Haiku antes de cada decisión.
+
+    Args:
+        days: Ventana de tiempo en días (default 2 = últimas 48h).
+
+    Returns:
+        Lista de hasta 10 dicts con:
+        {action_type, campaign_name, keyword, evidence, created_at, decision}
+        Si falla la consulta: lista vacía (nunca lanza excepción).
+    """
+    try:
+        db_path = get_db_path()
+        placeholders = ",".join("?" * len(_BUDGET_ACTION_TYPES))
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"""
+                SELECT action_type, campaign_name, keyword,
+                       evidence_json, created_at, decision
+                FROM autonomous_decisions
+                WHERE action_type IN ({placeholders})
+                  AND decision IN ('auto_executed', 'approved', 'executed')
+                  AND created_at >= datetime('now', ? || ' days')
+                ORDER BY created_at DESC
+                LIMIT 10
+                """,
+                (*_BUDGET_ACTION_TYPES, f"-{days}"),
+            ).fetchall()
+
+        result = []
+        for row in rows:
+            evidence: dict = {}
+            if row["evidence_json"]:
+                try:
+                    evidence = json.loads(row["evidence_json"])
+                except Exception:
+                    pass
+            result.append({
+                "action_type":   row["action_type"],
+                "campaign_name": row["campaign_name"] or "—",
+                "keyword":       row["keyword"],
+                "evidence":      evidence,
+                "created_at":    row["created_at"],
+                "decision":      row["decision"],
+            })
+        return result
+
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "get_recent_actions_with_outcomes: error consultando SQLite — %s", exc
+        )
+        return []

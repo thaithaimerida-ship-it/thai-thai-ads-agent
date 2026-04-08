@@ -1456,6 +1456,37 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             results["quality_creative_findings"] = []
             results["creative_actions"] = []
 
+        # ── Memoria de acciones recientes (últimas 48h) para Haiku ──────────
+        _recent_actions_memory: list = []
+        try:
+            from engine.memory import get_recent_actions_with_outcomes as _get_recent_budget_actions
+            _raw_budget_actions = _get_recent_budget_actions(days=2)
+            # Índice de campañas actuales por nombre (lowercase) para calcular deltas
+            _camp_by_name_mem = {
+                c.get("name", "").lower(): c for c in campaigns
+            }
+            for _ba_mem in _raw_budget_actions:
+                _ev_mem   = _ba_mem.get("evidence", {})
+                _cname_m  = _ba_mem.get("campaign_name", "—")
+                _camp_now = _camp_by_name_mem.get(_cname_m.lower(), {})
+                # Métricas actuales de la campaña
+                _spend_now = float(_camp_now.get("cost_micros", 0)) / 1_000_000
+                _conv_now  = float(_camp_now.get("conversions", 0))
+                _cpa_now   = round(_spend_now / _conv_now, 1) if _conv_now > 0 else None
+                _budget_now = float(_camp_now.get("daily_budget_mxn") or 0)
+                _recent_actions_memory.append({
+                    **_ba_mem,
+                    "current_spend_mxn":   round(_spend_now, 1),
+                    "current_cpa":         _cpa_now,
+                    "current_conversions": _conv_now,
+                    "current_budget_mxn":  _budget_now,
+                    "old_budget_mxn":      _ev_mem.get("old_budget_mxn"),
+                    "new_budget_mxn_set":  _ev_mem.get("new_budget_mxn"),
+                })
+        except Exception as _mem_exc:
+            logger.warning("Fase 7: memoria de acciones no disponible — %s", _mem_exc)
+            _recent_actions_memory = []
+
         # ====================================================================
         # FASE 7 — DECISIONES DE PRESUPUESTO CON AI (Claude Haiku)
         #
@@ -1505,6 +1536,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     negocio_data=_negocio_data_6x,
                     ga4_data=_ga4_for_ai,
                     quality_findings=_quality_creative_findings,
+                    recent_actions=_recent_actions_memory or None,
                 )
 
                 if ai_decisions:

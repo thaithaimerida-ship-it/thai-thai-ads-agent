@@ -32,6 +32,7 @@ def get_budget_decisions(
     negocio_data: dict,
     ga4_data: dict,
     quality_findings: list = None,
+    recent_actions: list = None,
 ) -> list:
     """
     Envía toda la data a Claude Haiku y recibe decisiones estructuradas de presupuesto.
@@ -70,7 +71,8 @@ def get_budget_decisions(
 
     prompt = _build_decision_prompt(campaigns, negocio_data or {}, ga4_data or {},
                                     occupancy=_occupancy,
-                                    quality_findings=quality_findings)
+                                    quality_findings=quality_findings,
+                                    recent_actions=recent_actions)
 
     try:
         import anthropic
@@ -91,7 +93,8 @@ def get_budget_decisions(
 # ── Construcción del prompt ────────────────────────────────────────────────────
 
 def _build_decision_prompt(campaigns: list, negocio_data: dict, ga4_data: dict,
-                           occupancy: dict = None, quality_findings: list = None) -> str:
+                           occupancy: dict = None, quality_findings: list = None,
+                           recent_actions: list = None) -> str:
     # ── Datos de campañas ──────────────────────────────────────────────────────
     camps_lines = []
     for c in campaigns:
@@ -174,6 +177,56 @@ DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
 - Siempre considera el CPA: si el CPA es malo, NO subas presupuesto aunque sea día bajo.
 - Esta directiva NO aplica a campañas de Delivery ni Reservaciones — esas se optimizan por CPA solamente."""
 
+    # ── Memoria de acciones recientes (últimas 48h) ───────────────────────────
+    memory_str = "  No hubo cambios en las últimas 48h — ciclo estable."
+    if recent_actions:
+        _mem_lines = []
+        for _a in recent_actions[:10]:
+            _ev      = _a.get("evidence", {})
+            _cname_p = _a.get("campaign_name", "—")
+            _atype   = _a.get("action_type", "")
+            _old_b   = _a.get("old_budget_mxn") or _ev.get("old_budget_mxn")
+            _new_b   = _a.get("new_budget_mxn_set") or _ev.get("new_budget_mxn")
+            _spend   = _a.get("current_spend_mxn")
+            _cpa     = _a.get("current_cpa")
+            _conv    = _a.get("current_conversions", 0)
+            _reason  = str(_ev.get("reason", "") or _ev.get("signal", ""))[:80]
+
+            # Verbo de acción
+            if "scale" in _atype:
+                _verb = "Escalaste"
+            elif "reduce" in str(_ev.get("action", "")) or (
+                _old_b and _new_b and _new_b < _old_b
+            ):
+                _verb = "Redujiste"
+            else:
+                _verb = "Ajustaste"
+
+            # Descripción del cambio de presupuesto
+            if _old_b and _new_b:
+                _bstr = f"presupuesto ${_old_b:.0f}→${_new_b:.0f}/día"
+            elif _new_b:
+                _bstr = f"presupuesto →${_new_b:.0f}/día"
+            else:
+                _bstr = "presupuesto"
+
+            # Resultado actual
+            _cpa_str = f"CPA ${_cpa}" if _cpa else "CPA N/A"
+            _rstr = (
+                f"→ Ahora: gasto ${_spend:.0f}, {_cpa_str}, {_conv:.0f} conv."
+                if _spend is not None else ""
+            )
+
+            _line = f"  - {_verb} {_bstr} en \"{_cname_p}\""
+            if _reason:
+                _line += f". Motivo: {_reason}"
+            if _rstr:
+                _line += f". {_rstr}"
+            _mem_lines.append(_line)
+
+        if _mem_lines:
+            memory_str = "\n".join(_mem_lines)
+
     # ── Calidad y Visibilidad (Fase 6D findings) ──────────────────────────────
     quality_str = "  (sin datos de calidad disponibles)"
     if quality_findings:
@@ -194,6 +247,14 @@ FILOSOFÍA DE DECISIÓN:
 - Diagnóstico antes de acción: identifica la causa raíz antes de mover presupuesto. Si el problema es el anuncio o la landing, no es problema de presupuesto.
 - Conquista de mercado: si hay Impression Share perdida por presupuesto (LOST_IS_BUDGET_HIGH) y el canal es rentable, escalar tiene sentido.
 - Eficiencia: cada peso debe ir donde genera más valor real al negocio, no solo donde Google reporta más clics.
+
+════════════════════════════════════════════════════════
+MEMORIA — QUÉ HICISTE AYER Y QUÉ PASÓ
+Usa esto para aprender de tus decisiones anteriores.
+No repitas cambios que ya no funcionaron. Si algo
+funcionó bien, puedes seguir en esa dirección.
+════════════════════════════════════════════════════════
+{memory_str}
 
 ════════════════════════════════════════════════════════
 BLOQUE 1 — REALIDAD DEL NEGOCIO ⭐ MÁXIMA PRIORIDAD
