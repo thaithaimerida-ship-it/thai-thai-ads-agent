@@ -1488,6 +1488,58 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _recent_actions_memory = []
 
         # ====================================================================
+        # FASE BUDGET CAP — Control de gasto mensual real
+        # ====================================================================
+        _monthly_budget_status: dict = {}
+        try:
+            from engine.ads_client import fetch_monthly_spend as _fetch_monthly_spend
+            from calendar import monthrange as _monthrange
+            from config.agent_config import MONTHLY_ADS_BUDGET_MXN as _monthly_cap_bc
+
+            _now_bc        = datetime.now()
+            _days_in_month = _monthrange(_now_bc.year, _now_bc.month)[1]
+            _days_elapsed  = _now_bc.day
+            _days_remaining = _days_in_month - _days_elapsed + 1  # incluye hoy
+
+            _monthly_spend_so_far = _fetch_monthly_spend(client, target_id)
+            _remaining_budget     = max(_monthly_cap_bc - _monthly_spend_so_far, 0.0)
+            _daily_allowed        = round(_remaining_budget / _days_remaining, 2) if _days_remaining > 0 else 0.0
+            _spend_yesterday      = float(_ads_24h.get("spend_mxn", 0) or 0)
+            _pct_consumed         = round(_monthly_spend_so_far / _monthly_cap_bc * 100, 1) if _monthly_cap_bc > 0 else 0.0
+
+            # SOBRE_RITMO: gasto de ayer > presupuesto diario permitido
+            # EN_RITMO:    dentro de ±15% del permitido
+            # BAJO_RITMO:  gasto de ayer < 85% del permitido
+            if _daily_allowed > 0 and _spend_yesterday > _daily_allowed * 1.05:
+                _budget_pace = "SOBRE_RITMO"
+            elif _daily_allowed > 0 and _spend_yesterday < _daily_allowed * 0.85:
+                _budget_pace = "BAJO_RITMO"
+            else:
+                _budget_pace = "EN_RITMO"
+
+            _monthly_budget_status = {
+                "monthly_cap":       _monthly_cap_bc,
+                "spend_so_far":      _monthly_spend_so_far,
+                "remaining":         _remaining_budget,
+                "daily_allowed":     _daily_allowed,
+                "spend_yesterday":   _spend_yesterday,
+                "days_elapsed":      _days_elapsed,
+                "days_in_month":     _days_in_month,
+                "days_remaining":    _days_remaining,
+                "pct_consumed":      _pct_consumed,
+                "pace":              _budget_pace,
+            }
+            results["monthly_budget_status"] = _monthly_budget_status
+            logger.info(
+                "Fase Budget Cap: %s — acumulado $%.0f / $%.0f (%.1f%%) · diario permitido $%.0f · ayer $%.0f",
+                _budget_pace, _monthly_spend_so_far, _monthly_cap_bc,
+                _pct_consumed, _daily_allowed, _spend_yesterday,
+            )
+        except Exception as _bc_exc:
+            logger.warning("Fase Budget Cap: error no crítico — %s", _bc_exc)
+            results["monthly_budget_status"] = {}
+
+        # ====================================================================
         # FASE 7 — DECISIONES DE PRESUPUESTO CON AI (Claude Haiku)
         #
         # Haiku recibe toda la data disponible (Ads + GA4 + Sheets) y decide
@@ -1496,7 +1548,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         # Guardrails (aplicados en decision_engine.py + aquí):
         #   - Cambio máximo ±20% por día
         #   - Confianza mínima 70% para ejecutar
-        #   - Techo mensual $8,000 MXN
+        #   - Techo mensual $10,000 MXN
         #   - Máximo 1 decisión por campaña por ciclo
         #   - JSON inválido de Haiku → hold (silencioso)
         #
@@ -1537,6 +1589,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     ga4_data=_ga4_for_ai,
                     quality_findings=_quality_creative_findings,
                     recent_actions=_recent_actions_memory or None,
+                    monthly_budget_status=_monthly_budget_status or None,
                 )
 
                 if ai_decisions:
@@ -2183,6 +2236,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _run_summary["landing_response_ms"]        = _landing_response_ms
             _run_summary["quality_creative_findings"]  = results.get("quality_creative_findings", [])
             _run_summary["creative_actions"]           = results.get("creative_actions", [])
+            _run_summary["monthly_budget_status"]      = results.get("monthly_budget_status", {})
             # Smart audit data completa — para mostrar issues inline en el correo diario
             # (no retener hasta el reporte semanal del lunes)
             _run_summary["smart_audit"]    = results.get("smart_audit")

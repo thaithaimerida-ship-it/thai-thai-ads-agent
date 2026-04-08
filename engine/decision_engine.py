@@ -33,6 +33,7 @@ def get_budget_decisions(
     ga4_data: dict,
     quality_findings: list = None,
     recent_actions: list = None,
+    monthly_budget_status: dict = None,
 ) -> list:
     """
     Envía toda la data a Claude Haiku y recibe decisiones estructuradas de presupuesto.
@@ -72,7 +73,8 @@ def get_budget_decisions(
     prompt = _build_decision_prompt(campaigns, negocio_data or {}, ga4_data or {},
                                     occupancy=_occupancy,
                                     quality_findings=quality_findings,
-                                    recent_actions=recent_actions)
+                                    recent_actions=recent_actions,
+                                    monthly_budget_status=monthly_budget_status)
 
     try:
         import anthropic
@@ -84,7 +86,7 @@ def get_budget_decisions(
         )
         text = response.content[0].text
         logger.debug("Decision engine raw response: %s", text[:500])
-        return _parse_decisions(text, campaigns)
+        return _parse_decisions(text, campaigns, monthly_budget_status=monthly_budget_status)
     except Exception as e:
         logger.error("Decision engine error: %s", e)
         return []
@@ -94,7 +96,8 @@ def get_budget_decisions(
 
 def _build_decision_prompt(campaigns: list, negocio_data: dict, ga4_data: dict,
                            occupancy: dict = None, quality_findings: list = None,
-                           recent_actions: list = None) -> str:
+                           recent_actions: list = None,
+                           monthly_budget_status: dict = None) -> str:
     # ── Datos de campañas ──────────────────────────────────────────────────────
     camps_lines = []
     for c in campaigns:
@@ -227,6 +230,29 @@ DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
         if _mem_lines:
             memory_str = "\n".join(_mem_lines)
 
+    # ── Control de presupuesto mensual ────────────────────────────────────────
+    monthly_cap_str = ""
+    _mbs = monthly_budget_status or {}
+    if _mbs.get("pace"):
+        _pace        = _mbs["pace"]
+        _pace_emoji  = {"SOBRE_RITMO": "🔴", "EN_RITMO": "🟢", "BAJO_RITMO": "🟡"}.get(_pace, "")
+        _pace_rule   = (
+            "\n⚠️  REGLA ABSOLUTA: Estado SOBRE_RITMO — DEBES reducir presupuestos. "
+            "El techo mensual es más importante que cualquier oportunidad de escalar."
+            if _pace == "SOBRE_RITMO" else ""
+        )
+        monthly_cap_str = (
+            f"\nCONTROL DE PRESUPUESTO MENSUAL:\n"
+            f"  - Techo mensual: ${_mbs.get('monthly_cap', 10000):,.0f} MXN\n"
+            f"  - Gasto acumulado este mes: ${_mbs.get('spend_so_far', 0):,.0f} MXN "
+            f"({_mbs.get('pct_consumed', 0):.1f}% del techo)\n"
+            f"  - Días transcurridos: {_mbs.get('days_elapsed', 0)} / {_mbs.get('days_in_month', 30)}\n"
+            f"  - Presupuesto restante: ${_mbs.get('remaining', 0):,.0f} MXN\n"
+            f"  - Presupuesto diario permitido: ${_mbs.get('daily_allowed', 0):,.0f} MXN/día\n"
+            f"  - Gasto de ayer: ${_mbs.get('spend_yesterday', 0):,.0f} MXN\n"
+            f"  - ESTADO: {_pace_emoji} {_pace}{_pace_rule}"
+        )
+
     # ── Calidad y Visibilidad (Fase 6D findings) ──────────────────────────────
     quality_str = "  (sin datos de calidad disponibles)"
     if quality_findings:
@@ -277,6 +303,7 @@ Fuente: Google Ads API (datos de AYER — 1 día)
 IMPORTANTE: Sheets = 7 días acumulados. Ads = solo AYER (1 día).
 NO compares montos directamente. Usa ROI como ratio, no diferencia absoluta.
 Gasto ayer: ${total_ads_spend:,.0f} MXN · Proyección mensual: ${monthly_proj:,.0f} MXN · Techo: $10,000 MXN
+{monthly_cap_str}
 ════════════════════════════════════════════════════════
 {campaigns_str}
 
@@ -331,7 +358,7 @@ Formato de respuesta:
 
 # ── Parser y validador de respuesta ──────────────────────────────────────────
 
-def _parse_decisions(text: str, campaigns: list) -> list:
+def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = None) -> list:
     """
     Extrae y valida las decisiones del JSON retornado por Haiku.
     Aplica guardrails de seguridad sobre cada decisión.
@@ -380,6 +407,20 @@ def _parse_decisions(text: str, campaigns: list) -> list:
             if action not in ("scale", "reduce", "hold"):
                 logger.debug("Decision engine: action inválida '%s' → hold", action)
                 action = "hold"
+
+            # Guardrail duro: SOBRE_RITMO → bloquear cualquier scale
+            _mbs_gr = monthly_budget_status or {}
+            if action == "scale" and _mbs_gr.get("pace") == "SOBRE_RITMO":
+                logger.warning(
+                    "Decision engine: %s — scale rechazado por guardrail SOBRE_RITMO (acumulado $%.0f / $%.0f)",
+                    campaign_name,
+                    _mbs_gr.get("spend_so_far", 0),
+                    _mbs_gr.get("monthly_cap", 10000),
+                )
+                action     = "hold"
+                change_pct = 0
+                reason     = "Rechazado por guardrail: gasto mensual sobre ritmo."
+                confidence = 100  # certeza total — es una regla dura
 
             if action == "hold":
                 # hold no necesita más validación

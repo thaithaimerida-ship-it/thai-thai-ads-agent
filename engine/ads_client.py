@@ -1558,6 +1558,29 @@ def fetch_impression_share(client, customer_id: str) -> list:
         return []
 
 
+def fetch_monthly_spend(client, customer_id: str) -> float:
+    """
+    Retorna el gasto total acumulado del mes en curso en MXN.
+    Suma cost_micros de todas las campañas activas en THIS_MONTH.
+    Retorna 0.0 si falla — nunca lanza excepción.
+    """
+    query = """
+        SELECT metrics.cost_micros
+        FROM campaign
+        WHERE campaign.status = 'ENABLED'
+          AND segments.date DURING THIS_MONTH
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        total_micros = 0
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            total_micros += row.metrics.cost_micros
+        return round(total_micros / 1_000_000, 2)
+    except Exception as e:
+        _ads_logger.warning("fetch_monthly_spend: %s", e)
+        return 0.0
+
+
 def update_rsa_headlines(client, customer_id: str, ad_group_resource: str,
                          ad_id: str, new_headlines: list) -> dict:
     """

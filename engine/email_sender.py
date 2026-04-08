@@ -1715,6 +1715,7 @@ def _build_daily_summary_html(run: dict) -> str:
     geo_unv  = detail.get("geo_unverified", 0)
 
     # Sección 1 — Salud de Canales
+    _monthly_budget_status = run.get("monthly_budget_status", {}) or {}
     _ads_24h      = run.get("ads_24h", {})
     _ads_spend    = float(_ads_24h.get("spend_mxn", 0) or 0)
     _ads_conv     = float(_ads_24h.get("conversions", 0) or 0)
@@ -2105,6 +2106,25 @@ def _build_daily_summary_html(run: dict) -> str:
         else ("Sin gasto" if _ads_spend == 0 else "Sin conversiones")
     )
 
+    # Presupuesto mensual card
+    _mbs_pace      = _monthly_budget_status.get("pace", "")
+    _mbs_spent     = _monthly_budget_status.get("spend_so_far", 0)
+    _mbs_cap       = _monthly_budget_status.get("monthly_cap", 10000)
+    _mbs_pct       = _monthly_budget_status.get("pct_consumed", 0)
+    _mbs_remaining = _monthly_budget_status.get("days_remaining", 0)
+    _mbs_allowed   = _monthly_budget_status.get("daily_allowed", 0)
+    _pace_colors   = {"SOBRE_RITMO": "#dc2626", "EN_RITMO": "#16a34a", "BAJO_RITMO": "#d97706"}
+    _mbs_color     = _pace_colors.get(_mbs_pace, "#6b7280")
+    if _mbs_pace:
+        _mbs_val = (
+            f"<strong>${_mbs_spent:,.0f}</strong> / ${_mbs_cap:,.0f}"
+            f" <span style='color:{_mbs_color};font-size:10px;'>({_mbs_pct:.0f}%)</span>"
+        )
+        _mbs_sub = f"Quedan {_mbs_remaining}d · Permitido: ${_mbs_allowed:,.0f}/día"
+    else:
+        _mbs_val = "<strong>—</strong>"
+        _mbs_sub = "Sin datos de gasto mensual"
+
     # Landing card — diagnóstico completo
     if landing in (None, "ok"):
         _land_icon, _land_label, _land_color = "✅", "OK", "#16a34a"
@@ -2232,6 +2252,8 @@ def _build_daily_summary_html(run: dict) -> str:
         '<table width="100%" cellpadding="0" cellspacing="4">'
         '<tr>'
         + _card("📢 Google Ads 24h", _ads_val, _ads_sub)
+        + '<td style="width:4px;"></td>'
+        + _card("📅 Presupuesto Mes", _mbs_val, _mbs_sub)
         + '<td style="width:4px;"></td>'
         + _card("🌐 Landing", _land_val, _land_sub)
         + '<td style="width:4px;"></td>'
