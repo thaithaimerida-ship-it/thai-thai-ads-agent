@@ -338,6 +338,8 @@ REGLAS DE DIAGNÓSTICO CAUSAL (calidad y visibilidad):
 11. Si una campaña tiene QS_LANDING_WEAK → "hold" (el problema está en la landing page)
 12. Si una campaña tiene QS_LOW → mencionar en reason que el Quality Score necesita mejora
 13. OBLIGATORIO: cada decisión DEBE estar respaldada por datos de AL MENOS 3 fuentes distintas. En "reason" citar las fuentes usadas (ej: "Sheets: 42 comensales, GA4: 0 clics pedir, Ads: CPA $85"). Llenar "sources" con la lista de fuentes consultadas.
+14. RECORTE INTELIGENTE (aplica cuando SOBRE_RITMO o necesites reducir): primero recortar campañas con 0 conversiones en los últimos 7 días, luego las de CPA > cpa_max. NUNCA recortar campañas con CPA < cpa_ideal. Si tras recortar hay margen de presupuesto disponible, considera redistribuirlo a campañas con LOST_IS_BUDGET_HIGH y CPA sano.
+15. PENSAMIENTO DE PORTAFOLIO: evalúa las campañas en conjunto, no de forma aislada. Si una campaña gasta en exceso con mal ROI y otra tiene LOST_IS_BUDGET_HIGH con CPA sano, proponer "reduce" en la primera y "scale" en la segunda en el mismo ciclo (net = $0 o mejora de ROI total). Una buena decisión de portafolio puede tener acciones opuestas al mismo tiempo.
 
 Formato de respuesta:
 {{
@@ -397,7 +399,7 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
             campaign_name= str(d.get("campaign_name", ""))
             new_budget   = float(d.get("new_budget_mxn", 0))
             change_pct   = float(d.get("change_pct", 0))
-            reason       = str(d.get("reason", ""))[:300]
+            reason       = str(d.get("reason", ""))[:500]
             confidence   = int(d.get("confidence", 0))
             sources      = d.get("sources", [])
             if not isinstance(sources, list):

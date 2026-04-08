@@ -485,9 +485,11 @@ async def approve_proposal(d: str, action: str):
                     )
                     return _html(
                         "Keyword protegida",
-                        f"<p>La keyword <strong>\"{keyword}\"</strong> está en la whitelist estratégica "
-                        f"y <strong>no puede bloquearse</strong> desde este panel.</p>"
-                        f"<p>Si deseas removerla de la whitelist, edita <code>config/agent_config.py → PROTECTED_KEYWORDS</code>.</p>",
+                        f"<p>La keyword <strong>\"{keyword}\"</strong> es estratégica para tu negocio "
+                        f"(marca/nombre del restaurante). <strong>NO se debe bloquear</strong> aunque tenga pocas conversiones "
+                        f"— atrae tráfico de marca valioso que no se refleja como conversión directa.</p>"
+                        f"<p>Si estás seguro de bloquearla, edita "
+                        f"<code>config/agent_config.py → PROTECTED_KEYWORDS</code>.</p>",
                         "#e67e22",
                     )
             except Exception as exc:

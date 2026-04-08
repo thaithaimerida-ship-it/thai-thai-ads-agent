@@ -1744,6 +1744,7 @@ def _build_daily_summary_html(run: dict) -> str:
     _agent_insight           = run.get("agent_insight")
     _quality_findings        = run.get("quality_creative_findings", []) or []
     _creative_actions_email  = run.get("creative_actions", []) or []
+    _paused_campaigns_email  = run.get("paused_campaigns", []) or []
 
     _smart_issues_email = detail.get("smart_issues", 0)
 
@@ -2383,6 +2384,28 @@ def _build_daily_summary_html(run: dict) -> str:
     else:
         _creative_act_block = '<p style="font-size:12px;color:#16a34a;">✅ Todos los anuncios en buen estado — sin acciones creativas</p>'
 
+    # ── Campañas pausadas ────────────────────────────────────────────────────
+    _paused_block = ""
+    if _paused_campaigns_email:
+        _pc_rows = ""
+        for _pc in _paused_campaigns_email:
+            _pc_name   = str(_pc.get("campaign_name", "—"))
+            _pc_status = str((_pc.get("result") or {}).get("status", "—"))
+            _pc_color  = "#15803d" if _pc_status == "executed" else "#dc2626"
+            _pc_label  = "Pausada ✓" if _pc_status == "executed" else f"Error: {_pc_status}"
+            _pc_rows += (
+                f'<tr style="border-top:1px solid #f0f0f0;">'
+                f'<td style="padding:5px 8px;color:#374151;font-size:12px;">{_pc_name}</td>'
+                f'<td style="text-align:right;padding:5px 8px;font-size:12px;'
+                f'color:{_pc_color};font-weight:bold;">{_pc_label}</td></tr>'
+            )
+        _paused_block = (
+            '<p style="margin:8px 0 4px 0;font-size:11px;font-weight:bold;color:#6b7280;">Campañas Pausadas en este Ciclo</p>'
+            '<table width="100%" style="border-collapse:collapse;font-size:12px;">'
+            + _pc_rows
+            + '</table>'
+        )
+
     _quality_block = f"""
   <tr><td style="padding:14px 20px 6px 20px;">
     <p style="margin:0 0 8px 0;font-size:12px;font-weight:bold;color:#6b7280;
@@ -2392,6 +2415,7 @@ def _build_daily_summary_html(run: dict) -> str:
     {_is_block}
     <p style="margin:8px 0 4px 0;font-size:11px;font-weight:bold;color:#6b7280;">Acciones Creativas del Día</p>
     {_creative_act_block}
+    {_paused_block}
   </td></tr>"""
 
     # ── GA4: Movimiento en la Web (24h) — tabla siempre visible ─────────────────
@@ -2601,6 +2625,14 @@ def _build_daily_summary_html(run: dict) -> str:
     _ai_block = ""
     _ai_executed = [d for d in _ai_decisions if d.get("exec_result", {}).get("status") == "executed"]
 
+    # ── Override de action por coherencia con ejecuciones AI y pendientes ────
+    _ai_reduce_executed = [d for d in _ai_executed if d.get("action") == "reduce"]
+    if _ai_reduce_executed:
+        action = "El agente ya ajustó presupuestos para controlar el gasto mensual."
+    if human_pending > 0:
+        _pending_note = f"Hay {human_pending} keyword(s) esperando tu aprobación en el correo."
+        action = (action + " " + _pending_note).strip() if action not in ("No.", "") else _pending_note
+
     # Línea de contexto del día (ocupación histórica)
     _occ_ctx = run.get("occupancy_context") or {}
     _occ_context_line = ""
@@ -2640,6 +2672,11 @@ def _build_daily_summary_html(run: dict) -> str:
             _d_color   = "#15803d" if _d_action == "scale" else "#dc2626"
             _d_arrow   = "↑" if _d_action == "scale" else "↓"
             _d_conf_color = "#15803d" if _d_conf >= 80 else "#d97706" if _d_conf >= 70 else "#dc2626"
+            _d_budget_str = (
+                f'${_d_old:,.0f} → <strong style="color:{_d_color};">${_d_budget:,.0f}/día</strong>'
+                if _d_old > 0
+                else f'<strong style="color:{_d_color};">→ ${_d_budget:,.0f}/día</strong>'
+            )
             _ai_rows += (
                 f'<tr style="border-bottom:1px solid #f0f0f0;">'
                 f'<td style="padding:10px 0;">'
@@ -2649,7 +2686,7 @@ def _build_daily_summary_html(run: dict) -> str:
                 f'padding:2px 6px;border-radius:3px;font-size:10px;font-weight:bold;">'
                 f'{_d_arrow} {_d_action.upper()}</span></p>'
                 f'<p style="margin:0 0 2px 0;font-size:11px;color:#6b7280;">'
-                f'${_d_old:,.0f} → <strong style="color:{_d_color};">${_d_budget:,.0f}/día</strong>'
+                f'{_d_budget_str}'
                 f' &nbsp;({_d_pct:+.0f}%)'
                 f' &nbsp;·&nbsp; Confianza: <strong style="color:{_d_conf_color};">{_d_conf}%</strong></p>'
                 f'<p style="margin:0 0 0 0;font-size:12px;color:#374151;">{_d_reason}</p>'

@@ -549,6 +549,15 @@ GEO_ALERT_DEDUP_HOURS = 72
 # No hay autoejecución — todo es RISK_PROPOSE, capa de observación pura.
 # ============================================================================
 
+# ============================================================================
+# CAMPAÑAS A PAUSAR EN CADA CICLO DE AUDITORÍA
+# {campaign_id: campaign_name} — el agente las pausa si están ENABLED.
+# Dejar vacío {} para no pausar ninguna.
+# ============================================================================
+CAMPAIGNS_TO_PAUSE: dict = {
+    "23680871468": "Thai Mérida - Reservaciones",
+}
+
 CAMPAIGN_HEALTH_CONFIG = {
     # CH1: CPA real de la campaña supera el umbral crítico por tipo.
     # El cpa_critical de cada tipo se toma de CAMPAIGN_TYPE_CONFIG.

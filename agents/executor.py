@@ -97,6 +97,22 @@ class Executor:
         except Exception as e:
             return {"status": "error", "action": "add_keyword", "error": str(e)}
 
+    def pause_campaign(self, campaign_id):
+        from engine.ads_client import get_ads_client
+        client = self._get_client()
+        try:
+            campaign_service = client.get_service("CampaignService")
+            campaign_operation = client.get_type("CampaignOperation")
+            campaign = campaign_operation.update
+            campaign.resource_name = campaign_service.campaign_path(self.customer_id, campaign_id)
+            campaign.status = client.enums.CampaignStatusEnum.PAUSED
+            campaign_operation.update_mask.paths[:] = ["status"]
+            campaign_service.mutate_campaigns(customer_id=self.customer_id, operations=[campaign_operation])
+            self._log_action("pause_campaign", campaign_id, {}, "success")
+            return {"status": "executed", "action": "pause_campaign", "campaign_id": campaign_id}
+        except Exception as e:
+            return {"status": "error", "action": "pause_campaign", "error": str(e)}
+
     def remove_theme(self, criterion_resource_name):
         from engine.ads_client import remove_smart_campaign_theme
         client = self._get_client()
