@@ -1474,6 +1474,8 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     # Filtro RSA válido: requiere ad_id y ad_group_resource no vacíos
                     if not _ad_r.get("ad_group_resource") or not _ad_r.get("ad_id") or str(_ad_r.get("ad_id", "0")) == "0":
                         continue
+                    if _ad_r.get("ad_strength") in ("EXCELLENT", "NO_ADS"):
+                        continue
                     if _ad_r.get("ad_strength") in ("POOR", "AVERAGE"):
                         _ah_for_remediation.append(_ad_r)
                     elif str(_ad_r.get("campaign_id", "")) in _qs_trigger_camps:
