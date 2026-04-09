@@ -1687,7 +1687,8 @@ def replace_rsa_headlines(client, customer_id: str, ad_group_resource: str,
         ad_service.mutate_ad_group_ads(customer_id=customer_id, operations=[operation])
         return {"status": "success", "replaced_with": final_headlines}
     except Exception as e:
-        _ads_logger.warning("replace_rsa_headlines: %s", e)
+        import traceback
+        _ads_logger.error("replace_rsa_headlines ERROR — traceback completo:\n%s", traceback.format_exc())
         return {"status": "error", "message": str(e)}
 
 
