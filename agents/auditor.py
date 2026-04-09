@@ -1592,11 +1592,11 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
 
         # ====================================================================
         # FASE 6E — BUILDER: AD GROUPS POR INTENCIÓN
-        # Detecta CTR_STRUCTURAL_ISSUE y propone nuevos ad groups hiper-relevantes.
-        # NO ejecuta nada — solo propone y espera aprobación por email.
-        # Máximo 2 propuestas por ciclo.
+        # Detecta CTR_STRUCTURAL_ISSUE, genera copy con Sonnet y ejecuta
+        # add_ad_group_to_existing_campaign directamente en este ciclo.
+        # Máximo 2 ad groups por ciclo.
         # ====================================================================
-        results["builder_proposals"] = []
+        results["builder_executed"] = []
         try:
             _ctr_structural = [
                 f for f in results.get("quality_creative_findings", [])
@@ -1605,9 +1605,8 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _api_key_6e = os.getenv("ANTHROPIC_API_KEY")
             if _ctr_structural and _api_key_6e:
                 import anthropic as _ant_6e
-                import secrets as _sec_6e
 
-                # Agrupar por campaign_id (tomamos la primera campaña con findings)
+                # Agrupar keywords por campaign_id
                 _camp_kw_map: dict = {}
                 for _sf in _ctr_structural:
                     _cid_6e = _sf.get("campaign_id", "")
@@ -1618,11 +1617,11 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     if _ktext_6e and _ktext_6e not in _camp_kw_map[_cid_6e]["keywords"]:
                         _camp_kw_map[_cid_6e]["keywords"].append(_ktext_6e)
 
-                _builder_proposals = []
+                _builder_executed = []
                 _ant_client_6e = _ant_6e.Anthropic(api_key=_api_key_6e)
 
                 for _cid_6e, _cdata_6e in _camp_kw_map.items():
-                    if len(_builder_proposals) >= 2:
+                    if len(_builder_executed) >= 2:
                         break
                     _kws_6e = _cdata_6e["keywords"]
                     _cname_6e = _cdata_6e["campaign_name"]
@@ -1682,7 +1681,7 @@ Responde SOLO con JSON válido, sin markdown:
                         continue
 
                     for _grp in _data_6e.get("groups", []):
-                        if len(_builder_proposals) >= 2:
+                        if len(_builder_executed) >= 2:
                             break
                         _ag_name = (_grp.get("ad_group_name") or "")[:50]
                         _heads   = [h for h in _grp.get("headlines", []) if isinstance(h, str) and len(h) <= 30][:15]
@@ -1693,8 +1692,12 @@ Responde SOLO con JSON válido, sin markdown:
                             logger.warning("Fase 6E: grupo '%s' incompleto — skip", _ag_name)
                             continue
 
-                        _bp_token = _sec_6e.token_urlsafe(16)
-                        _bp_evidence = {
+                        from engine.ads_client import add_ad_group_to_existing_campaign as _add_ag
+                        _exec_result = _add_ag(
+                            client, target_id, _cid_6e,
+                            _ag_name, _heads, _descs, _grp_kws,
+                        )
+                        _builder_executed.append({
                             "campaign_id":   _cid_6e,
                             "campaign_name": _cname_6e,
                             "ad_group_name": _ag_name,
@@ -1702,33 +1705,32 @@ Responde SOLO con JSON válido, sin markdown:
                             "keywords":      _grp_kws,
                             "headlines":     _heads,
                             "descriptions":  _descs,
-                        }
-                        _bp_decision_id = memory.record_autonomous_decision(
+                            "result":        _exec_result,
+                        })
+                        memory.record_autonomous_decision(
                             action_type="builder_adgroup",
-                            risk_level=2,
+                            risk_level=1,
                             urgency="normal",
-                            decision="proposed",
+                            decision="executed",
                             campaign_id=_cid_6e,
                             campaign_name=_cname_6e,
                             keyword=f"adgroup:{_ag_name}",
-                            evidence=_bp_evidence,
+                            evidence={
+                                "ad_group_name": _ag_name,
+                                "intent": _grp.get("intent", "category"),
+                                "keywords": _grp_kws,
+                                "result_status": _exec_result.get("status"),
+                            },
                             session_id=session_id,
-                            approval_token=_bp_token,
-                            proposal_sent=False,
+                            executed=True,
                         )
-                        _builder_proposals.append({
-                            **_bp_evidence,
-                            "proposal_id":    f"bp_{_bp_decision_id}",
-                            "approval_token": _bp_token,
-                            "decision_id":    _bp_decision_id,
-                        })
                         logger.info(
-                            "Fase 6E: propuesta Builder — ad group '%s' (campaña %s, intent=%s, %d headlines)",
-                            _ag_name, _cname_6e, _grp.get("intent"), len(_heads),
+                            "Fase 6E: ad group '%s' ejecutado — campaña %s, intent=%s, status=%s",
+                            _ag_name, _cname_6e, _grp.get("intent"), _exec_result.get("status"),
                         )
 
-                results["builder_proposals"] = _builder_proposals
-                logger.info("Fase 6E: %d propuesta(s) de ad group generadas", len(_builder_proposals))
+                results["builder_executed"] = _builder_executed
+                logger.info("Fase 6E: %d ad group(s) ejecutado(s)", len(_builder_executed))
             else:
                 if not _ctr_structural:
                     logger.debug("Fase 6E: sin CTR_STRUCTURAL_ISSUE — skip")
@@ -1737,7 +1739,7 @@ Responde SOLO con JSON válido, sin markdown:
 
         except Exception as _6e_exc:
             logger.warning("Fase 6E: error no crítico — %s", _6e_exc)
-            results["builder_proposals"] = []
+            results["builder_executed"] = []
 
         # ── Memoria de acciones recientes (últimas 48h) para Haiku ──────────
         _recent_actions_memory: list = []
@@ -2532,7 +2534,7 @@ Responde SOLO con JSON válido, sin markdown:
             _run_summary["landing_response_ms"]        = _landing_response_ms
             _run_summary["quality_creative_findings"]  = results.get("quality_creative_findings", [])
             _run_summary["creative_actions"]           = results.get("creative_actions", [])
-            _run_summary["builder_proposals"]          = results.get("builder_proposals", [])
+            _run_summary["builder_executed"]           = results.get("builder_executed", [])
             _run_summary["monthly_budget_status"]      = results.get("monthly_budget_status", {})
             _run_summary["paused_campaigns"]           = results.get("paused_campaigns", [])
             # Smart audit data completa — para mostrar issues inline en el correo diario
