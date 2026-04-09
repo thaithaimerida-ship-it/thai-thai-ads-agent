@@ -412,7 +412,7 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
             campaign_name= str(d.get("campaign_name", ""))
             new_budget   = float(d.get("new_budget_mxn", 0))
             change_pct   = float(d.get("change_pct", 0))
-            reason       = str(d.get("reason", ""))[:500]
+            reason       = str(d.get("reason", ""))[:700]
             confidence   = int(d.get("confidence", 0))
             sources      = d.get("sources", [])
             if not isinstance(sources, list):

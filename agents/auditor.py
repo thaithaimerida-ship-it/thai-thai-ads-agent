@@ -1379,14 +1379,22 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _is_data = _fetch_is(client, target_id)
 
             # ── Findings Quality Score ────────────────────────────────────
+            _qs_finding_seen: set = set()  # (keyword_text, campaign_id, type)
             for _kw in _kq_data:
                 _qs    = _kw.get("quality_score")
                 _cname = _kw.get("campaign_name", "")
                 _cid   = _kw.get("campaign_id", "")
                 _ktext = _kw.get("keyword_text", "")
                 _base  = {"campaign_id": _cid, "campaign_name": _cname, "keyword_text": _ktext}
+
+                def _qs_append(finding):
+                    _key = (_ktext, _cid, finding["type"])
+                    if _key not in _qs_finding_seen:
+                        _qs_finding_seen.add(_key)
+                        _quality_creative_findings.append(finding)
+
                 if _qs and _qs < 7:
-                    _quality_creative_findings.append({
+                    _qs_append({
                         **_base,
                         "type": "QS_LOW",
                         "quality_score": _qs,
@@ -1395,11 +1403,11 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         "search_predicted_ctr":    _kw.get("search_predicted_ctr"),
                     })
                 if _kw.get("creative_quality_score") == "BELOW_AVERAGE":
-                    _quality_creative_findings.append({**_base, "type": "QS_CREATIVE_WEAK"})
+                    _qs_append({**_base, "type": "QS_CREATIVE_WEAK"})
                 if _kw.get("post_click_quality_score") == "BELOW_AVERAGE":
-                    _quality_creative_findings.append({**_base, "type": "QS_LANDING_WEAK"})
+                    _qs_append({**_base, "type": "QS_LANDING_WEAK"})
                 if _kw.get("search_predicted_ctr") == "BELOW_AVERAGE":
-                    _quality_creative_findings.append({**_base, "type": "QS_CTR_WEAK"})
+                    _qs_append({**_base, "type": "QS_CTR_WEAK"})
 
             # ── Findings Ad Health ────────────────────────────────────────
             for _ad in _ah_data:
