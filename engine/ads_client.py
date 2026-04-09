@@ -1692,6 +1692,51 @@ def replace_rsa_headlines(client, customer_id: str, ad_group_resource: str,
         return {"status": "error", "message": str(e)}
 
 
+def add_ad_group_to_existing_campaign(
+    client, customer_id: str, campaign_id: str,
+    ag_name: str, headlines: list, descriptions: list, keywords: list,
+    cpc_bid_micros: int = 20_000_000,
+    final_url: str = "https://www.thaithaimerida.com",
+) -> dict:
+    """
+    Crea un ad group + RSA + keywords dentro de una campaña existente.
+    No crea ni modifica la campaña — solo agrega un ad group.
+
+    Args:
+        campaign_id: ID numérico de la campaña (sin resource path)
+        keywords:    lista de strings con los textos de keywords (PHRASE match)
+    """
+    try:
+        campaign_resource = f"customers/{customer_id}/campaigns/{campaign_id}"
+        ag_result = create_ad_group(client, customer_id, campaign_resource, ag_name, cpc_bid_micros)
+        if ag_result.get("status") != "success":
+            return {"status": "error", "step": "create_ad_group", "message": ag_result.get("message")}
+        ag_resource = ag_result["resource_name"]
+
+        rsa_result = create_rsa(client, customer_id, ag_resource, headlines, descriptions, final_url)
+
+        kw_results = []
+        for kw_text in keywords:
+            kw_r = add_keyword_to_ad_group(client, customer_id, ag_resource, kw_text, "PHRASE")
+            kw_results.append({"keyword": kw_text, "status": kw_r.get("status")})
+
+        _ads_logger.info(
+            "add_ad_group_to_existing_campaign: ad group '%s' creado en campaña %s — RSA=%s, keywords=%d",
+            ag_name, campaign_id, rsa_result.get("status"), len(kw_results),
+        )
+        return {
+            "status": "success",
+            "ad_group_resource": ag_resource,
+            "ad_group_name": ag_name,
+            "rsa_status": rsa_result.get("status"),
+            "keywords": kw_results,
+        }
+    except Exception as e:
+        import traceback
+        _ads_logger.error("add_ad_group_to_existing_campaign ERROR:\n%s", traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+
 def update_rsa_descriptions(client, customer_id: str, ad_group_resource: str,
                             ad_id: str, new_descriptions: list) -> dict:
     """

@@ -1745,6 +1745,7 @@ def _build_daily_summary_html(run: dict) -> str:
     _quality_findings        = run.get("quality_creative_findings", []) or []
     _creative_actions_email  = run.get("creative_actions", []) or []
     _paused_campaigns_email  = run.get("paused_campaigns", []) or []
+    _builder_proposals_email = run.get("builder_proposals", []) or []
 
     _smart_issues_email = detail.get("smart_issues", 0)
 
@@ -2431,6 +2432,45 @@ def _build_daily_summary_html(run: dict) -> str:
     else:
         _structural_ctr_block = ""
 
+    # Sub-sección: Propuestas de Ad Groups (Builder)
+    _builder_prop_block = ""
+    if _builder_proposals_email:
+        _bp_rows = ""
+        for _bp in _builder_proposals_email[:2]:
+            _bp_name   = _bp.get("ad_group_name", "—")
+            _bp_camp   = _bp.get("campaign_name", "—")
+            _bp_intent = _bp.get("intent", "—")
+            _bp_kws    = _bp.get("keywords", [])
+            _bp_heads  = _bp.get("headlines", [])[:3]
+            _bp_token  = str(_bp.get("approval_token", ""))
+            _bp_kw_str = ", ".join(f'"{k}"' for k in _bp_kws[:5])
+            _bp_head_str = " · ".join(f'"{h}"' for h in _bp_heads)
+            _bp_btns   = _approval_buttons(_bp_token)
+            _bp_rows += (
+                f'<tr style="border-bottom:1px solid #f0f0f0;">'
+                f'<td style="padding:10px 0;">'
+                f'<p style="margin:0 0 2px 0;font-size:13px;font-weight:bold;color:#111;">'
+                f'🏗️ {_bp_name}'
+                f'<span style="margin-left:8px;background:#eff6ff;color:#1d4ed8;'
+                f'padding:2px 6px;border-radius:3px;font-size:10px;">{_bp_intent}</span></p>'
+                f'<p style="margin:0 0 2px 0;font-size:11px;color:#6b7280;">Campaña: {_bp_camp}</p>'
+                f'<p style="margin:0 0 2px 0;font-size:11px;color:#374151;">Keywords: {_bp_kw_str}</p>'
+                f'<p style="margin:0 0 6px 0;font-size:11px;color:#6b7280;">Headlines: {_bp_head_str}</p>'
+                f'{_bp_btns}'
+                f'</td></tr>'
+            )
+        _builder_prop_block = (
+            f'<tr><td style="padding:14px 20px 4px 20px;">'
+            f'<p style="margin:0 0 4px 0;font-size:12px;font-weight:bold;color:#6b7280;'
+            f'text-transform:uppercase;letter-spacing:0.5px;">🏗️ Propuestas de Ad Groups</p>'
+            f'<p style="margin:0 0 8px 0;font-size:11px;color:#6b7280;">'
+            f'El agente detectó keywords que necesitan un ad group dedicado con anuncios más '
+            f'específicos para mejorar el CTR. Los anuncios actuales son fuertes — '
+            f'el problema es de ajuste entre la búsqueda y el mensaje.</p>'
+            f'<table width="100%" cellpadding="0" cellspacing="0">{_bp_rows}</table>'
+            f'</td></tr>'
+        )
+
     _quality_block = f"""
   <tr><td style="padding:14px 20px 6px 20px;">
     <p style="margin:0 0 8px 0;font-size:12px;font-weight:bold;color:#6b7280;
@@ -2869,6 +2909,9 @@ def _build_daily_summary_html(run: dict) -> str:
 
   <!-- SECCIÓN: Salud de Anuncios y Calidad (Fase 6D) -->
   {_quality_block}
+
+  <!-- SECCIÓN: Propuestas de Ad Groups (Fase 6E Builder) -->
+  {_builder_prop_block}
 
   <!-- Separador -->
   <tr><td style="padding:8px 20px 0 20px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>

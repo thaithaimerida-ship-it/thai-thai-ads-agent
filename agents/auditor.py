@@ -1590,6 +1590,155 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             results["quality_creative_findings"] = []
             results["creative_actions"] = []
 
+        # ====================================================================
+        # FASE 6E — BUILDER: AD GROUPS POR INTENCIÓN
+        # Detecta CTR_STRUCTURAL_ISSUE y propone nuevos ad groups hiper-relevantes.
+        # NO ejecuta nada — solo propone y espera aprobación por email.
+        # Máximo 2 propuestas por ciclo.
+        # ====================================================================
+        results["builder_proposals"] = []
+        try:
+            _ctr_structural = [
+                f for f in results.get("quality_creative_findings", [])
+                if f.get("type") == "CTR_STRUCTURAL_ISSUE"
+            ]
+            _api_key_6e = os.getenv("ANTHROPIC_API_KEY")
+            if _ctr_structural and _api_key_6e:
+                import anthropic as _ant_6e
+                import secrets as _sec_6e
+
+                # Agrupar por campaign_id (tomamos la primera campaña con findings)
+                _camp_kw_map: dict = {}
+                for _sf in _ctr_structural:
+                    _cid_6e = _sf.get("campaign_id", "")
+                    _cname_6e = _sf.get("campaign_name", "")
+                    if _cid_6e not in _camp_kw_map:
+                        _camp_kw_map[_cid_6e] = {"campaign_name": _cname_6e, "keywords": []}
+                    _ktext_6e = _sf.get("keyword_text", "")
+                    if _ktext_6e and _ktext_6e not in _camp_kw_map[_cid_6e]["keywords"]:
+                        _camp_kw_map[_cid_6e]["keywords"].append(_ktext_6e)
+
+                _builder_proposals = []
+                _ant_client_6e = _ant_6e.Anthropic(api_key=_api_key_6e)
+
+                for _cid_6e, _cdata_6e in _camp_kw_map.items():
+                    if len(_builder_proposals) >= 2:
+                        break
+                    _kws_6e = _cdata_6e["keywords"]
+                    _cname_6e = _cdata_6e["campaign_name"]
+
+                    _prompt_6e = f"""Eres el Campaign Builder de Thai Thai Mérida.
+
+CAMPAÑA: {_cname_6e}
+KEYWORDS CON CTR ESTRUCTURAL BAJO (QS < 7 por Expected CTR, pero el anuncio ya es GOOD/EXCELLENT):
+{chr(10).join(f"- {k}" for k in _kws_6e)}
+
+TAREA: Clasifica las keywords por intención (máximo 2 grupos) y genera copy hiper-relevante para un nuevo ad group por grupo.
+
+GRUPOS:
+- "branded": keywords que mencionan "Thai Thai" o el nombre del restaurante
+- "category": keywords genéricas de categoría
+
+Para cada grupo, genera:
+- ad_group_name: nombre descriptivo (máx 50 chars)
+- intent: "branded" o "category"
+- keywords: las keywords de ese grupo (lista de strings)
+- headlines: 8 headlines hiper-relevantes (máx 30 chars CADA UNO — cuenta los caracteres)
+  * incluir la keyword exacta o parte de ella
+  * mencionar "Thai Thai" si es branded, o "Mérida" si es category
+  * incluir un CTA: "Reserva ya", "Pide ahora", "Visítanos hoy"
+- descriptions: 3 descriptions (máx 90 chars CADA UNO)
+  * mencionar "Calle 30 No. 351, Mérida"
+  * incluir experiencia auténtica tailandesa
+  * CTA relevante (delivery o reservaciones según intent)
+
+Responde SOLO con JSON válido, sin markdown:
+{{
+  "groups": [
+    {{
+      "intent": "branded",
+      "ad_group_name": "...",
+      "keywords": [...],
+      "headlines": [...],
+      "descriptions": [...]
+    }}
+  ]
+}}"""
+
+                    try:
+                        _resp_6e = _ant_client_6e.messages.create(
+                            model="claude-sonnet-4-6",
+                            max_tokens=1200,
+                            messages=[{"role": "user", "content": _prompt_6e}],
+                        )
+                        _raw_6e = _resp_6e.content[0].text.strip()
+                        if _raw_6e.startswith("```"):
+                            _raw_6e = _raw_6e.split("```")[1]
+                            if _raw_6e.startswith("json"):
+                                _raw_6e = _raw_6e[4:]
+                        _data_6e = __import__("json").loads(_raw_6e)
+                    except Exception as _sonnet_6e_exc:
+                        logger.warning("Fase 6E: Sonnet falló para campaña %s — %s", _cid_6e, _sonnet_6e_exc)
+                        continue
+
+                    for _grp in _data_6e.get("groups", []):
+                        if len(_builder_proposals) >= 2:
+                            break
+                        _ag_name = (_grp.get("ad_group_name") or "")[:50]
+                        _heads   = [h for h in _grp.get("headlines", []) if isinstance(h, str) and len(h) <= 30][:15]
+                        _descs   = [d for d in _grp.get("descriptions", []) if isinstance(d, str) and len(d) <= 90][:4]
+                        _grp_kws = [k for k in _grp.get("keywords", []) if isinstance(k, str) and k]
+
+                        if len(_heads) < 3 or len(_descs) < 2 or not _grp_kws or not _ag_name:
+                            logger.warning("Fase 6E: grupo '%s' incompleto — skip", _ag_name)
+                            continue
+
+                        _bp_token = _sec_6e.token_urlsafe(16)
+                        _bp_evidence = {
+                            "campaign_id":   _cid_6e,
+                            "campaign_name": _cname_6e,
+                            "ad_group_name": _ag_name,
+                            "intent":        _grp.get("intent", "category"),
+                            "keywords":      _grp_kws,
+                            "headlines":     _heads,
+                            "descriptions":  _descs,
+                        }
+                        _bp_decision_id = memory.record_autonomous_decision(
+                            action_type="builder_adgroup",
+                            risk_level=2,
+                            urgency="normal",
+                            decision="proposed",
+                            campaign_id=_cid_6e,
+                            campaign_name=_cname_6e,
+                            keyword=f"adgroup:{_ag_name}",
+                            evidence=_bp_evidence,
+                            session_id=session_id,
+                            approval_token=_bp_token,
+                            proposal_sent=False,
+                        )
+                        _builder_proposals.append({
+                            **_bp_evidence,
+                            "proposal_id":    f"bp_{_bp_decision_id}",
+                            "approval_token": _bp_token,
+                            "decision_id":    _bp_decision_id,
+                        })
+                        logger.info(
+                            "Fase 6E: propuesta Builder — ad group '%s' (campaña %s, intent=%s, %d headlines)",
+                            _ag_name, _cname_6e, _grp.get("intent"), len(_heads),
+                        )
+
+                results["builder_proposals"] = _builder_proposals
+                logger.info("Fase 6E: %d propuesta(s) de ad group generadas", len(_builder_proposals))
+            else:
+                if not _ctr_structural:
+                    logger.debug("Fase 6E: sin CTR_STRUCTURAL_ISSUE — skip")
+                else:
+                    logger.warning("Fase 6E: ANTHROPIC_API_KEY no disponible — skip")
+
+        except Exception as _6e_exc:
+            logger.warning("Fase 6E: error no crítico — %s", _6e_exc)
+            results["builder_proposals"] = []
+
         # ── Memoria de acciones recientes (últimas 48h) para Haiku ──────────
         _recent_actions_memory: list = []
         try:
@@ -2383,6 +2532,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _run_summary["landing_response_ms"]        = _landing_response_ms
             _run_summary["quality_creative_findings"]  = results.get("quality_creative_findings", [])
             _run_summary["creative_actions"]           = results.get("creative_actions", [])
+            _run_summary["builder_proposals"]          = results.get("builder_proposals", [])
             _run_summary["monthly_budget_status"]      = results.get("monthly_budget_status", {})
             _run_summary["paused_campaigns"]           = results.get("paused_campaigns", [])
             # Smart audit data completa — para mostrar issues inline en el correo diario

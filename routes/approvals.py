@@ -567,6 +567,102 @@ async def approve_proposal(d: str, action: str):
                 "#c0392b",
             )
 
+    # ── TIPO: builder_adgroup (Fase 6E) ──────────────────────────────────────
+    # Crea un ad group + RSA + keywords dentro de una campaña existente.
+    # Los datos (headlines, descriptions, keywords, campaign_id) vienen en evidence_json.
+    if action_type == "builder_adgroup":
+        try:
+            import json as _json
+            evidence = _json.loads(decision.get("evidence_json") or "{}")
+        except Exception:
+            evidence = {}
+
+        ag_name       = evidence.get("ad_group_name", keyword.replace("adgroup:", ""))
+        bp_campaign_id = str(evidence.get("campaign_id", campaign_id))
+        bp_headlines  = evidence.get("headlines", [])
+        bp_descriptions = evidence.get("descriptions", [])
+        bp_keywords   = evidence.get("keywords", [])
+        bp_intent     = evidence.get("intent", "category")
+
+        if action != "approve":
+            memory.mark_autonomous_decision_rejected(decision["id"])
+            logger.info(
+                "/approve: builder_adgroup rechazada — '%s' campaña %s (decision_id=%d)",
+                ag_name, bp_campaign_id, decision["id"],
+            )
+            return _html(
+                "Propuesta rechazada",
+                f"<p>La propuesta para crear el ad group "
+                f"<strong>\"{ag_name}\"</strong> en la campaña "
+                f"<strong>{campaign_name}</strong> fue rechazada.</p>"
+                f"<p>No se realizaron cambios en Google Ads.</p>",
+                "#c0392b",
+            )
+
+        # Validación mínima antes de ejecutar
+        if not bp_campaign_id or not ag_name or len(bp_headlines) < 3 or len(bp_descriptions) < 2 or not bp_keywords:
+            logger.error(
+                "/approve: builder_adgroup inválida — datos insuficientes (decision_id=%d)",
+                decision["id"],
+            )
+            return _html(
+                "Datos insuficientes",
+                f"<p>No se puede crear el ad group <strong>\"{ag_name}\"</strong>: "
+                f"faltan headlines, descriptions o keywords en la propuesta.</p>"
+                f"<p>Revisa los datos de la propuesta y crea el ad group manualmente en Google Ads.</p>",
+                "#e67e22",
+            )
+
+        try:
+            from engine.ads_client import get_ads_client, add_ad_group_to_existing_campaign
+            _target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "4021070209")
+            _client_bp = get_ads_client()
+            bp_result = add_ad_group_to_existing_campaign(
+                _client_bp, _target_id, bp_campaign_id,
+                ag_name, bp_headlines, bp_descriptions, bp_keywords,
+            )
+        except Exception as _bp_exc:
+            logger.error("/approve: builder_adgroup error al ejecutar — %s", _bp_exc)
+            return _html(
+                "Error al crear ad group",
+                f"<p>No se pudo crear el ad group <strong>\"{ag_name}\"</strong>.</p>"
+                f"<p>Error: <code>{_bp_exc}</code></p>"
+                f"<p>La propuesta sigue pendiente. Puedes crearlo manualmente en Google Ads.</p>",
+                "#c00",
+            )
+
+        if bp_result.get("status") != "success":
+            _bp_err = bp_result.get("message", "error desconocido")
+            logger.error(
+                "/approve: builder_adgroup falló — '%s' en campaña %s: %s (decision_id=%d)",
+                ag_name, bp_campaign_id, _bp_err, decision["id"],
+            )
+            return _html(
+                "Error al crear ad group",
+                f"<p>Google Ads rechazó la creación del ad group "
+                f"<strong>\"{ag_name}\"</strong>.</p>"
+                f"<p>Error: <code>{_bp_err}</code></p>"
+                f"<p>Puedes crearlo manualmente en Google Ads.</p>",
+                "#c00",
+            )
+
+        memory.mark_autonomous_decision_approved(decision["id"])
+        _kws_ok = len([k for k in bp_result.get("keywords", []) if k.get("status") == "success"])
+        logger.info(
+            "/approve: ad group '%s' creado exitosamente en campaña %s — RSA=%s, keywords=%d (decision_id=%d)",
+            ag_name, bp_campaign_id, bp_result.get("rsa_status"), _kws_ok, decision["id"],
+        )
+        return _html(
+            "Ad group creado",
+            f"<p>El ad group <strong>\"{ag_name}\"</strong> fue creado exitosamente "
+            f"en la campaña <strong>{campaign_name}</strong>.</p>"
+            f"<p>RSA: {bp_result.get('rsa_status', '—')} · "
+            f"Keywords agregadas: {_kws_ok}/{len(bp_keywords)} · "
+            f"Intención: {bp_intent}</p>"
+            f"<p>El ad group está activo. Revísalo en Google Ads para confirmar.</p>",
+            "#27ae60",
+        )
+
     # ── TIPO: budget_action (Fase 6B.1) ──────────────────────────────────────
     # BA1: reducción de presupuesto por CPA crítico.
     # Flujo: aprobación → verify_budget_still_actionable() → update_campaign_budget()
