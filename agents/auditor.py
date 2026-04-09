@@ -1439,6 +1439,66 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 if _bud > 0.20:
                     _quality_creative_findings.append({**_is_base, "type": "LOST_IS_BUDGET_HIGH"})
 
+            # ── Findings CTR_STRUCTURAL_ISSUE ─────────────────────────────
+            # Aplica cuando QS es bajo por Expected CTR bajo pero creative+landing
+            # son aceptables (no BELOW_AVERAGE) y el mejor RSA de la campaña ya
+            # es GOOD o EXCELLENT. El problema no es de asset strength sino de
+            # ajuste query-mensaje-estructura. NO dispara remediación creativa.
+            _strength_rank = {"EXCELLENT": 4, "GOOD": 3, "AVERAGE": 2, "POOR": 1}
+            _camp_best_strength: dict = {}
+            for _ad_s in _ah_data:
+                _cid_s = str(_ad_s.get("campaign_id", ""))
+                _str_s = _ad_s.get("ad_strength")
+                if _cid_s and _str_s in _strength_rank:
+                    if _strength_rank.get(_str_s, 0) > _strength_rank.get(
+                        _camp_best_strength.get(_cid_s), 0
+                    ):
+                        _camp_best_strength[_cid_s] = _str_s
+
+            _ctr_structural_camp_ids: set = set()
+            _camps_with_creative_weakness: set = {
+                str(_kw2.get("campaign_id", ""))
+                for _kw2 in _kq_data
+                if _kw2.get("creative_quality_score") == "BELOW_AVERAGE"
+                and (_kw2.get("quality_score") or 10) < 7
+            }
+            for _kw2 in _kq_data:
+                _qs2   = _kw2.get("quality_score")
+                if not _qs2 or _qs2 >= 7:
+                    continue
+                _cid2  = str(_kw2.get("campaign_id", ""))
+                _ctr2  = _kw2.get("search_predicted_ctr")
+                _cre2  = _kw2.get("creative_quality_score")
+                _land2 = _kw2.get("post_click_quality_score")
+                _best2 = _camp_best_strength.get(_cid2)
+                if (
+                    _ctr2 == "BELOW_AVERAGE"
+                    and _cre2 not in (None, "BELOW_AVERAGE")
+                    and _land2 not in (None, "BELOW_AVERAGE")
+                    and _best2 in ("GOOD", "EXCELLENT")
+                ):
+                    _quality_creative_findings.append({
+                        "type":                     "CTR_STRUCTURAL_ISSUE",
+                        "campaign_id":              _cid2,
+                        "campaign_name":            _kw2.get("campaign_name", ""),
+                        "keyword_text":             _kw2.get("keyword_text", ""),
+                        "quality_score":            _qs2,
+                        "creative_quality_score":   _cre2,
+                        "post_click_quality_score": _land2,
+                        "search_predicted_ctr":     _ctr2,
+                        "ad_strength_summary":      _best2,
+                        "recommended_next_step": (
+                            "Crear ad group más específico con RSA hiper-relevante "
+                            "para esta intención. El anuncio ya es fuerte — el "
+                            "problema es de ajuste query-mensaje-estructura."
+                        ),
+                    })
+                    _ctr_structural_camp_ids.add(_cid2)
+
+            # Campañas excluidas de remediación QS: problema estructural de CTR
+            # y sin keywords con creatividad débil real
+            _ctr_structural_excl = _ctr_structural_camp_ids - _camps_with_creative_weakness
+
             results["quality_creative_findings"] = _quality_creative_findings
             logger.info("Fase 6D: %d findings de calidad/visibilidad", len(_quality_creative_findings))
 
@@ -1458,12 +1518,12 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             _weak_strength_types = {"AD_STRENGTH_POOR", "AD_STRENGTH_AVERAGE"}
             _has_weak_ads = any(f["type"] in _weak_strength_types for f in _quality_creative_findings)
 
-            # QS_LOW/QS_CREATIVE_WEAK también activan remediación para anuncios de esas campañas
+            # QS_LOW/QS_CREATIVE_WEAK activan remediación salvo que sea problema estructural de CTR
             _qs_trigger_camps = {
                 str(f.get("campaign_id"))
                 for f in _quality_creative_findings
                 if f["type"] in ("QS_LOW", "QS_CREATIVE_WEAK") and f.get("campaign_id")
-            }
+            } - _ctr_structural_excl
 
             if (_has_weak_ads or _qs_trigger_camps) and _ah_data and _kq_data:
                 # Construir lista de anuncios para remediación:

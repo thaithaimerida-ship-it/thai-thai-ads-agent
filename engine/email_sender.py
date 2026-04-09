@@ -2406,11 +2406,37 @@ def _build_daily_summary_html(run: dict) -> str:
             + '</table>'
         )
 
+    # Sub-sección: Keywords con problema estructural de CTR
+    _structural_ctr_findings = [f for f in _quality_findings if f.get("type") == "CTR_STRUCTURAL_ISSUE"]
+    if _structural_ctr_findings:
+        _sc_rows = ""
+        for _sc in _structural_ctr_findings[:10]:
+            _sc_qs = _sc.get("quality_score")
+            _sc_rows += _quality_table_row([
+                (_sc.get("keyword_text", "—"), "color:#374151;"),
+                (_sc.get("campaign_name", "—"), "color:#6b7280;"),
+                (str(_sc_qs) if _sc_qs else "—", "color:#d97706;font-weight:bold;"),
+                (_sc.get("creative_quality_score") or "—", ""),
+                (_sc.get("post_click_quality_score") or "—", ""),
+                (_sc.get("ad_strength_summary") or "—", "color:#16a34a;"),
+            ])
+        _structural_ctr_block = f"""
+    <p style="margin:12px 0 2px 0;font-size:11px;font-weight:bold;color:#6b7280;">Keywords que requieren mayor especificidad</p>
+    <p style="margin:0 0 6px 0;font-size:11px;color:#6b7280;">El anuncio ya es fuerte (GOOD/EXCELLENT) — el QS bajo es por CTR esperado, no por creatividad. La búsqueda necesita un ad group propio con mensaje más específico.</p>
+    <table width="100%" style="border-collapse:collapse;font-size:12px;">
+      <tr style="background:#f9fafb;">{_th("Keyword")}{_th("Campaña")}{_th("QS")}{_th("Anuncio")}{_th("Landing")}{_th("RSA Strength")}</tr>
+      {_sc_rows}
+    </table>
+    <p style="margin:4px 0 0 0;font-size:11px;color:#6b7280;">💡 Siguiente paso ideal: crear ad group dedicado con RSA hiper-relevante para cada intención. No requiere acción automática.</p>"""
+    else:
+        _structural_ctr_block = ""
+
     _quality_block = f"""
   <tr><td style="padding:14px 20px 6px 20px;">
     <p style="margin:0 0 8px 0;font-size:12px;font-weight:bold;color:#6b7280;
               text-transform:uppercase;letter-spacing:0.5px;">🎨 Salud de Anuncios y Calidad</p>
     {_qs_block}
+    {_structural_ctr_block}
     {_ad_block}
     {_is_block}
     <p style="margin:8px 0 4px 0;font-size:11px;font-weight:bold;color:#6b7280;">Acciones Creativas del Día</p>
