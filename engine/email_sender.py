@@ -2273,6 +2273,53 @@ def _build_daily_summary_html(run: dict) -> str:
         + _canales_block
     )
 
+    # ── Pedidos Online GloriaFood (24h) ─────────────────────────────────────────
+    try:
+        from engine.db_sync import get_db_path as _get_db_path_gf
+        import sqlite3 as _sqlite3_gf
+        _gf_conn = _sqlite3_gf.connect(_get_db_path_gf())
+        _gf_cursor = _gf_conn.cursor()
+        _gf_cursor.execute("""
+            SELECT COUNT(*), COALESCE(SUM(total_price_mxn), 0)
+            FROM gloriafood_orders
+            WHERE received_at >= datetime('now', '-24 hours')
+        """)
+        _gf_row = _gf_cursor.fetchone()
+        _gf_conn.close()
+        _gf_count = int(_gf_row[0]) if _gf_row else 0
+        _gf_total = float(_gf_row[1]) if _gf_row else 0.0
+        _gf_ticket = round(_gf_total / _gf_count, 0) if _gf_count > 0 else 0.0
+        if _gf_count > 0:
+            _pedidos_block = f"""
+  <tr><td style="padding:8px 20px 14px 20px;">
+    <p style="margin:0 0 6px 0;font-size:12px;font-weight:bold;color:#6b7280;
+              text-transform:uppercase;letter-spacing:0.5px;">🛒 Pedidos Online (24h)</p>
+    <table width="100%" style="border-collapse:collapse;font-size:12px;">
+      <tr style="border-top:1px solid #f0f0f0;">
+        <td style="padding:5px 8px;color:#374151;">Pedidos recibidos</td>
+        <td style="text-align:right;padding:5px 8px;font-weight:bold;">{_gf_count}</td>
+      </tr>
+      <tr style="border-top:1px solid #f0f0f0;">
+        <td style="padding:5px 8px;color:#374151;">Total</td>
+        <td style="text-align:right;padding:5px 8px;font-weight:bold;">${_gf_total:,.0f} MXN</td>
+      </tr>
+      <tr style="border-top:1px solid #f0f0f0;">
+        <td style="padding:5px 8px;color:#374151;">Ticket promedio</td>
+        <td style="text-align:right;padding:5px 8px;font-weight:bold;">${_gf_ticket:,.0f} MXN</td>
+      </tr>
+    </table>
+  </td></tr>"""
+        else:
+            _pedidos_block = (
+                '<tr><td style="padding:8px 20px 10px 20px;">'
+                '<p style="margin:0 0 4px 0;font-size:12px;font-weight:bold;color:#6b7280;'
+                'text-transform:uppercase;letter-spacing:0.5px;">🛒 Pedidos Online (24h)</p>'
+                '<p style="margin:0;font-size:12px;color:#9ca3af;">Sin pedidos registrados</p>'
+                '</td></tr>'
+            )
+    except Exception:
+        _pedidos_block = ""
+
     # ── Salud de Anuncios y Calidad (Fase 6D) ──────────────────────────────────
     def _quality_table_row(cells: list) -> str:
         return "<tr>" + "".join(
@@ -2910,6 +2957,12 @@ def _build_daily_summary_html(run: dict) -> str:
 
   <!-- SECCIÓN 1: Salud de Canales -->
   {_seccion1_block}
+
+  <!-- Separador -->
+  <tr><td style="padding:8px 20px 0 20px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>
+
+  <!-- SECCIÓN: Pedidos Online GloriaFood (24h) -->
+  {_pedidos_block}
 
   <!-- Separador -->
   <tr><td style="padding:8px 20px 0 20px;"><hr style="border:none; border-top:1px solid #eee; margin:0;"></td></tr>
