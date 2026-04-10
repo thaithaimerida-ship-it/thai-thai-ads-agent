@@ -254,6 +254,8 @@ app.include_router(keywords_router)
 app.include_router(campaigns_router)
 from routes.debug_fase_6d import router as debug_fase_6d_router
 app.include_router(debug_fase_6d_router)
+from routes.gloriafood_webhook import router as gloriafood_router
+app.include_router(gloriafood_router)
 
 # Strategy functions delegated to agents/strategist.py
 from agents.strategist import Strategist as _Strategist
