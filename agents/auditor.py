@@ -1464,6 +1464,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         _camp_best_strength[_cid_s] = _str_s
 
             _ctr_structural_camp_ids: set = set()
+            _ctr_struct_seen: set = set()  # (keyword_text, campaign_id)
             _camps_with_creative_weakness: set = {
                 str(_kw2.get("campaign_id", ""))
                 for _kw2 in _kq_data
@@ -1485,6 +1486,10 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     and _land2 not in (None, "BELOW_AVERAGE")
                     and _best2 in ("GOOD", "EXCELLENT")
                 ):
+                    _ctr_key = (_kw2.get("keyword_text", ""), _cid2)
+                    if _ctr_key in _ctr_struct_seen:
+                        continue
+                    _ctr_struct_seen.add(_ctr_key)
                     _quality_creative_findings.append({
                         "type":                     "CTR_STRUCTURAL_ISSUE",
                         "campaign_id":              _cid2,

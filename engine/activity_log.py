@@ -136,6 +136,29 @@ def _derive_run_summary(audit_results: dict, session_id: str, run_type: str = "d
 
     # ── Contadores de cambios y bloqueos ──────────────────────────────────────
     changes_executed   = summary.get("actually_executed", 0)
+
+    # Contar keywords agregadas por AI
+    _kw_added = len(audit_results.get("ai_keyword_proposals_executed", []))
+    if not _kw_added:
+        _kw_added = sum(
+            1 for i in audit_results.get("executed", [])
+            if "keyword" in str(i.get("type", "")).lower()
+        )
+
+    # Contar ad groups creados por Builder
+    _builder_created = len([
+        b for b in (audit_results.get("builder_executed", []) or [])
+        if isinstance(b.get("result"), dict) and b["result"].get("status") == "success"
+    ])
+
+    # Contar campañas pausadas
+    _campaigns_paused = len([
+        p for p in (audit_results.get("paused_campaigns", []) or [])
+        if isinstance(p.get("result"), dict) and p["result"].get("status") == "executed"
+    ])
+
+    # Total real de cambios
+    _total_changes = changes_executed + _kw_added + _builder_created + _campaigns_paused
     blocked_by_guard   = (
         summary.get("by_reason", {}).get("protected_keyword", 0)
         + summary.get("by_reason", {}).get("protected_campaign", 0)
@@ -193,7 +216,7 @@ def _derive_run_summary(audit_results: dict, session_id: str, run_type: str = "d
         result_class = "con_errores"
     elif has_alerts:
         result_class = "con_alertas"
-    elif changes_executed > 0:
+    elif _total_changes > 0:
         result_class = "con_cambios"
     elif _smart_issues_now > 0:
         result_class = "con_observaciones"

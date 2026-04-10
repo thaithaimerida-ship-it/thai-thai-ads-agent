@@ -555,7 +555,7 @@ GEO_ALERT_DEDUP_HOURS = 72
 # Dejar vacío {} para no pausar ninguna.
 # ============================================================================
 CAMPAIGNS_TO_PAUSE: dict = {
-    "23680871468": "Thai Mérida - Reservaciones",
+    # "23680871468": "Thai Mérida - Reservaciones",  # Desactivado 2026-04-10 — Hugo la reactivó
 }
 
 CAMPAIGN_HEALTH_CONFIG = {

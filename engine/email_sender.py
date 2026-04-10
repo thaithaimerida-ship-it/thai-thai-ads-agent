@@ -1625,7 +1625,7 @@ def generate_daily_insight(
         _quality_str = " Calidad de anuncios: " + "; ".join(_quality_parts) + "."
 
     # Contexto de objetivo de comensales
-    _objetivo_coms = 40
+    _objetivo_coms = _COMENSALES_OBJ_DIA = 40
     _coms_int = int(_coms) if _coms is not None else None
     _coms_vs_objetivo = ""
     if _coms_int is not None:
@@ -1722,8 +1722,9 @@ def _build_daily_summary_html(run: dict) -> str:
     _landing_ms   = run.get("landing_response_ms")
     _ventas_ayer        = run.get("ventas_ayer", {}) or {}
     # Nuevo formato: resumen_negocio_para_agente
+    _COMENSALES_OBJ_DIA = 40
     _coms_ayer          = _ventas_ayer.get("comensales_total")          # personas en restaurante
-    _coms_obj           = 35                                             # objetivo fijo diario
+    _coms_obj           = _COMENSALES_OBJ_DIA                           # objetivo fijo diario
     _coms_prom          = _ventas_ayer.get("comensales_promedio_diario") # solo útil si days>1
     _venta_local        = float(_ventas_ayer.get("venta_local_total", 0) or 0)    # tarjeta+efectivo
     _venta_plat_bruto   = float(_ventas_ayer.get("venta_plataformas_bruto", 0) or 0)  # col H
@@ -2216,12 +2217,16 @@ def _build_daily_summary_html(run: dict) -> str:
     _por_campana = _ads_24h.get("por_campana", []) or []
     if _por_campana:
         _camp_rows = ""
+        _paused_ids = {str(p.get("campaign_id", "")) for p in (_paused_campaigns_email or [])}
         for _cp in sorted(_por_campana, key=lambda x: -x.get("spend_mxn", 0)):
             _cp_conv = _cp.get("conversions")
             _cp_conv_str = f"{_cp_conv:.0f}" if _cp_conv is not None else "—"
+            _cp_name_display = _cp.get("name", "—")
+            if str(_cp.get("id", "")) in _paused_ids:
+                _cp_name_display += ' <span style="color:#d97706;font-size:10px;">(pausada hoy)</span>'
             _camp_rows += (
                 f'<tr style="border-top:1px solid #f0f0f0;">'
-                f'<td style="padding:5px 8px;color:#374151;font-size:12px;">{_cp.get("name","—")}</td>'
+                f'<td style="padding:5px 8px;color:#374151;font-size:12px;">{_cp_name_display}</td>'
                 f'<td style="text-align:right;padding:5px 8px;font-size:12px;font-weight:bold;">'
                 f'${_cp.get("spend_mxn",0):,.0f}</td>'
                 f'<td style="text-align:right;padding:5px 8px;font-size:12px;color:#6b7280;">'
@@ -2326,7 +2331,7 @@ def _build_daily_summary_html(run: dict) -> str:
       {_ad_rows}
     </table>"""
     else:
-        _ad_block = '<p style="margin:8px 0;font-size:12px;color:#16a34a;">✅ Anuncios — sin alertas de Ad Strength ni rechazos</p>'
+        _ad_block = '<p style="margin:8px 0;font-size:12px;color:#16a34a;">✅ Ad Strength y aprobación OK — sin rechazos ni anuncios débiles</p>'
 
     # Sub-sección 3: Impression Share
     _is_findings = [f for f in _quality_findings if f.get("type") in
@@ -3030,14 +3035,39 @@ def send_daily_summary_email(run: dict, session_id: str) -> bool:
         return False
 
     rc = run.get("result_class", "sin_acciones")
-    _label = {
-        "sin_acciones":      "Sin cambios",
-        "sin_cambios":       "Sin cambios",     # compatibilidad histórica
-        "con_observaciones": "Con observaciones",
-        "con_cambios":       "Con cambios",
-        "con_alertas":       "Con alertas",
-        "con_errores":       "Con errores",
-    }.get(rc, rc)
+
+    # Construir label dinámico basado en acciones reales
+    _acciones = []
+    _exec_budget = run.get("executed_budget", [])
+    _exec_kw = run.get("ai_keyword_decisions", [])
+    _builder = run.get("builder_executed", [])
+    _paused = run.get("paused_campaigns", [])
+
+    if _exec_budget:
+        _budget_count = len(_exec_budget)
+        _acciones.append(f"{_budget_count} ajuste{'s' if _budget_count > 1 else ''} de presupuesto")
+    if _exec_kw:
+        _kw_count = len(_exec_kw)
+        _acciones.append(f"{_kw_count} keyword{'s' if _kw_count > 1 else ''}")
+    if _builder:
+        _bg_count = len([b for b in _builder if isinstance(b.get("result"), dict) and b["result"].get("status") == "success"])
+        if _bg_count:
+            _acciones.append(f"{_bg_count} ad group{'s' if _bg_count > 1 else ''} creado{'s' if _bg_count > 1 else ''}")
+    if _paused:
+        _pc_count = len([p for p in _paused if isinstance(p.get("result"), dict) and p["result"].get("status") == "executed"])
+        if _pc_count:
+            _acciones.append(f"{_pc_count} campaña{'s' if _pc_count > 1 else ''} pausada{'s' if _pc_count > 1 else ''}")
+
+    if _acciones:
+        _label = " + ".join(_acciones)
+    elif rc == "con_observaciones":
+        _label = "Con observaciones"
+    elif rc == "con_alertas":
+        _label = "Con alertas"
+    elif rc == "con_errores":
+        _label = "Con errores"
+    else:
+        _label = "Sin cambios"
 
     fecha = run.get("timestamp_merida", "—")
     subject = f"[Thai Thai Agente] Actividad diaria — {_label} · {fecha}"
