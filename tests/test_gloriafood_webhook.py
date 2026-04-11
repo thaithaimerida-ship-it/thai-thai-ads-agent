@@ -16,12 +16,10 @@ class TestParseOrder:
             "total_price": 450.00,
             "payment": "CASH",
             "accepted_at": "2026-04-10T19:30:00.000Z",
-            "client": {
-                "first_name": "Juan",
-                "last_name": "Pérez",
-                "phone": "+529991234567",
-                "email": "juan@test.com",
-            },
+            "client_first_name": "Juan",
+            "client_last_name": "Pérez",
+            "client_phone": "+529991234567",
+            "client_email": "juan@test.com",
             "items": [
                 {"name": "Pad Thai", "quantity": 2, "price": 180.00},
                 {"name": "Tom Yum", "quantity": 1, "price": 90.00},

@@ -37,11 +37,12 @@ def _parse_order(order: dict) -> dict:
     # Tipo de pedido
     order_type = order.get("type", "unknown")  # "pickup" o "delivery"
 
-    # Datos del cliente (para Enhanced Conversions futuro)
-    client = order.get("client", {}) or {}
-    client_name = client.get("first_name", "") + " " + client.get("last_name", "")
-    client_phone = client.get("phone", "")
-    client_email = client.get("email", "")
+    # Datos del cliente — GloriaFood v2 los manda como campos planos, no anidados
+    client_first = str(order.get("client_first_name") or "")
+    client_last = str(order.get("client_last_name") or "")
+    client_name = f"{client_first} {client_last}".strip()
+    client_phone = str(order.get("client_phone") or "")
+    client_email = str(order.get("client_email") or "")
 
     # Método de pago
     payment = order.get("payment", "")
