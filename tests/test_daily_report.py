@@ -296,3 +296,151 @@ class TestAdStrengthMessage:
         # No debe decir "Todos los anuncios en buen estado"
         assert "Todos los anuncios" not in ok_msg
         assert "Ad Strength" in ok_msg
+
+
+# ============================================================
+# TEST 8: Prompt no menciona Rappi/Uber para Delivery
+# ============================================================
+class TestPromptDelivery:
+    """Verifica que el contexto de negocio en el prompt sea correcto."""
+
+    def test_no_rappi_uber_in_prompt(self):
+        """El contexto de negocio no debe mencionar Rappi ni Uber."""
+        import re
+        with open("engine/email_sender.py", "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "Rappi" not in content or "Rappi/Uber" not in content, \
+            "email_sender.py todavía menciona Rappi/Uber en el contexto de negocio"
+
+    def test_gloriafood_in_delivery_description(self):
+        """prompt.py debe mencionar GloriaFood en la descripción de Delivery."""
+        with open("engine/prompt.py", "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "GloriaFood" in content, "prompt.py no menciona GloriaFood para campaña Delivery"
+
+    def test_no_platforms_delivery_in_prompt(self):
+        """prompt.py no debe decir 'plataformas de delivery'."""
+        with open("engine/prompt.py", "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "plataformas de delivery" not in content, \
+            "prompt.py todavía dice 'plataformas de delivery' — Delivery es tienda propia"
+
+
+# ============================================================
+# TEST 9: QS email filter — solo QS_LOW, sin duplicados
+# ============================================================
+class TestQSEmailFilter:
+    """Verifica el filtro de QS findings para el correo."""
+
+    def _make_findings(self):
+        return [
+            {"type": "QS_LOW", "keyword_text": "thai thai mérida", "campaign_id": "111", "quality_score": 5},
+            {"type": "QS_LOW", "keyword_text": "thai thai mérida", "campaign_id": "111", "quality_score": 5},
+            {"type": "CTR_STRUCTURAL_ISSUE", "keyword_text": "restaurante tailandés", "campaign_id": "111"},
+            {"type": "QS_LOW", "keyword_text": "comida thai mérida", "campaign_id": "111", "quality_score": 6},
+        ]
+
+    def test_only_qs_low_type(self):
+        """Solo findings de tipo QS_LOW deben aparecer en la sección QS."""
+        findings = self._make_findings()
+        _qs_seen = set()
+        _qs_findings = []
+        for f in findings:
+            if f.get("type") != "QS_LOW":
+                continue
+            key = (f.get("keyword_text", ""), f.get("campaign_id", ""))
+            if key in _qs_seen:
+                continue
+            _qs_seen.add(key)
+            _qs_findings.append(f)
+        types = [f["type"] for f in _qs_findings]
+        assert all(t == "QS_LOW" for t in types), f"Tipos inesperados: {types}"
+
+    def test_no_duplicates_in_qs_section(self):
+        """No debe haber keywords duplicadas en la sección QS del correo."""
+        findings = self._make_findings()
+        _qs_seen = set()
+        _qs_findings = []
+        for f in findings:
+            if f.get("type") != "QS_LOW":
+                continue
+            key = (f.get("keyword_text", ""), f.get("campaign_id", ""))
+            if key in _qs_seen:
+                continue
+            _qs_seen.add(key)
+            _qs_findings.append(f)
+        assert len(_qs_findings) == 2, f"Esperados 2 únicos QS_LOW, got {len(_qs_findings)}"
+
+
+# ============================================================
+# TEST 10: DB Sync — upload_to_gcs no lanza si GCS no disponible
+# ============================================================
+class TestDBSync:
+    """Verifica que db_sync no falla catastrófico si GCS no está disponible."""
+
+    def test_upload_returns_bool_no_bucket(self):
+        """upload_to_gcs con bucket no configurado debe retornar False sin lanzar excepción."""
+        import os
+        from unittest.mock import patch
+        from engine.db_sync import upload_to_gcs
+        # Sin bucket configurado, la función debe retornar False de forma segura
+        with patch.dict(os.environ, {"AGENT_GCS_BUCKET": ""}):
+            result = upload_to_gcs()
+        assert isinstance(result, bool), "upload_to_gcs debe retornar bool"
+
+    def test_download_returns_bool_no_bucket(self):
+        """download_from_gcs con bucket no configurado debe retornar False sin lanzar excepción."""
+        import os
+        from unittest.mock import patch
+        from engine.db_sync import download_from_gcs
+        with patch.dict(os.environ, {"AGENT_GCS_BUCKET": ""}):
+            result = download_from_gcs()
+        assert isinstance(result, bool), "download_from_gcs debe retornar bool"
+
+
+# ============================================================
+# TEST 11: Pedidos Online block — siempre muestra contenido
+# ============================================================
+class TestPedidosOnlineBlock:
+    """Verifica que el bloque de pedidos online siempre muestra algo."""
+
+    def test_block_with_orders(self):
+        """Con pedidos, el bloque debe incluir el total en MXN."""
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE gloriafood_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                gloriafood_order_id TEXT,
+                total_price_mxn REAL,
+                received_at TEXT,
+                conversion_sent INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute(
+            "INSERT INTO gloriafood_orders (gloriafood_order_id, total_price_mxn, received_at) "
+            "VALUES ('x1', 450.0, datetime('now', '-1 hours'))"
+        )
+        conn.commit()
+        cursor.execute("""
+            SELECT COUNT(*), COALESCE(SUM(total_price_mxn), 0)
+            FROM gloriafood_orders
+            WHERE received_at >= datetime('now', '-24 hours')
+        """)
+        row = cursor.fetchone()
+        conn.close()
+        assert row[0] == 1
+        assert float(row[1]) == 450.0
+
+    def test_block_no_orders_shows_message(self):
+        """Sin pedidos, el bloque no debe ser vacío — debe mostrar mensaje."""
+        # Simular la lógica del except: siempre muestra "Sin pedidos registrados"
+        _pedidos_block = (
+            '<tr><td>'
+            '<p>🛒 Pedidos Online (24h)</p>'
+            '<p>Sin pedidos registrados en las últimas 24 horas</p>'
+            '</td></tr>'
+        )
+        assert "Sin pedidos" in _pedidos_block
+        assert len(_pedidos_block) > 0

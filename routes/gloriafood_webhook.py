@@ -281,6 +281,14 @@ async def receive_gloriafood_order(request: Request):
         # 1. Guardar en DB
         db_ok = _log_order_to_db(parsed)
 
+        # 1b. Persistir DB en GCS
+        if db_ok:
+            try:
+                from engine.db_sync import upload_to_gcs
+                upload_to_gcs()
+            except Exception as _sync_exc:
+                logger.warning("upload_to_gcs falló: %s", _sync_exc)
+
         # 2. Enviar conversión a Google Ads
         ads_ok = _send_google_ads_conversion(parsed)
 

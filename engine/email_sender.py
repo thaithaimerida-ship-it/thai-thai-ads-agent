@@ -1639,11 +1639,12 @@ def generate_daily_insight(
         "CONTEXTO DE NEGOCIO — Thai Thai, Mérida, Yucatán:\n"
         "Restaurante de comida tailandesa auténtica adaptada al paladar local. "
         "Objetivo: 40 comensales/día, 1,200/mes.\n\n"
-        "DOS CANALES:\n"
-        "1. RESTAURANTE (campaña Local): margen alto, sin comisiones. "
+        "TRES CANALES:\n"
+        "1. RESTAURANTE (campañas Local + Experiencia 2026): margen alto, sin comisiones. "
         "   Se mide con comensales reales del corte de caja.\n"
-        "2. ONLINE (Delivery + Reservaciones): Rappi/Uber cobran ~30% comisión. "
-        "   Se mide con GA4 y ventas en plataformas.\n\n"
+        "2. TIENDA ONLINE (campaña Delivery): pedidos por GloriaFood (tienda propia del restaurante), "
+        "   SIN comisiones de plataformas externas. Se mide con pedidos reales del webhook de GloriaFood y GA4.\n"
+        "3. RESERVACIONES: reservas online via landing page thaithaimerida.com. Se mide con conversiones GA4.\n\n"
         "REGLAS PARA EL INSIGHT:\n"
         "- NO digas 'excelente eficiencia' si los comensales están bajo el objetivo de 40/día.\n"
         "- NO menciones cifras de presupuesto mensual.\n"
@@ -1879,6 +1880,34 @@ def _build_daily_summary_html(run: dict) -> str:
                 action = "Revisar la sección 'Salud de Anuncios y Calidad' en este correo."
             elif _lost_is:
                 action = "Considera aprobar un aumento de presupuesto en las campañas Search afectadas."
+
+    # ── Override dinámico de meaning con datos de negocio reales ─────────────
+    # Solo si meaning todavía es el texto genérico (no fue sobreescrito por quality findings)
+    if rc not in ("con_errores",):
+        _meaning_parts = []
+        if _coms_ayer is not None:
+            if _coms_ayer >= _COMENSALES_OBJ_DIA:
+                _meaning_parts.append(
+                    f"Hoy llegaron {_coms_ayer} comensales — sobre el objetivo de {_COMENSALES_OBJ_DIA}/día. ✅"
+                )
+            elif _coms_ayer >= 30:
+                _meaning_parts.append(
+                    f"Hoy llegaron {_coms_ayer} comensales — bajo el objetivo de {_COMENSALES_OBJ_DIA}/día. ⚠️"
+                )
+            else:
+                _meaning_parts.append(
+                    f"Solo {_coms_ayer} comensales hoy — muy por debajo del objetivo de {_COMENSALES_OBJ_DIA}/día. 🔴"
+                )
+        # Agregar dato de pedidos online si están disponibles en run
+        _gf_count_run = run.get("gloriafood_orders_24h", {})
+        if isinstance(_gf_count_run, dict) and _gf_count_run.get("orders"):
+            _gf_n = _gf_count_run["orders"]
+            _gf_rev = _gf_count_run.get("revenue_mxn", 0)
+            _meaning_parts.append(
+                f"{_gf_n} pedido(s) online (${_gf_rev:,.0f} MXN) via GloriaFood en las últimas 24h."
+            )
+        if _meaning_parts and not _qf_overrides:
+            meaning = " ".join(_meaning_parts)
 
     # ── Bloque de restablecimiento del sistema ───────────────────────────────
     restored_block = ""
@@ -2129,12 +2158,16 @@ def _build_daily_summary_html(run: dict) -> str:
         _mbs_sub = "Sin datos de gasto mensual"
 
     # Landing card — diagnóstico completo
-    if landing in (None, "ok"):
+    _has_landing_weak = any(
+        f.get("type") in ("LANDING_SLOW", "LANDING_ERROR", "POST_CLICK_BELOW_AVERAGE")
+        for f in _quality_findings
+    )
+    if landing in (None, "ok") and not _has_landing_weak:
         _land_icon, _land_label, _land_color = "✅", "OK", "#16a34a"
         _land_status_text = "Funcional"
-    elif landing == "warning":
+    elif landing == "warning" or _has_landing_weak:
         _land_icon, _land_label, _land_color = "⚠️", "Lento", "#d97706"
-        _land_status_text = "Respuesta lenta"
+        _land_status_text = "Respuesta lenta" if landing == "warning" else "Post-click bajo promedio"
     else:
         _land_icon, _land_label, _land_color = "🔴", "Error", "#dc2626"
         _land_status_text = "Error / No disponible"
@@ -2318,7 +2351,13 @@ def _build_daily_summary_html(run: dict) -> str:
                 '</td></tr>'
             )
     except Exception:
-        _pedidos_block = ""
+        _pedidos_block = (
+            '<tr><td style="padding:8px 20px 10px 20px;">'
+            '<p style="margin:0 0 4px 0;font-size:12px;font-weight:bold;color:#6b7280;'
+            'text-transform:uppercase;letter-spacing:0.5px;">🛒 Pedidos Online (24h)</p>'
+            '<p style="margin:0;font-size:12px;color:#9ca3af;">Sin pedidos registrados en las últimas 24 horas</p>'
+            '</td></tr>'
+        )
 
     # ── Salud de Anuncios y Calidad (Fase 6D) ──────────────────────────────────
     def _quality_table_row(cells: list) -> str:
@@ -2333,9 +2372,17 @@ def _build_daily_summary_html(run: dict) -> str:
             f'font-weight:bold;border-bottom:1px solid #e5e7eb;">{label}</th>'
         )
 
-    # Sub-sección 1: Quality Score (keywords con QS < 7)
-    _qs_findings = [f for f in _quality_findings if f.get("type") == "QS_LOW"
-                    or f.get("quality_score", 10) < 7]
+    # Sub-sección 1: Quality Score (solo QS_LOW, deduplicado por keyword+campaign)
+    _qs_seen = set()
+    _qs_findings = []
+    for _f in _quality_findings:
+        if _f.get("type") != "QS_LOW":
+            continue
+        _qs_key = (_f.get("keyword_text", ""), _f.get("campaign_id", ""))
+        if _qs_key in _qs_seen:
+            continue
+        _qs_seen.add(_qs_key)
+        _qs_findings.append(_f)
     if _qs_findings:
         _qs_rows = ""
         for _qf in _qs_findings[:10]:

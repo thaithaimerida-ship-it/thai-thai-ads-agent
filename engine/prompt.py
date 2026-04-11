@@ -35,12 +35,12 @@ Cada propuesta incluye: qué hacer, por qué, qué resultado esperar, qué pasa 
 
 ### 2. Thai Mérida - Delivery (ID: 22839241090)
 - **Tipo:** Smart Campaign (Local)
-- **Objetivo:** Pedidos a domicilio, tráfico a plataformas de delivery
+- **Objetivo:** Pedidos a domicilio via tienda propia GloriaFood (thaithaimerida.com/order)
 - **Geo:** Radio 8km desde centro de Mérida (lat: 20.9674, lng: -89.5926)
 - **Presupuesto:** $100 MXN/día
 - **CPA Target ideal:** < $25 MXN | Máximo aceptable: $45 MXN | Crítico: > $80 MXN
-- **Señal de éxito:** Clicks en plataformas delivery, llamadas para pedido
-- **Nota:** CTR históricamente menor que Local — monitorear siempre
+- **Señal de éxito:** Pedidos completados en GloriaFood (webhook), llamadas para pedido
+- **Nota:** NO usa Rappi/Uber. Es tienda propia sin comisiones. CTR históricamente menor que Local.
 
 ### 3. Thai Mérida - Reservaciones (ID: 23680871468)
 - **Tipo:** Search Campaign (Manual CPC)
@@ -104,7 +104,7 @@ Cada propuesta incluye: qué hacer, por qué, qué resultado esperar, qué pasa 
 ## CÁLCULO DE CPA REAL
 
 **IMPORTANTE:** comensales_real (de Google Sheets) = TOTAL de comensales del restaurante.
-Incluye clientes regulares, walk-ins, plataformas de delivery, y los que llegaron por anuncios.
+Incluye clientes regulares, walk-ins, pedidos online, y los que llegaron por anuncios.
 NO es atribución directa de Google Ads.
 
 CPA_real = total_spend_semana / comensales_reales_semana

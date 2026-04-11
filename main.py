@@ -157,6 +157,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Restaura la base de datos desde GCS al iniciar la instancia."""
+    try:
+        from engine.db_sync import download_from_gcs
+        ok = download_from_gcs()
+        if ok:
+            logger.info("startup: DB restaurada desde GCS OK")
+        else:
+            logger.warning("startup: download_from_gcs() retornó False — se usará DB local")
+    except Exception as e:
+        logger.error("startup: error restaurando DB desde GCS: %s", e)
+
 # ============================================================================
 # MODELOS
 # ============================================================================
