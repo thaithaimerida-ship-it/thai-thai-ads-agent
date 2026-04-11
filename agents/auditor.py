@@ -1685,6 +1685,21 @@ Responde SOLO con JSON válido, sin markdown:
                         logger.warning("Fase 6E: Sonnet falló para campaña %s — %s", _cid_6e, _sonnet_6e_exc)
                         continue
 
+                    # Verificar si ad group ya existe en esta campaña
+                    _existing_ag_names = set()
+                    try:
+                        _ga_svc = client.get_service("GoogleAdsService")
+                        _ag_query = f"""
+                            SELECT ad_group.name
+                            FROM ad_group
+                            WHERE campaign.id = {_cid_6e}
+                            AND ad_group.status != 'REMOVED'
+                        """
+                        for _ag_row in _ga_svc.search(customer_id=target_id, query=_ag_query):
+                            _existing_ag_names.add(_ag_row.ad_group.name)
+                    except Exception:
+                        pass
+
                     for _grp in _data_6e.get("groups", []):
                         if len(_builder_executed) >= 2:
                             break
@@ -1695,6 +1710,19 @@ Responde SOLO con JSON válido, sin markdown:
 
                         if len(_heads) < 3 or len(_descs) < 2 or not _grp_kws or not _ag_name:
                             logger.warning("Fase 6E: grupo '%s' incompleto — skip", _ag_name)
+                            continue
+
+                        if _ag_name in _existing_ag_names:
+                            logger.info("Fase 6E: ad group '%s' ya existe — skip", _ag_name)
+                            _builder_executed.append({
+                                "campaign_id": _cid_6e,
+                                "campaign_name": _cname_6e,
+                                "ad_group_name": _ag_name,
+                                "intent": _grp.get("intent", "category"),
+                                "keywords": _grp_kws,
+                                "headlines": _heads,
+                                "result": {"status": "skipped", "reason": "ad_group_already_exists"},
+                            })
                             continue
 
                         from engine.ads_client import add_ad_group_to_existing_campaign as _add_ag
