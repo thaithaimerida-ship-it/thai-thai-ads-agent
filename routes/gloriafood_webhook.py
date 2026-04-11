@@ -274,3 +274,41 @@ async def gloriafood_stats():
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/webhook/gloriafood/debug-fields")
+async def gloriafood_debug_fields():
+    """Muestra qué campos tienen datos en el último pedido (sin valores personales)."""
+    try:
+        from engine.memory import get_db_path
+        import sqlite3
+        db_path = get_db_path()
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                gloriafood_order_id IS NOT NULL AND gloriafood_order_id != '' as has_order_id,
+                total_price_mxn,
+                order_type,
+                client_name IS NOT NULL AND client_name != '' as has_name,
+                client_phone IS NOT NULL AND client_phone != '' as has_phone,
+                client_email IS NOT NULL AND client_email != '' as has_email,
+                items_count
+            FROM gloriafood_orders
+            ORDER BY id DESC LIMIT 3
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+        return {"orders": [
+            {
+                "has_order_id": bool(r[0]),
+                "total": r[1],
+                "type": r[2],
+                "has_name": bool(r[3]),
+                "has_phone": bool(r[4]),
+                "has_email": bool(r[5]),
+                "items_count": r[6],
+            } for r in rows
+        ]}
+    except Exception as e:
+        return {"error": str(e)}
