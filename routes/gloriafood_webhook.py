@@ -129,56 +129,111 @@ def _log_order_to_db(parsed_order: dict):
 
 def _send_google_ads_conversion(parsed_order: dict):
     """
-    Conversión offline a Google Ads — pendiente de implementar Enhanced Conversions.
-    UploadClickConversions requiere GCLID, que no está disponible en el webhook de GloriaFood.
-    TODO: implementar Enhanced Conversions con hashed email/phone cuando esté disponible.
+    Sube conversión offline a Google Ads vía Enhanced Conversions for Leads.
+    Usa email/teléfono hasheado en vez de GCLID.
     """
-    # Sin GCLID no se puede subir ClickConversion — se omite por ahora
-    logger.info(
-        "Pedido %s guardado en DB ($%.2f MXN). Conversión Google Ads pendiente — requiere Enhanced Conversions (futuro).",
-        parsed_order["gloriafood_order_id"],
-        parsed_order["total_price_mxn"],
-    )
-    return None
+    import hashlib
+    import os
 
-    # ── Código para Enhanced Conversions (futuro) ────────────────────────────
-    # import os
-    # from engine.ads_client import get_ads_client
-    # client = get_ads_client()
-    # customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
-    # conversion_upload_service = client.get_service("ConversionUploadService")
-    # conversion_action_service = client.get_service("GoogleAdsService")
-    # query = """
-    #     SELECT conversion_action.resource_name, conversion_action.name
-    #     FROM conversion_action
-    #     WHERE conversion_action.name = 'Pedido completado Gloria Food'
-    #     AND conversion_action.status = 'ENABLED'
-    # """
-    # results = list(conversion_action_service.search(customer_id=customer_id, query=query))
-    # if not results:
-    #     return False
-    # conversion_action_rn = results[0].conversion_action.resource_name
-    # click_conversion = client.get_type("ClickConversion")
-    # click_conversion.conversion_action = conversion_action_rn
-    # click_conversion.conversion_value = parsed_order["total_price_mxn"]
-    # click_conversion.currency_code = "MXN"
-    # click_conversion.conversion_date_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S+00:00")
-    # if parsed_order.get("client_email") or parsed_order.get("client_phone"):
-    #     user_identifier = client.get_type("UserIdentifier")
-    #     if parsed_order.get("client_email"):
-    #         user_identifier.hashed_email = parsed_order["client_email"].lower().strip()
-    #     if parsed_order.get("client_phone"):
-    #         user_identifier.hashed_phone_number = parsed_order["client_phone"].strip()
-    #     click_conversion.user_identifiers.append(user_identifier)
-    # request = client.get_type("UploadClickConversionsRequest")
-    # request.customer_id = customer_id
-    # request.conversions.append(click_conversion)
-    # request.partial_failure = True
-    # response = conversion_upload_service.upload_click_conversions(request=request)
-    # if response.partial_failure_error:
-    #     logger.warning("Conversión GloriaFood fallida: %s", response.partial_failure_error.message)
-    #     return False
-    # return True
+    # Sin datos de cliente, no podemos hacer match
+    if not parsed_order.get("client_email") and not parsed_order.get("client_phone"):
+        logger.info("Pedido %s sin email/teléfono — no se puede enviar Enhanced Conversion",
+                    parsed_order["gloriafood_order_id"])
+        return None
+
+    try:
+        from engine.ads_client import get_ads_client
+        customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
+
+        if not customer_id:
+            logger.warning("GOOGLE_ADS_TARGET_CUSTOMER_ID no configurado")
+            return False
+
+        client = get_ads_client()
+        if not client:
+            logger.warning("No se pudo obtener Google Ads client")
+            return False
+
+        # Buscar conversion action
+        ga_service = client.get_service("GoogleAdsService")
+        query = """
+            SELECT conversion_action.resource_name
+            FROM conversion_action
+            WHERE conversion_action.name = 'Pedido completado Gloria Food'
+            AND conversion_action.status = 'ENABLED'
+        """
+        results = list(ga_service.search(customer_id=customer_id, query=query))
+        if not results:
+            logger.warning("Conversión 'Pedido completado Gloria Food' no encontrada")
+            return False
+
+        conversion_action_rn = results[0].conversion_action.resource_name
+
+        # Construir ClickConversion con user identifiers (sin GCLID)
+        click_conversion = client.get_type("ClickConversion")
+        click_conversion.conversion_action = conversion_action_rn
+        click_conversion.conversion_value = parsed_order["total_price_mxn"]
+        click_conversion.currency_code = "MXN"
+        click_conversion.conversion_date_time = datetime.now(
+            timezone.utc
+        ).strftime("%Y-%m-%d %H:%M:%S+00:00")
+        click_conversion.order_id = parsed_order["gloriafood_order_id"]
+
+        # User identifiers — hasheados con SHA-256
+        if parsed_order.get("client_email"):
+            email_normalized = parsed_order["client_email"].strip().lower()
+            email_hash = hashlib.sha256(email_normalized.encode()).hexdigest()
+            user_id = client.get_type("UserIdentifier")
+            user_id.address_info = client.get_type("OfflineUserAddressInfo")
+            user_id.hashed_email = email_hash
+            click_conversion.user_identifiers.append(user_id)
+
+        if parsed_order.get("client_phone"):
+            phone_clean = parsed_order["client_phone"].strip()
+            if not phone_clean.startswith("+"):
+                phone_clean = "+52" + phone_clean
+            phone_hash = hashlib.sha256(phone_clean.encode()).hexdigest()
+            user_id2 = client.get_type("UserIdentifier")
+            user_id2.hashed_phone_number = phone_hash
+            click_conversion.user_identifiers.append(user_id2)
+
+        # Subir
+        upload_service = client.get_service("ConversionUploadService")
+        request = client.get_type("UploadClickConversionsRequest")
+        request.customer_id = customer_id
+        request.conversions.append(click_conversion)
+        request.partial_failure = True
+
+        response = upload_service.upload_click_conversions(request=request)
+
+        if response.partial_failure_error:
+            logger.warning("Enhanced Conversion parcialmente fallida: %s",
+                          response.partial_failure_error.message)
+            return False
+
+        logger.info("Enhanced Conversion enviada: $%.2f MXN, order=%s",
+                    parsed_order["total_price_mxn"],
+                    parsed_order["gloriafood_order_id"])
+
+        # Marcar en DB como enviada
+        try:
+            from engine.memory import get_db_path
+            import sqlite3
+            conn = sqlite3.connect(get_db_path())
+            conn.execute(
+                "UPDATE gloriafood_orders SET conversion_sent = 1 WHERE gloriafood_order_id = ?",
+                (parsed_order["gloriafood_order_id"],)
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+        return True
+
+    except Exception as e:
+        logger.error("Error Enhanced Conversion: %s", e)
+        return False
 
 
 @router.post("/webhook/gloriafood")
