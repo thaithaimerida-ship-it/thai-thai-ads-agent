@@ -53,35 +53,8 @@ async def send_weekly_report_endpoint(dry_run: bool = False):
         supervisor_data = build_supervisor_data(rows)
         next_action = get_next_best_action(supervisor_data)
 
-        # 4. Auditorías frescas para el reporte (GEO + Smart)
+        # 4. Métricas Google Ads — Bloque 3 del reporte
         _target_id_w = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "4021070209")
-        geo_report_data  = None
-        smart_report_data = None
-        try:
-            from engine.ads_client import get_ads_client as _get_ads_client_w, fetch_campaign_geo_criteria as _fetch_geo
-            from engine.geo_auditor import detect_geo_issues_by_policy as _detect_geo_policy
-            from config.agent_config import (
-                CAMPAIGN_GEO_OBJECTIVES as _CGO,
-                GEO_OBJECTIVE_POLICIES  as _GOP,
-            )
-            _client_w = _get_ads_client_w()
-            _criteria  = _fetch_geo(_client_w, _target_id_w)
-            geo_report_data = _detect_geo_policy(_criteria, _CGO, _GOP)
-            # Aplicar validaciones humanas de UI (con geo_criteria para verificar staleness)
-            from engine.geo_ui_validator import load_ui_validations as _load_ui_val_w, apply_ui_validations as _apply_ui_val_w
-            geo_report_data = _apply_ui_val_w(geo_report_data, _load_ui_val_w(), _criteria)
-        except Exception as _geo_w_exc:
-            print(f"[WEEKLY] geo audit no disponible (no crítico): {_geo_w_exc}")
-
-        try:
-            from engine.ads_client import get_ads_client as _get_ads_client_smart
-            from engine.smart_campaign_auditor import audit_smart_campaigns as _audit_smart_w
-            _client_smart = _get_ads_client_smart()
-            smart_report_data = _audit_smart_w(_client_smart, _target_id_w)
-        except Exception as _smart_w_exc:
-            print(f"[WEEKLY] smart audit no disponible (no crítico): {_smart_w_exc}")
-
-        # 4b. Métricas Google Ads — Bloque 3 del reporte
         ads_data = None
         try:
             from engine.ads_client import (
@@ -110,14 +83,12 @@ async def send_weekly_report_endpoint(dry_run: bool = False):
         # 5. dry_run: devuelve HTML sin enviar correo
         if dry_run:
             html = build_html_report(week_data, prev_week_data, mtd_data, supervisor_data, next_action,
-                                     geo_data=geo_report_data, smart_data=smart_report_data,
                                      ads_data=ads_data)
             from fastapi.responses import HTMLResponse
             return HTMLResponse(content=html, status_code=200)
 
         # 6. Enviar correo
         result = send_weekly_report(week_data, prev_week_data, mtd_data, supervisor_data, next_action,
-                                    geo_data=geo_report_data, smart_data=smart_report_data,
                                     ads_data=ads_data)
 
         return {

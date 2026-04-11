@@ -1085,14 +1085,12 @@ def build_html_report(
       </table>
     </div>"""
 
-    # ── B3, B4, B5, B6, B7, B8, B9 ──────────────────────────────────────────
+    # ── B3, B4, B5, B6, B7 ───────────────────────────────────────────────────
     ads_status_html         = _build_ads_status_html(ads_data)
     executed_actions_html   = _build_executed_actions_html(supervisor_data)
     pending_proposals_html  = _build_pending_proposals_html(supervisor_data)
     risks_alerts_html       = _build_risks_alerts_html(supervisor_data)
     next_action_html        = _build_next_action_html(next_action)
-    geo_block_html          = _build_geo_block_html(geo_data)
-    smart_block_html        = _build_smart_block_html(smart_data)
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -1175,16 +1173,6 @@ def build_html_report(
          B7: SIGUIENTE MEJOR ACCIÓN
     ═══════════════════════════════════ -->
     {next_action_html}
-
-    <!-- ═══════════════════════════════════
-         B8: GEO — CUMPLIMIENTO GEOTARGETING
-    ═══════════════════════════════════ -->
-    {geo_block_html}
-
-    <!-- ═══════════════════════════════════
-         B9: SMART CAMPAIGNS
-    ═══════════════════════════════════ -->
-    {smart_block_html}
 
   </div>
 
