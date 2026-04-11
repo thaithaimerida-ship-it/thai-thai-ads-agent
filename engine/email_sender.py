@@ -1906,8 +1906,8 @@ def _build_daily_summary_html(run: dict) -> str:
             _meaning_parts.append(
                 f"{_gf_n} pedido(s) online (${_gf_rev:,.0f} MXN) via GloriaFood en las últimas 24h."
             )
-        if _meaning_parts and not _qf_overrides:
-            meaning = " ".join(_meaning_parts)
+        if _meaning_parts:
+            meaning = " ".join(_meaning_parts) + " " + meaning
 
     # ── Bloque de restablecimiento del sistema ───────────────────────────────
     restored_block = ""
@@ -2159,7 +2159,7 @@ def _build_daily_summary_html(run: dict) -> str:
 
     # Landing card — diagnóstico completo
     _has_landing_weak = any(
-        f.get("type") in ("LANDING_SLOW", "LANDING_ERROR", "POST_CLICK_BELOW_AVERAGE")
+        f.get("type") in ("LANDING_SLOW", "LANDING_ERROR", "POST_CLICK_BELOW_AVERAGE", "QS_LANDING_WEAK")
         for f in _quality_findings
     )
     if landing in (None, "ok") and not _has_landing_weak:
