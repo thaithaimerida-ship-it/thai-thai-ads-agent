@@ -50,7 +50,7 @@ def _parse_order(order: dict) -> dict:
     accepted_at = order.get("accepted_at", "")
 
     return {
-        "gloriafood_order_id": str(order.get("id", "")),
+        "gloriafood_order_id": str(order.get("id") or order.get("order_id") or order.get("cust_order_id") or ""),
         "total_price_mxn": total_price,
         "order_type": order_type,
         "payment_method": payment,
@@ -133,15 +133,15 @@ def _send_google_ads_conversion(parsed_order: dict):
     Sin GCLID, la conversión se registra como offline import.
     """
     try:
+        import os
         from engine.ads_client import get_ads_client
-        from config.agent_config import GOOGLE_ADS_CUSTOMER_ID
 
         client = get_ads_client()
         if not client:
             logger.warning("No se pudo obtener Google Ads client para conversión")
             return False
 
-        customer_id = GOOGLE_ADS_CUSTOMER_ID.replace("-", "")
+        customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
 
         # Usar ConversionUploadService para subir conversión offline
         conversion_upload_service = client.get_service("ConversionUploadService")
@@ -219,8 +219,11 @@ async def receive_gloriafood_order(request: Request):
     """
     # Validar master key
     auth_header = request.headers.get("Authorization", "")
-    if GLORIAFOOD_MASTER_KEY and auth_header != GLORIAFOOD_MASTER_KEY:
-        logger.warning("Webhook GloriaFood: master key inválida")
+    if GLORIAFOOD_MASTER_KEY and auth_header not in (
+        GLORIAFOOD_MASTER_KEY,
+        f"Bearer {GLORIAFOOD_MASTER_KEY}",
+    ):
+        logger.warning("Webhook GloriaFood: master key inválida — recibida: %s", auth_header[:10] + "...")
         raise HTTPException(status_code=401, detail="Invalid master key")
 
     try:
