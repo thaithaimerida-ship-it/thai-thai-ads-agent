@@ -163,7 +163,7 @@ def _send_google_ads_conversion(parsed_order: dict):
         query = """
             SELECT conversion_action.resource_name
             FROM conversion_action
-            WHERE conversion_action.name = 'Pedido completado Gloria Food'
+            WHERE conversion_action.name = 'Pedido GloriaFood Online'
             AND conversion_action.status = 'ENABLED'
         """
         results = list(ga_service.search(customer_id=customer_id, query=query))
@@ -438,3 +438,36 @@ async def gloriafood_debug_fields():
         ]}
     except Exception as e:
         return {"error": str(e)}
+
+
+@router.get("/webhook/gloriafood/create-conversion-action")
+async def create_offline_conversion_action():
+    """Crea la conversion action tipo UPLOAD_CLICKS para recibir Enhanced Conversions."""
+    try:
+        import os
+        from engine.ads_client import get_ads_client
+        customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
+        client = get_ads_client()
+
+        conversion_action_service = client.get_service("ConversionActionService")
+        conversion_action_operation = client.get_type("ConversionActionOperation")
+        conversion_action = conversion_action_operation.create
+
+        conversion_action.name = "Pedido GloriaFood Online"
+        conversion_action.category = client.enums.ConversionActionCategoryEnum.PURCHASE
+        conversion_action.type_ = client.enums.ConversionActionTypeEnum.UPLOAD_CLICKS
+        conversion_action.status = client.enums.ConversionActionStatusEnum.ENABLED
+        conversion_action.value_settings.default_value = 450.0
+        conversion_action.value_settings.default_currency_code = "MXN"
+        conversion_action.value_settings.always_use_default_value = False
+
+        response = conversion_action_service.mutate_conversion_actions(
+            customer_id=customer_id,
+            operations=[conversion_action_operation],
+        )
+
+        new_rn = response.results[0].resource_name
+        return {"status": "ok", "resource_name": new_rn, "name": "Pedido GloriaFood Online"}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
