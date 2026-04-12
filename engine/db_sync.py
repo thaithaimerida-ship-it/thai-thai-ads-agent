@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 _IS_CLOUD_RUN = bool(os.getenv("K_SERVICE") or os.getenv("GOOGLE_CLOUD_PROJECT"))
 
 _LOCAL_DB_PATH  = "/tmp/thai_thai_memory.db" if _IS_CLOUD_RUN else "./thai_thai_memory.db"
-_GCS_BUCKET     = os.getenv("AGENT_GCS_BUCKET", "")
+_GCS_BUCKET     = os.getenv("AGENT_GCS_BUCKET", "thai-thai-agent-data")
 _GCS_DB_BLOB    = os.getenv("AGENT_GCS_DB_BLOB", "memory/thai_thai_memory.db")
 
 # ── Exportación pública ───────────────────────────────────────────────────────
