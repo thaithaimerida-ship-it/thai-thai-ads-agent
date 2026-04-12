@@ -133,12 +133,14 @@ def _send_google_ads_conversion(parsed_order: dict):
     Usa email/teléfono hasheado en vez de GCLID.
     """
     import hashlib
+    import traceback
     import os
+
+    order_id = parsed_order.get("gloriafood_order_id", "?")
 
     # Sin datos de cliente, no podemos hacer match
     if not parsed_order.get("client_email") and not parsed_order.get("client_phone"):
-        logger.info("Pedido %s sin email/teléfono — no se puede enviar Enhanced Conversion",
-                    parsed_order["gloriafood_order_id"])
+        logger.info("[CONV %s] Sin email/teléfono — no se puede enviar Enhanced Conversion", order_id)
         return None
 
     try:
@@ -146,13 +148,15 @@ def _send_google_ads_conversion(parsed_order: dict):
         customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
 
         if not customer_id:
-            logger.warning("GOOGLE_ADS_TARGET_CUSTOMER_ID no configurado")
+            logger.warning("[CONV %s] GOOGLE_ADS_TARGET_CUSTOMER_ID no configurado", order_id)
             return False
 
         client = get_ads_client()
         if not client:
-            logger.warning("No se pudo obtener Google Ads client")
+            logger.warning("[CONV %s] No se pudo obtener Google Ads client", order_id)
             return False
+
+        logger.info("[CONV %s] client ok — buscando conversion action...", order_id)
 
         # Buscar conversion action
         ga_service = client.get_service("GoogleAdsService")
@@ -164,10 +168,11 @@ def _send_google_ads_conversion(parsed_order: dict):
         """
         results = list(ga_service.search(customer_id=customer_id, query=query))
         if not results:
-            logger.warning("Conversión 'Pedido completado Gloria Food' no encontrada")
+            logger.warning("[CONV %s] Conversión 'Pedido completado Gloria Food' no encontrada", order_id)
             return False
 
         conversion_action_rn = results[0].conversion_action.resource_name
+        logger.info("[CONV %s] conversion action encontrada: %s", order_id, conversion_action_rn)
 
         # Construir ClickConversion con user identifiers (sin GCLID)
         click_conversion = client.get_type("ClickConversion")
@@ -184,9 +189,9 @@ def _send_google_ads_conversion(parsed_order: dict):
             email_normalized = parsed_order["client_email"].strip().lower()
             email_hash = hashlib.sha256(email_normalized.encode()).hexdigest()
             user_id = client.get_type("UserIdentifier")
-            user_id.address_info = client.get_type("OfflineUserAddressInfo")
             user_id.hashed_email = email_hash
             click_conversion.user_identifiers.append(user_id)
+            logger.info("[CONV %s] email identifier agregado", order_id)
 
         if parsed_order.get("client_phone"):
             phone_clean = parsed_order["client_phone"].strip()
@@ -196,6 +201,7 @@ def _send_google_ads_conversion(parsed_order: dict):
             user_id2 = client.get_type("UserIdentifier")
             user_id2.hashed_phone_number = phone_hash
             click_conversion.user_identifiers.append(user_id2)
+            logger.info("[CONV %s] phone identifier agregado", order_id)
 
         # Subir
         upload_service = client.get_service("ConversionUploadService")
@@ -204,16 +210,25 @@ def _send_google_ads_conversion(parsed_order: dict):
         request.conversions.append(click_conversion)
         request.partial_failure = True
 
+        logger.info("[CONV %s] uploading $%.2f MXN...", order_id, parsed_order["total_price_mxn"])
         response = upload_service.upload_click_conversions(request=request)
 
         if response.partial_failure_error:
-            logger.warning("Enhanced Conversion parcialmente fallida: %s",
-                          response.partial_failure_error.message)
+            try:
+                from google.ads.googleads.errors import GoogleAdsFailure
+                failure = GoogleAdsFailure()
+                failure._pb.MergeFromString(
+                    response.partial_failure_error.details[0].value
+                )
+                for error in failure.errors:
+                    logger.error("[CONV %s] PARTIAL FAILURE detail: %s | field: %s",
+                        order_id, error.message, error.location.field_path_elements)
+            except Exception as parse_err:
+                logger.error("[CONV %s] PARTIAL FAILURE raw: %s | parse error: %s",
+                    order_id, response.partial_failure_error, parse_err)
             return False
 
-        logger.info("Enhanced Conversion enviada: $%.2f MXN, order=%s",
-                    parsed_order["total_price_mxn"],
-                    parsed_order["gloriafood_order_id"])
+        logger.info("[CONV %s] Enhanced Conversion enviada: $%.2f MXN", order_id, parsed_order["total_price_mxn"])
 
         # Marcar en DB como enviada
         try:
@@ -232,7 +247,7 @@ def _send_google_ads_conversion(parsed_order: dict):
         return True
 
     except Exception as e:
-        logger.error("Error Enhanced Conversion: %s", e)
+        logger.error("[CONV %s] Error Enhanced Conversion: %s\n%s", order_id, e, traceback.format_exc())
         return False
 
 
@@ -338,6 +353,53 @@ async def gloriafood_stats():
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/webhook/gloriafood/retry")
+async def gloriafood_retry_conversions():
+    """Reintenta enviar conversiones pendientes (conversion_sent=0) — LIMIT 10."""
+    try:
+        from engine.memory import get_db_path
+        import sqlite3
+        db_path = get_db_path()
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT gloriafood_order_id, total_price_mxn, order_type, payment_method,
+                   client_name, client_phone, client_email, items_json, accepted_at
+            FROM gloriafood_orders
+            WHERE conversion_sent = 0
+            AND (client_email != '' OR client_phone != '')
+            ORDER BY id DESC
+            LIMIT 10
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+    if not rows:
+        return {"status": "ok", "message": "No hay conversiones pendientes", "retried": 0}
+
+    results = []
+    for row in rows:
+        parsed = {
+            "gloriafood_order_id": row[0],
+            "total_price_mxn": row[1],
+            "order_type": row[2],
+            "payment_method": row[3],
+            "client_name": row[4],
+            "client_phone": row[5],
+            "client_email": row[6],
+            "items": json.loads(row[7] or "[]"),
+            "accepted_at": row[8],
+        }
+        ok = _send_google_ads_conversion(parsed)
+        results.append({"order_id": row[0], "success": ok})
+        logger.info("[RETRY] order=%s result=%s", row[0], ok)
+
+    sent = sum(1 for r in results if r["success"])
+    return {"status": "ok", "retried": len(results), "sent": sent, "results": results}
 
 
 @router.get("/webhook/gloriafood/debug-fields")
