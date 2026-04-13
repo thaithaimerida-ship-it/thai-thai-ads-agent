@@ -542,20 +542,43 @@ async def reactivate_conversion():
 
 @router.get("/webhook/gloriafood/set-goal-biddable")
 async def set_goal_biddable():
-    """Marca PURCHASE+UPLOAD_CLICKS como biddable a nivel de cuenta."""
+    """Lista todos los CustomerConversionGoals y marca el de PURCHASE como biddable."""
     import os
     from engine.ads_client import get_ads_client
     customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
     client = get_ads_client()
 
-    resource_name = f"customers/{customer_id}/customerConversionGoals/PURCHASE~UPLOAD_CLICKS"
+    ga_service = client.get_service("GoogleAdsService")
+    query = """
+        SELECT customer_conversion_goal.category,
+               customer_conversion_goal.origin,
+               customer_conversion_goal.biddable
+        FROM customer_conversion_goal
+    """
+    results = list(ga_service.search(customer_id=customer_id, query=query))
+
+    goals = []
+    target_resource = None
+    for row in results:
+        g = row.customer_conversion_goal
+        cat_name = str(g.category.name) if hasattr(g.category, 'name') else str(g.category)
+        origin_name = str(g.origin.name) if hasattr(g.origin, 'name') else str(g.origin)
+        goals.append({
+            "category": cat_name,
+            "origin": origin_name,
+            "biddable": g.biddable,
+            "resource_name": g.resource_name
+        })
+        if "PURCHASE" in cat_name and not g.biddable:
+            target_resource = g.resource_name
+
+    if not target_resource:
+        return {"status": "ok", "message": "No unbiddable PURCHASE goal found", "goals": goals}
 
     ccg_service = client.get_service("CustomerConversionGoalService")
     op = client.get_type("CustomerConversionGoalOperation")
-    goal = op.update
-    goal.resource_name = resource_name
-    goal.biddable = True
-
+    op.update.resource_name = target_resource
+    op.update.biddable = True
     from google.protobuf import field_mask_pb2
     op.update_mask = field_mask_pb2.FieldMask(paths=["biddable"])
 
@@ -564,7 +587,7 @@ async def set_goal_biddable():
             customer_id=customer_id,
             operations=[op],
         )
-        return {"status": "ok", "updated": resource_name}
+        return {"status": "ok", "updated": target_resource, "goals": goals}
     except Exception as e:
         import traceback
-        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+        return {"status": "error", "message": str(e), "goals": goals}
