@@ -82,11 +82,6 @@ def download_from_gcs() -> bool:
 
     local = _LOCAL_DB_PATH
 
-    # Si ya existe la DB local con datos, no sobrescribir
-    if os.path.exists(local) and os.path.getsize(local) > 0:
-        logger.info("db_sync.download: DB local ya existe (%d bytes) — skip", os.path.getsize(local))
-        return False
-
     client = _get_gcs_client()
     if not client:
         return False
