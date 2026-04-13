@@ -255,6 +255,13 @@ DIRECTIVA PARA DECISIONES DE PRESUPUESTO EN CAMPAÑAS DE TRÁFICO LOCAL:
             f"  - Gasto de ayer: ${_mbs.get('spend_yesterday', 0):,.0f} MXN\n"
             f"  - ESTADO: {_pace_emoji} {_pace}{_pace_rule}"
         )
+    monthly_cap_str += (
+        "\n\nREGLA DE REDISTRIBUCIÓN PERMANENTE:\n"
+        "Cuando reduzcas presupuesto en una campaña, SIEMPRE evalúa si otra campaña con LOST_IS_BUDGET_HIGH "
+        "y CPA sano merece recibir ese dinero. El presupuesto liberado debe fluir a donde genera más valor, "
+        "no desaparecer. Si reduces $X en una campaña, propón scale de $X en otra que lo merezca. "
+        "Si ninguna lo merece, está bien solo reducir."
+    )
 
     # ── Calidad y Visibilidad (Fase 6D findings) ──────────────────────────────
     quality_str = "  (sin datos de calidad disponibles)"

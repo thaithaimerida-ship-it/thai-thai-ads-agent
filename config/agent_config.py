@@ -125,19 +125,9 @@ LEARNING_PHASE_STATUS_SIGNALS = ["LEARNING", "aprendizaje", "learning"]
 # El agente puede proponer su revisión, pero no ejecutar.
 # ============================================================================
 
-PROTECTED_KEYWORDS = [
-    "restaurante thai merida",
-    "restaurante thai mérida",
-    "thai thai merida",
-    "thai thai mérida",
-    "restaurante tailandes merida",
-    "restaurante tailandés mérida",
-    "thai merida",
-    "thai mérida",
-    "comida tailandesa merida",
-    "comida tailandesa mérida",
-    "thai thai",
-]
+PROTECTED_KEYWORDS = []
+# Hugo decidió que el agente sea 100% autónomo en keywords.
+# Si necesita proteger alguna en el futuro, agregarla aquí.
 
 # ============================================================================
 # CAMPAÑAS PROTEGIDAS
