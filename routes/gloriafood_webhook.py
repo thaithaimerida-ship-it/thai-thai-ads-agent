@@ -213,7 +213,7 @@ def _send_google_ads_conversion(parsed_order: dict):
         logger.info("[CONV %s] uploading $%.2f MXN...", order_id, parsed_order["total_price_mxn"])
         response = upload_service.upload_click_conversions(request=request)
 
-        if response.partial_failure_error:
+        if response.partial_failure_error and response.partial_failure_error.code != 0:
             raw_error = response.partial_failure_error
             logger.error("[CONV %s] PARTIAL FAILURE: code=%s, message=%s, details_count=%s",
                          order_id, raw_error.code, raw_error.message, len(raw_error.details))
