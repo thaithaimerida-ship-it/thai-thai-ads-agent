@@ -507,3 +507,34 @@ async def get_conversion_tag_info():
     except Exception as e:
         import traceback
         return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+
+
+@router.get("/webhook/gloriafood/reactivate-conversion")
+async def reactivate_conversion():
+    """Reactiva Pedido GloriaFood Online cambiando status de REMOVED a ENABLED."""
+    import os
+    from engine.ads_client import get_ads_client
+    customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
+    client = get_ads_client()
+
+    conversion_action_service = client.get_service("ConversionActionService")
+
+    # Resource name conocido
+    resource_name = f"customers/{customer_id}/conversionActions/7572944047"
+
+    op = client.get_type("ConversionActionOperation")
+    op.update.resource_name = resource_name
+    op.update.status = client.enums.ConversionActionStatusEnum.ENABLED
+
+    from google.protobuf import field_mask_pb2
+    op.update_mask = field_mask_pb2.FieldMask(paths=["status"])
+
+    try:
+        response = conversion_action_service.mutate_conversion_actions(
+            customer_id=customer_id,
+            operations=[op],
+        )
+        return {"status": "ok", "result": str(response.results[0].resource_name)}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
