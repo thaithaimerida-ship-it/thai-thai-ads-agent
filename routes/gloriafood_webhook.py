@@ -214,18 +214,11 @@ def _send_google_ads_conversion(parsed_order: dict):
         response = upload_service.upload_click_conversions(request=request)
 
         if response.partial_failure_error:
-            try:
-                from google.ads.googleads.errors import GoogleAdsFailure
-                failure = GoogleAdsFailure()
-                failure._pb.MergeFromString(
-                    response.partial_failure_error.details[0].value
-                )
-                for error in failure.errors:
-                    logger.error("[CONV %s] PARTIAL FAILURE detail: %s | field: %s",
-                        order_id, error.message, error.location.field_path_elements)
-            except Exception as parse_err:
-                logger.error("[CONV %s] PARTIAL FAILURE raw: %s | parse error: %s",
-                    order_id, response.partial_failure_error, parse_err)
+            raw_error = response.partial_failure_error
+            logger.error("[CONV %s] PARTIAL FAILURE: code=%s, message=%s, details_count=%s",
+                         order_id, raw_error.code, raw_error.message, len(raw_error.details))
+            for i, detail in enumerate(raw_error.details):
+                logger.error("[CONV %s] PARTIAL FAILURE detail[%d]: %s", order_id, i, detail)
             return False
 
         logger.info("[CONV %s] Enhanced Conversion enviada: $%.2f MXN", order_id, parsed_order["total_price_mxn"])
