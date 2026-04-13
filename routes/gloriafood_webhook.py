@@ -168,7 +168,7 @@ def _send_google_ads_conversion(parsed_order: dict):
         """
         results = list(ga_service.search(customer_id=customer_id, query=query))
         if not results:
-            logger.warning("[CONV %s] Conversión 'Pedido completado Gloria Food' no encontrada", order_id)
+            logger.warning("[CONV %s] Conversión 'Pedido GloriaFood Online' no encontrada", order_id)
             return False
 
         conversion_action_rn = results[0].conversion_action.resource_name
