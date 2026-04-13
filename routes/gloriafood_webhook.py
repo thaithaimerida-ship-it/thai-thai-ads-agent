@@ -538,3 +538,33 @@ async def reactivate_conversion():
     except Exception as e:
         import traceback
         return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+
+
+@router.get("/webhook/gloriafood/set-goal-biddable")
+async def set_goal_biddable():
+    """Marca PURCHASE+UPLOAD_CLICKS como biddable a nivel de cuenta."""
+    import os
+    from engine.ads_client import get_ads_client
+    customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
+    client = get_ads_client()
+
+    resource_name = f"customers/{customer_id}/customerConversionGoals/PURCHASE~UPLOAD_CLICKS"
+
+    ccg_service = client.get_service("CustomerConversionGoalService")
+    op = client.get_type("CustomerConversionGoalOperation")
+    goal = op.update
+    goal.resource_name = resource_name
+    goal.biddable = True
+
+    from google.protobuf import field_mask_pb2
+    op.update_mask = field_mask_pb2.FieldMask(paths=["biddable"])
+
+    try:
+        response = ccg_service.mutate_customer_conversion_goals(
+            customer_id=customer_id,
+            operations=[op],
+        )
+        return {"status": "ok", "updated": resource_name}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
