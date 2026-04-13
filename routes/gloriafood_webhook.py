@@ -471,3 +471,39 @@ async def create_offline_conversion_action():
     except Exception as e:
         import traceback
         return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+
+
+@router.get("/webhook/gloriafood/conversion-tag-info")
+async def get_conversion_tag_info():
+    """Consulta tag_snippets de todas las conversion actions."""
+    try:
+        import os
+        from engine.ads_client import get_ads_client
+        customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
+        client = get_ads_client()
+        ga_service = client.get_service("GoogleAdsService")
+        query = """
+            SELECT conversion_action.name, conversion_action.id,
+                   conversion_action.tag_snippets, conversion_action.status,
+                   conversion_action.type
+            FROM conversion_action
+            WHERE conversion_action.status != 'REMOVED'
+        """
+        results = list(ga_service.search(customer_id=customer_id, query=query))
+        actions = []
+        for row in results:
+            ca = row.conversion_action
+            snippets = []
+            for s in ca.tag_snippets:
+                snippets.append({"type": str(s.type_), "event_snippet": s.event_snippet[:200] if s.event_snippet else ""})
+            actions.append({
+                "name": ca.name,
+                "id": ca.id,
+                "type": str(ca.type_),
+                "status": str(ca.status),
+                "snippets": snippets
+            })
+        return {"status": "ok", "actions": actions}
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
