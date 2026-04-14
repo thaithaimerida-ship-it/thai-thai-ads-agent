@@ -625,6 +625,68 @@ async def run_autonomous_audit():
     )
 
 
+@app.post("/run-quick-wins")
+async def run_quick_wins():
+    """Quick Wins estructurales auditoría 14-abr-2026. Idempotente. Solo campañas Search."""
+    from engine.ads_client import (
+        get_ads_client, fetch_conversion_actions, disable_conversion_action,
+        update_bidding_strategy, update_network_settings,
+        clear_ad_schedules, update_ad_schedule
+    )
+    from engine.credentials import load_credentials
+
+    CUSTOMER_ID = "4021070209"
+    EXPERIENCIA_ID = "23730364039"
+    RESERVACIONES_ID = "23680871468"
+
+    LEGACY_CONVERSIONS = [
+        "Thai Thai Merida (web) reserva_completada",
+        "Thai Thai Merida (web) click_pedir_online",
+        "Pedido completado Gloria Food",
+    ]
+    SCHEDULE_DAYS = ["TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY","SUNDAY"]
+
+    results = {
+        "qw2_conversiones": [],
+        "qw3_bidding": {},
+        "qw4_display": {},
+        "qw5_schedule": {},
+        "errors": []
+    }
+
+    try:
+        creds = load_credentials()
+        client = get_ads_client(creds)
+
+        # QW2 — Pausar conversiones legacy duplicadas
+        for conv in fetch_conversion_actions(client, CUSTOMER_ID):
+            if conv["name"] in LEGACY_CONVERSIONS:
+                r = disable_conversion_action(client, CUSTOMER_ID, conv["id"], conv["name"])
+                results["qw2_conversiones"].append({"name": conv["name"], **r})
+
+        # QW3 — TIS → Maximize Conversions en Experiencia 2026
+        results["qw3_bidding"] = update_bidding_strategy(
+            client, CUSTOMER_ID, EXPERIENCIA_ID, "MAXIMIZE_CONVERSIONS"
+        )
+
+        # QW4 — Desactivar Display Network en Experiencia 2026
+        results["qw4_display"] = update_network_settings(
+            client, CUSTOMER_ID, EXPERIENCIA_ID, target_content_network=False
+        )
+
+        # QW5 — Ad schedule Mar-Dom 11-22h en ambas campañas Search
+        for camp_id in [EXPERIENCIA_ID, RESERVACIONES_ID]:
+            cleared = clear_ad_schedules(client, CUSTOMER_ID, camp_id)
+            days = [update_ad_schedule(client, CUSTOMER_ID, camp_id, d, 11, 22)
+                    for d in SCHEDULE_DAYS]
+            results["qw5_schedule"][camp_id] = {"cleared": cleared, "days": days}
+
+    except Exception as e:
+        results["errors"].append(str(e))
+
+    return results
+
+
 @app.api_route("/run-compensatory-audit", methods=["GET", "POST"])
 async def run_compensatory_audit():
     """

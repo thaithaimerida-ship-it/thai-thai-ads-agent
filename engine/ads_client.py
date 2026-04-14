@@ -5,14 +5,12 @@ from datetime import datetime, timedelta
 from google.ads.googleads.client import GoogleAdsClient
 from google.api_core.exceptions import GoogleAPIError
 
-# Nombres exactos de conversiones reales — NUNCA desactivar
+# Conversiones activas — NUNCA desactivar
 PROTECTED_CONVERSIONS = {
-    "Pedido completado Gloria Food",
-    "Thai Thai Merida (web) reserva_completada",
-    "Thai Thai Merida (web) click_pedir_online",
+    "reserva_completada_directa",
+    "Pedido GloriaFood Online",
 }
-# Substrings de respaldo — si el nombre contiene alguno de estos, también está protegido
-PROTECTED_SUBSTRINGS = ["reserva_completada", "click_pedir_online", "pedido completado gloria"]
+PROTECTED_SUBSTRINGS = ["reserva_completada_directa", "gloriafood online"]
 
 
 def get_date_range(days: int = 30):
@@ -1401,6 +1399,41 @@ def update_ad_schedule(client, customer_id: str, campaign_id: str,
             operations=[operation]
         )
         return {"status": "success", "day": day_of_week, "hours": f"{start_hour}-{end_hour}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def update_bidding_strategy(client, customer_id: str, campaign_id: str, strategy: str) -> dict:
+    """Cambia bidding strategy de campaña Search. NO usar en Smart Campaigns."""
+    try:
+        campaign_service = client.get_service("CampaignService")
+        operation = client.get_type("CampaignOperation")
+        campaign = operation.update
+        campaign.resource_name = campaign_service.campaign_path(customer_id, campaign_id)
+        if strategy == "MAXIMIZE_CONVERSIONS":
+            campaign.maximize_conversions.target_cpa_micros = 0
+            operation.update_mask.paths[:] = ["maximize_conversions"]
+        else:
+            return {"status": "error", "message": f"Estrategia '{strategy}' no implementada"}
+        campaign_service.mutate_campaigns(customer_id=customer_id, operations=[operation])
+        return {"status": "success", "campaign_id": campaign_id, "strategy": strategy}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def update_network_settings(client, customer_id: str, campaign_id: str,
+                             target_content_network: bool = False) -> dict:
+    """Desactiva Display Network en campaña Search. NO usar en Smart Campaigns."""
+    try:
+        campaign_service = client.get_service("CampaignService")
+        operation = client.get_type("CampaignOperation")
+        campaign = operation.update
+        campaign.resource_name = campaign_service.campaign_path(customer_id, campaign_id)
+        campaign.network_settings.target_content_network = target_content_network
+        operation.update_mask.paths[:] = ["network_settings.target_content_network"]
+        campaign_service.mutate_campaigns(customer_id=customer_id, operations=[operation])
+        return {"status": "success", "campaign_id": campaign_id,
+                "target_content_network": target_content_network}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
