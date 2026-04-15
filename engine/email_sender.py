@@ -2079,15 +2079,14 @@ def _build_pro_daily_html(run: dict) -> str:
               <div style="flex:1;"><span style="color:#aaa;margin-right:4px;font-size:10px;">{cid}</span><span style="color:#333;">{detail}{sev_badge}</span></div>
             </div>"""
         cat_sections += f"""
-        <div style="margin-bottom:8px;" id="cat-{cat_key}">
-          <div onclick="tc('{cat_key}')" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding-bottom:6px;border-bottom:0.5px solid #e8e8e8;margin-bottom:8px;">
+        <div style="margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:6px;border-bottom:0.5px solid #e8e8e8;margin-bottom:8px;">
             <div style="display:flex;align-items:center;gap:8px;">
               <span style="font-size:13px;font-weight:500;color:#333;">{cat_label}</span>
               <span style="font-size:10px;padding:1px 7px;border-radius:4px;font-weight:500;{CAT_SCORE_STYLE(sv)}">{sv_str}</span>
             </div>
-            <span id="ico-{cat_key}" style="font-size:11px;color:#aaa;">▼</span>
           </div>
-          <div id="body-{cat_key}" style="display:none;">{checks_html}</div>
+          <div>{checks_html}</div>
         </div>"""
 
     desglose_section = f"""
@@ -2102,17 +2101,7 @@ def _build_pro_daily_html(run: dict) -> str:
       Thai Thai Ads Agent · administracion@thaithaimerida.com.mx
     </div>"""
 
-    toggle_js = """
-    <script>
-    function tc(id){
-      var b=document.getElementById('body-'+id);
-      var i=document.getElementById('ico-'+id);
-      if(b.style.display==='none'){b.style.display='block';i.textContent='▲';}
-      else{b.style.display='none';i.textContent='▼';}
-    }
-    </script>"""
-
-    return f"""<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>{_CSS}</style></head>
 <body><div class="wrap">
@@ -2125,7 +2114,14 @@ def _build_pro_daily_html(run: dict) -> str:
 {qw_section}
 {desglose_section}
 {footer}
-</div>{toggle_js}</body></html>"""
+</div></body></html>"""
+
+    try:
+        from premailer import transform
+        html = transform(html)
+    except Exception:
+        pass
+    return html
 
 
 def _build_daily_summary_html(run: dict) -> str:
