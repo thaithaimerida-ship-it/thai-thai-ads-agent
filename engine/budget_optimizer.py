@@ -393,6 +393,88 @@ def _check_70_20_10(campaigns: list, decisions: list) -> list:
 
 # ── Redistribución ────────────────────────────────────────────────────────────
 
+def _apply_active_redistribution(decisions: list, campaigns: list) -> list:
+    """
+    Redistribución activa: el presupuesto liberado por reduces fluye a campañas
+    Search en HOLD que tengan CPA bueno e IS perdido alto.
+    Principio del skill: el dinero liberado debe ir a donde genera más valor.
+    """
+    freed_daily = sum(
+        d.get("current_daily_budget_mxn", 0) - (d.get("new_daily_budget_mxn") or 0)
+        for d in decisions
+        if d.get("action") in ("reduce", "rollback", "kill")
+        and d.get("new_daily_budget_mxn") is not None
+    )
+
+    if freed_daily <= 0:
+        return decisions
+
+    camp_map = {str(c.get("id", "")): c for c in campaigns}
+    eligible_holds = []
+
+    for dec in decisions:
+        if dec.get("action") != "hold":
+            continue
+        camp = camp_map.get(dec.get("campaign_id", ""), {})
+        if _is_smart_campaign(camp):
+            continue
+
+        campaign_type = dec.get("campaign_type", "default")
+        cpa_now = _cpa_real(camp)
+        target = _cpa_target(campaign_type)
+        is_lost = _is_lost_budget(camp)
+
+        # Elegible: CPA bueno (< target) Y hay demanda sin capturar (IS > 20%)
+        if cpa_now and cpa_now < target and is_lost > SCALE_IS_BUDGET_LOST_MIN:
+            eligible_holds.append({
+                "decision": dec,
+                "cpa_now": cpa_now,
+                "target": target,
+                "is_lost": is_lost,
+                "score": (target - cpa_now) / target * is_lost,
+            })
+
+    if not eligible_holds:
+        return decisions
+
+    # Priorizar mayor oportunidad (CPA más bajo + IS más alto)
+    eligible_holds.sort(key=lambda x: x["score"], reverse=True)
+
+    remaining_to_distribute = freed_daily
+
+    for eh in eligible_holds:
+        if remaining_to_distribute <= 0:
+            break
+
+        dec = eh["decision"]
+        current_budget = dec.get("current_daily_budget_mxn", 0)
+        if current_budget <= 0:
+            continue
+
+        max_increase = current_budget * SCALE_MAX_PCT
+        actual_increase = round(min(max_increase, remaining_to_distribute), 2)
+        new_budget = round(current_budget + actual_increase, 2)
+
+        dec["action"] = "scale"
+        dec["new_daily_budget_mxn"] = new_budget
+        dec["change_pct"] = round(actual_increase / current_budget * 100, 1)
+        dec["reason"] = (
+            f"Redistribución activa: CPA ${eh['cpa_now']:.0f} < target ${eh['target']:.0f} "
+            f"+ IS perdido {eh['is_lost']*100:.0f}%. "
+            f"Recibe ${actual_increase:.0f}/día liberados de campañas reducidas."
+        )
+        dec["rule"] = "REDISTRIBUTION"
+        dec["confidence"] = 80
+
+        remaining_to_distribute -= actual_increase
+        logger.info(
+            "[redistribution] %s: HOLD -> SCALE +$%.0f/día (redistribución de reduces)",
+            dec["campaign_name"], actual_increase
+        )
+
+    return decisions
+
+
 def _calculate_redistribution(decisions: list, campaigns: list) -> dict:
     """
     Calcula cuánto presupuesto se liberó con reducciones/kills
@@ -470,7 +552,7 @@ def format_redistribution_report(redistribution: dict) -> str:
     """
     Genera el bloque de texto de redistribución para el correo diario.
     """
-    lines = ["REDISTRIBUCION DE PRESUPUESTO:"]
+    lines = ["💰 REDISTRIBUCIÓN DE PRESUPUESTO HOY:"]
 
     if redistribution["reduced"]:
         lines.append("\n  REDUCIDO:")
@@ -617,31 +699,39 @@ def run_budget_optimization(
     # Verificar 70/20/10
     decisions = _check_70_20_10(campaigns, decisions)
 
-    # Guardrail mensual
+    # Guardrail mensual — compara gasto PROYECTADO del mes contra el cap
+    # NO compara el total diario (Local+Delivery siempre dominan y distorsionan)
     if monthly_budget_status:
-        remaining = monthly_budget_status.get("remaining", MONTHLY_CAP_MXN)
+        spend_so_far = monthly_budget_status.get("spend_so_far", 0)
         days_remaining = monthly_budget_status.get("days_remaining", 30)
-        daily_allowed = remaining / days_remaining if days_remaining > 0 else 0
+        monthly_cap = monthly_budget_status.get("monthly_cap", MONTHLY_CAP_MXN)
 
-        total_daily_post = sum(
-            d.get("new_daily_budget_mxn") or d.get("current_daily_budget_mxn", 0)
-            for d in decisions
-            if d.get("action") not in ("kill",)
+        # Solo el incremento incremental que agregarían los scales
+        incremental_from_scales = sum(
+            (d.get("new_daily_budget_mxn") or 0) - d.get("current_daily_budget_mxn", 0)
+            for d in decisions if d.get("action") == "scale"
         )
 
-        if total_daily_post > daily_allowed and daily_allowed > 0:
+        # Gasto proyectado = ya gastado + (presupuesto actual + incremento) * días restantes
+        current_total_daily = sum(d.get("current_daily_budget_mxn", 0) for d in decisions)
+        projected_spend = spend_so_far + (current_total_daily + incremental_from_scales) * days_remaining
+
+        if projected_spend > monthly_cap and days_remaining > 0:
             logger.warning(
-                "[budget_optimizer] Guardrail mensual: total diario propuesto $%.0f > permitido $%.0f — bloqueando scales",
-                total_daily_post, daily_allowed
+                "[budget_optimizer] Guardrail mensual: proyección $%.0f > cap $%.0f — bloqueando scales",
+                projected_spend, monthly_cap
             )
             for dec in decisions:
                 if dec["action"] == "scale":
                     dec["action"] = "hold"
                     dec["new_daily_budget_mxn"] = None
-                    dec["reason"] += f" [BLOQUEADO: guardrail mensual, máximo ${daily_allowed:.0f}/día]"
+                    dec["reason"] += f" [BLOQUEADO: proyección ${projected_spend:.0f} > cap ${monthly_cap:.0f}]"
                     dec["change_pct"] = 0.0
                     if dec in requires_haiku:
                         requires_haiku.remove(dec)
+
+    # Redistribución activa: dinero liberado por reduces fluye a campañas elegibles
+    decisions = _apply_active_redistribution(decisions, campaigns)
 
     redistribution = _calculate_redistribution(decisions, campaigns)
     report = format_redistribution_report(redistribution)
