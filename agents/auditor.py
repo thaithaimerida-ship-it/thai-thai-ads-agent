@@ -156,6 +156,30 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             except Exception:
                 pass
             _audit_result = _run_audit(_audit_data, previous_score=_prev_score)
+            _ae_delta_str = (
+                (f"+{_audit_result.score_delta:.1f}" if _audit_result.score_delta >= 0
+                 else f"{_audit_result.score_delta:.1f}")
+                if _audit_result.score_delta is not None else "n/a"
+            )
+            logger.info(
+                "Fase AuditEngine: score=%.0f grade=%s delta=%s",
+                _audit_result.score or 0, _audit_result.grade, _ae_delta_str,
+            )
+        except Exception as _ae_exc:
+            logger.warning("Fase AuditEngine: no crítico — %s", _ae_exc)
+
+        results = {
+            "session_id": session_id,
+            "timestamp": datetime.now().isoformat(),
+            "executed": [],
+            "proposed": [],
+            "observed": [],
+            "blocked": [],
+            "summary": {}
+        }
+
+        # Serializar resultado del audit_engine (results ya está definido aquí)
+        if _audit_result is not None:
             results["audit_result"] = {
                 "score": _audit_result.score,
                 "grade": _audit_result.grade,
@@ -187,26 +211,8 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     for cat in ["CT", "Wasted", "Structure", "KW", "Ads", "Settings"]
                 }
             }
-            logger.info(
-                "Fase AuditEngine: score=%.0f grade=%s delta=%s",
-                _audit_result.score, _audit_result.grade,
-                f"+{_audit_result.score_delta:.1f}" if (_audit_result.score_delta or 0) >= 0
-                else f"{_audit_result.score_delta:.1f}"
-                if _audit_result.score_delta is not None else "n/a"
-            )
-        except Exception as _ae_exc:
-            logger.warning("Fase AuditEngine: no crítico — %s", _ae_exc)
+        else:
             results["audit_result"] = {}
-
-        results = {
-            "session_id": session_id,
-            "timestamp": datetime.now().isoformat(),
-            "executed": [],
-            "proposed": [],
-            "observed": [],
-            "blocked": [],
-            "summary": {}
-        }
 
         from config.agent_config import KEYWORD_AUTO_BLOCK_MAX_PER_CYCLE, MAX_PROPOSALS_PER_EMAIL
         auto_executed_count = 0

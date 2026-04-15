@@ -199,7 +199,7 @@ def collect_audit_data(client, customer_id: str, ga4_data: dict, landing_data: d
         "below_avg_relevance_pct": round(len(below_rel) / n_kq * 100, 1),
         "below_avg_landing_pct": round(len(below_land) / n_kq * 100, 1),
         "top_kw_low_qs_count": len(top_low_qs),
-        "top_kw_has_critical": any(kw.get("quality_score", 10) <= 4 for kw in top20),
+        "top_kw_has_critical": any((kw.get("quality_score") or 10) <= 4 for kw in top20),
         "zero_impression_pct": round(zero_imp_pct, 1),
         "total_keywords": len(keywords_raw),
         "rsa_data": rsa_data,

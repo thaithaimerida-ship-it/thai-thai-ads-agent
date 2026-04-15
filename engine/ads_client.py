@@ -1618,10 +1618,12 @@ def fetch_campaign_details_for_audit(client, customer_id: str) -> list:
     """
     Lee detalles de campaña para audit engine: network settings, bidding, serving status.
     Cubre: G10, G12, G36, G37, G38, G39, G40, G41.
-    Solo campañas ENABLED. Sin segments.date para evitar duplicados.
+    Dos queries: estructura (sin fecha) + métricas 30d (segments.date BETWEEN).
     """
+    from datetime import datetime as _dt, timedelta as _td
     ga_service = client.get_service("GoogleAdsService")
-    query = """
+
+    struct_query = """
         SELECT
           campaign.id,
           campaign.name,
@@ -1631,23 +1633,27 @@ def fetch_campaign_details_for_audit(client, customer_id: str) -> list:
           campaign.network_settings.target_search_network,
           campaign.serving_status,
           campaign_budget.amount_micros,
-          campaign_budget.has_recommended_budget,
-          metrics.cost_micros,
-          metrics.conversions,
-          metrics.search_impression_share
+          campaign_budget.has_recommended_budget
         FROM campaign
         WHERE campaign.status = 'ENABLED'
-        DURING LAST_30_DAYS
     """
-    campaigns = []
-    seen = set()
+    end_d   = (_dt.now() - _td(days=1)).strftime("%Y-%m-%d")
+    start_d = (_dt.now() - _td(days=30)).strftime("%Y-%m-%d")
+    metrics_query = f"""
+        SELECT
+          campaign.id,
+          metrics.cost_micros,
+          metrics.conversions
+        FROM campaign
+        WHERE campaign.status = 'ENABLED'
+          AND segments.date BETWEEN '{start_d}' AND '{end_d}'
+    """
+
+    campaigns = {}
     try:
-        for row in ga_service.search(customer_id=customer_id, query=query):
+        for row in ga_service.search(customer_id=customer_id, query=struct_query):
             cid = str(row.campaign.id)
-            if cid in seen:
-                continue
-            seen.add(cid)
-            campaigns.append({
+            campaigns[cid] = {
                 "id": cid,
                 "name": row.campaign.name,
                 "channel_type": str(row.campaign.advertising_channel_type.name),
@@ -1657,13 +1663,23 @@ def fetch_campaign_details_for_audit(client, customer_id: str) -> list:
                 "serving_status": str(row.campaign.serving_status.name),
                 "budget_micros": row.campaign_budget.amount_micros,
                 "has_recommended_budget": row.campaign_budget.has_recommended_budget,
-                "cost_micros_30d": row.metrics.cost_micros,
-                "conversions_30d": float(row.metrics.conversions),
-                "search_impression_share": float(row.metrics.search_impression_share or 0),
-            })
+                "cost_micros_30d": 0,
+                "conversions_30d": 0.0,
+                "search_impression_share": 0.0,
+            }
     except Exception as e:
-        print(f"[fetch_campaign_details_for_audit] error: {e}")
-    return campaigns
+        print(f"[fetch_campaign_details_for_audit] struct error: {e}")
+
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=metrics_query):
+            cid = str(row.campaign.id)
+            if cid in campaigns:
+                campaigns[cid]["cost_micros_30d"]  += row.metrics.cost_micros
+                campaigns[cid]["conversions_30d"]  += float(row.metrics.conversions)
+    except Exception as e:
+        print(f"[fetch_campaign_details_for_audit] metrics error: {e}")
+
+    return list(campaigns.values())
 
 
 def fetch_enhanced_conversions(client, customer_id: str) -> list:
