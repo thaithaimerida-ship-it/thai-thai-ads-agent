@@ -1830,22 +1830,29 @@ def _build_pro_daily_html(run: dict) -> str:
     # ── Snapshot de campañas ──────────────────────────────────────────────────
     camp_rows = ""
     for c in ads.get("por_campana") or []:
-        cname = _esc(c.get("name", "—"))
-        gasto = _mxn(c.get("spend_mxn"))
-        conv  = c.get("conversions", 0)
+        cname  = _esc(c.get("name", "—"))
+        tipo   = _esc(c.get("tipo", "—"))
+        gasto  = _mxn(c.get("spend_mxn"))
+        clics  = int(c.get("clicks", 0) or 0)
+        conv   = float(c.get("conversions", 0) or 0)
+        spend  = float(c.get("spend_mxn", 0) or 0)
+        cpa    = _mxn(spend / conv) if conv > 0 else "—"
         camp_rows += f"""
         <tr>
           <td>{cname}</td>
+          <td style="color:#888;font-size:11px;">{tipo}</td>
           <td>{gasto}</td>
+          <td>{clics:,}</td>
           <td>{conv:.0f}</td>
+          <td>{cpa}</td>
           <td><span class="badge badge-green">Activa</span></td>
         </tr>"""
     snapshot_section = f"""
     <div class="card">
       <div class="sec-title">Snapshot de campañas (30d)</div>
       <table class="data">
-        <tr><th>Campaña</th><th>Gasto</th><th>Conv</th><th>Estado</th></tr>
-        {camp_rows if camp_rows else '<tr><td colspan="4" style="color:#aaa;text-align:center;">Sin datos de campañas</td></tr>'}
+        <tr><th>Campaña</th><th>Tipo</th><th>Gasto</th><th>Clics</th><th>Conv</th><th>CPA</th><th>Estado</th></tr>
+        {camp_rows if camp_rows else '<tr><td colspan="7" style="color:#aaa;text-align:center;">Sin datos de campañas</td></tr>'}
       </table>
       <div style="font-size:10px;color:#aaa;margin-top:8px;">*Smart: micro-acciones locales. No son reservas ni pedidos.</div>
     </div>"""

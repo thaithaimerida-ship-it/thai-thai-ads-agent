@@ -113,8 +113,10 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             "por_campana": [
                 {
                     "name":        c.get("name", "—"),
+                    "tipo":        c.get("advertising_channel_type", "—"),
                     "spend_mxn":   round(c.get("cost_micros", 0) / 1_000_000, 2),
-                    "conversions": round(float(c.get("conversions", 0)), 1),
+                    "clicks":      int(c.get("clicks", 0) or 0),
+                    "conversions": round(float(c.get("conversions", 0) or 0), 1),
                 }
                 for c in campaigns
                 if c.get("cost_micros", 0) > 0
@@ -2892,10 +2894,7 @@ Responde SOLO con JSON válido, sin markdown:
 
             _mem_daily    = _get_mem_daily()
             # Corridas compensatorias siempre envían — son el fallback explícito
-            _already_sent = (
-                False if run_type == "compensatory"
-                else _mem_daily.has_recent_alert("daily_summary", 12)
-            )
+            _already_sent = False
 
             _email_sent = False
             if not _already_sent:
