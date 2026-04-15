@@ -1688,6 +1688,446 @@ def generate_daily_insight(
 # RESUMEN DIARIO DE ACTIVIDAD
 # ============================================================================
 
+def _build_pro_daily_html(run: dict) -> str:
+    """
+    Genera el correo diario pro — formato aprobado Módulo 3.
+    Secciones: score, snapshot, negocio, redistribución, keywords, ad groups, checklist, quick wins.
+    """
+    from datetime import date as _date_cls
+    import html as _html_lib
+
+    def _esc(v): return _html_lib.escape(str(v or ""))
+    def _mxn(v):
+        try: return f"${float(v):,.0f}"
+        except: return "—"
+
+    ar  = run.get("audit_result") or {}
+    bo  = run.get("budget_optimizer") or {}
+    vy  = run.get("ventas_ayer") or {}
+    ads = run.get("ads_24h") or {}
+    mbs = run.get("monthly_budget_status") or {}
+    ca  = run.get("creative_actions") or []
+    kp  = run.get("keyword_proposals") or []
+    boo_dec = bo.get("decisions") or []
+    boo_red = bo.get("redistribution") or {}
+    boo_ped = bo.get("pedidos_gloriafood_detalle") or []
+    boo_ped_count = bo.get("pedidos_gloriafood_24h") or 0
+    boo_exec = bo.get("executed") or []
+
+    score       = ar.get("score") or 0
+    grade       = ar.get("grade") or "—"
+    cat_scores  = ar.get("category_scores") or {}
+    delta       = ar.get("score_delta")
+    prev_score  = ar.get("previous_score")
+    quick_wins  = ar.get("quick_wins") or []
+    checks_by_cat = ar.get("checks_by_category") or {}
+
+    fecha = _date_cls.today().strftime("%Y-%m-%d")
+    _ads_spend = float(ads.get("spend_mxn") or 0)
+    _mes_pct   = 0
+    _mes_cap   = float(mbs.get("monthly_cap") or 10000)
+    _mes_spent = float(mbs.get("spend_so_far") or 0)
+    if _mes_cap > 0:
+        _mes_pct = round(_mes_spent / _mes_cap * 100, 1)
+
+    def _bar(s, w=180):
+        if s is None: return ""
+        pct = int(s)
+        color = "#1D9E75" if s >= 70 else ("#EF9F27" if s >= 45 else "#E24B4A")
+        filled = int(w * pct / 100)
+        return (
+            f'<div style="display:inline-flex;align-items:center;gap:6px;">'
+            f'<div style="width:{w}px;height:6px;background:#e0e0e0;border-radius:3px;overflow:hidden;">'
+            f'<div style="width:{filled}px;height:100%;background:{color};border-radius:3px;"></div>'
+            f'</div><span style="font-size:12px;font-weight:500;color:#333;">{s:.0f}/100</span></div>'
+        )
+
+    CAT_LABELS = [
+        ("CT",        "Conversion Tracking", "25%"),
+        ("Wasted",    "Wasted Spend",        "20%"),
+        ("Structure", "Account Structure",   "15%"),
+        ("KW",        "Keywords & QS",       "15%"),
+        ("Ads",       "Ads & Assets",        "15%"),
+        ("Settings",  "Settings & Targeting","10%"),
+    ]
+
+    def _check_icon(result):
+        icons = {"PASS": ("✓", "#1D9E75"), "FAIL": ("✗", "#E24B4A"), "WARNING": ("⚠", "#EF9F27"), "SKIP": ("–", "#aaa"), "N/A": ("–", "#aaa")}
+        sym, col = icons.get(result, ("?", "#aaa"))
+        return f'<span style="color:{col};font-weight:500;">{sym}</span>'
+
+    _CSS = """
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0;background:#f5f5f5;}
+    .wrap{max-width:600px;margin:0 auto;padding:16px;}
+    .card{background:#fff;border:0.5px solid #e0e0e0;border-radius:12px;padding:16px 18px;margin-bottom:12px;}
+    .sec-title{font-size:10px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;
+               margin-bottom:10px;padding-bottom:6px;border-bottom:0.5px solid #e8e8e8;}
+    .row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px;}
+    .row-border{border-bottom:0.5px solid #f0f0f0;}
+    .row-border:last-child{border-bottom:none;}
+    .badge{display:inline-block;font-size:10px;padding:1px 7px;border-radius:4px;font-weight:500;}
+    .badge-green{background:#e8f5e9;color:#2e7d32;}
+    .badge-amber{background:#fff8e1;color:#e65100;}
+    .badge-red{background:#fce4ec;color:#b71c1c;}
+    .badge-info{background:#e3f2fd;color:#1565c0;}
+    .kw-tag{font-size:10px;padding:1px 5px;border-radius:3px;font-weight:500;}
+    .kw-blocked{background:#fce4ec;color:#b71c1c;}
+    .kw-added{background:#e8f5e9;color:#2e7d32;}
+    .kw-watch{background:#fff8e1;color:#e65100;}
+    .kw-auto{background:#e3f2fd;color:#1565c0;}
+    .check-row{display:flex;gap:8px;padding:4px 0;font-size:12px;align-items:flex-start;}
+    .check-done{color:#2e7d32;flex-shrink:0;}
+    table.data{width:100%;border-collapse:collapse;font-size:12px;}
+    table.data th{color:#999;font-weight:500;padding:4px 6px;border-bottom:0.5px solid #e8e8e8;text-align:left;}
+    table.data td{padding:5px 6px;border-bottom:0.5px solid #f0f0f0;color:#333;}
+    table.data tr:last-child td{border-bottom:none;}
+    .metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
+    .metric-card{background:#f8f8f8;border-radius:8px;padding:10px 12px;}
+    .metric-label{font-size:11px;color:#999;margin-bottom:2px;}
+    .metric-value{font-size:20px;font-weight:500;color:#111;}
+    .metric-sub{font-size:11px;color:#aaa;}
+    .budget-type-r{color:#E24B4A;font-weight:500;}
+    .budget-type-s{color:#1D9E75;font-weight:500;}
+    .budget-type-p{color:#999;}
+    """
+
+    # ── Score header ──────────────────────────────────────────────────────────
+    delta_html = ""
+    if delta is not None and prev_score is not None:
+        sign = "+" if delta >= 0 else ""
+        color = "#1D9E75" if delta >= 0 else "#E24B4A"
+        delta_html = f'<div style="font-size:13px;color:{color};">{sign}{delta:.1f} pts vs ayer</div>'
+
+    score_color = "#1D9E75" if score >= 70 else ("#EF9F27" if score >= 45 else "#E24B4A")
+    cats_html = ""
+    for cat_key, cat_label, cat_weight in CAT_LABELS:
+        sv = cat_scores.get(cat_key)
+        sv_str = f"{sv:.0f}/100" if sv is not None else "N/D"
+        cats_html += f"""
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:12px;">
+          <span style="width:140px;color:#666;flex-shrink:0;">{cat_label}</span>
+          <span style="width:50px;font-weight:500;color:#333;text-align:right;flex-shrink:0;">{sv_str}</span>
+          {_bar(sv)}
+          <span style="width:30px;color:#aaa;font-size:11px;text-align:right;">{cat_weight}</span>
+        </div>"""
+
+    score_section = f"""
+    <div class="card" style="background:#f8f9fa;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">
+        <div>
+          <div style="font-size:15px;font-weight:500;color:#111;">Google Ads Health Score — Thai Thai Mérida</div>
+          <div style="font-size:11px;color:#999;margin-top:2px;">{fecha} · Últimos 30 días · ID 4021070209</div>
+        </div>
+        <div style="text-align:right;">
+          <span style="font-size:30px;font-weight:500;color:{score_color};">{score:.0f}</span>
+          <span style="font-size:13px;color:#999;">/100 ({_esc(grade)})</span>
+          {delta_html}
+        </div>
+      </div>
+      {cats_html}
+    </div>"""
+
+    # ── Snapshot de campañas ──────────────────────────────────────────────────
+    camp_rows = ""
+    for c in ads.get("por_campana") or []:
+        cname = _esc(c.get("name", "—"))
+        gasto = _mxn(c.get("spend_mxn"))
+        conv  = c.get("conversions", 0)
+        camp_rows += f"""
+        <tr>
+          <td>{cname}</td>
+          <td>{gasto}</td>
+          <td>{conv:.0f}</td>
+          <td><span class="badge badge-green">Activa</span></td>
+        </tr>"""
+    snapshot_section = f"""
+    <div class="card">
+      <div class="sec-title">Snapshot de campañas (30d)</div>
+      <table class="data">
+        <tr><th>Campaña</th><th>Gasto</th><th>Conv</th><th>Estado</th></tr>
+        {camp_rows if camp_rows else '<tr><td colspan="4" style="color:#aaa;text-align:center;">Sin datos de campañas</td></tr>'}
+      </table>
+      <div style="font-size:10px;color:#aaa;margin-top:8px;">*Smart: micro-acciones locales. No son reservas ni pedidos.</div>
+    </div>"""
+
+    # ── Negocio ayer ──────────────────────────────────────────────────────────
+    _coms  = vy.get("comensales_total")
+    _efect = float(vy.get("pago_efectivo_total") or 0)
+    _tarj  = float(vy.get("pago_tarjeta_total") or 0)
+    _plat  = float(vy.get("venta_plataformas_bruto") or 0)
+    _total = float(vy.get("venta_total_dia") or 0)
+    coms_html = ""
+    if _coms is not None:
+        ok = "✓" if int(_coms) >= 40 else "⚠"
+        coms_html = f'<div class="metric-card"><div class="metric-label">Comensales</div><div class="metric-value">{_coms}</div><div class="metric-sub">Objetivo: 40 {ok}</div></div>'
+
+    pedidos_html = ""
+    if boo_ped:
+        total_gf = sum(p.get("total_mxn", 0) for p in boo_ped)
+        rows_gf = ""
+        for p in boo_ped:
+            oid   = _esc(p.get("order_id", ""))
+            tmxn  = _mxn(p.get("total_mxn"))
+            hora  = str(p.get("accepted_at") or "")[-8:-3] if p.get("accepted_at") else "—"
+            rows_gf += f'<div class="row row-border"><span>#{oid}</span><span>{tmxn} MXN</span><span style="color:#aaa;">{hora}h</span></div>'
+        pedidos_html = f"""
+        <div style="margin-top:10px;">
+          <div class="sec-title">Pedidos GloriaFood (24h) — {boo_ped_count} pedidos · {_mxn(total_gf)} MXN total</div>
+          {rows_gf}
+        </div>"""
+    elif boo_ped_count == 0:
+        pedidos_html = '<div style="font-size:12px;color:#aaa;margin-top:8px;">Sin pedidos GloriaFood en las últimas 24h</div>'
+
+    negocio_section = f"""
+    <div class="card">
+      <div class="sec-title">Negocio ayer</div>
+      <div class="metric-grid">
+        {coms_html}
+        <div class="metric-card"><div class="metric-label">Venta total</div><div class="metric-value">{_mxn(_total)}</div><div class="metric-sub">MXN</div></div>
+      </div>
+      <div style="font-size:12px;color:#666;">
+        <div class="row row-border"><span>Efectivo</span><span>{_mxn(_efect)} MXN</span></div>
+        <div class="row row-border"><span>Tarjeta</span><span>{_mxn(_tarj)} MXN</span></div>
+        <div class="row row-border"><span>Plataformas</span><span>{_mxn(_plat)} MXN</span></div>
+      </div>
+      {pedidos_html}
+      <div style="font-size:11px;color:#aaa;margin-top:10px;display:flex;justify-content:space-between;">
+        <span>Gasto Ads hoy: {_mxn(_ads_spend)} MXN</span>
+        <span>Mes: {_mxn(_mes_spent)} / {_mxn(_mes_cap)} ({_mes_pct}%)</span>
+      </div>
+    </div>"""
+
+    # ── Redistribución de presupuesto ─────────────────────────────────────────
+    reduced   = boo_red.get("reduced") or []
+    scaled    = boo_red.get("scaled") or []
+    protected = boo_red.get("protected") or []
+    net_daily = boo_red.get("net_daily_mxn") or 0
+
+    budget_rows = ""
+    for r in reduced:
+        budget_rows += f"""
+        <div class="row row-border">
+          <span class="budget-type-r" style="width:68px;flex-shrink:0;font-size:11px;">Reducido</span>
+          <div style="flex:1;font-size:12px;color:#333;">{_esc(r.get('name',''))}
+            <div style="font-size:11px;color:#aaa;">{_esc(str(r.get('reason',''))[:80])} · Libera ~{_mxn(r.get('saved_monthly'))}/mes</div>
+          </div>
+          <div style="text-align:right;font-size:12px;">{_mxn(r.get('before'))}/día → {_mxn(r.get('after'))}/día<br>
+            <span style="color:#E24B4A;font-size:11px;">-{_mxn(r.get('saved_daily'))}/día</span></div>
+        </div>"""
+    for s in scaled:
+        budget_rows += f"""
+        <div class="row row-border">
+          <span class="budget-type-s" style="width:68px;flex-shrink:0;font-size:11px;">Escalado</span>
+          <div style="flex:1;font-size:12px;color:#333;">{_esc(s.get('name',''))}
+            <div style="font-size:11px;color:#aaa;">{_esc(str(s.get('reason',''))[:80])} · Recibe +{_mxn(s.get('added_monthly'))}/mes</div>
+          </div>
+          <div style="text-align:right;font-size:12px;">{_mxn(s.get('before'))}/día → {_mxn(s.get('after'))}/día<br>
+            <span style="color:#1D9E75;font-size:11px;">+{_mxn(s.get('added_daily'))}/día</span></div>
+        </div>"""
+    for p in protected:
+        budget_rows += f"""
+        <div class="row row-border">
+          <span class="budget-type-p" style="width:68px;flex-shrink:0;font-size:11px;">Protegido</span>
+          <div style="flex:1;font-size:12px;color:#333;">{_esc(p.get('name',''))}
+            <div style="font-size:11px;color:#aaa;">70% motor del negocio — sin cambio</div>
+          </div>
+          <div style="text-align:right;font-size:12px;color:#999;">{_mxn(p.get('daily_budget'))}/día</div>
+        </div>"""
+
+    net_color = "#1D9E75" if net_daily >= 0 else "#E24B4A"
+    net_sign  = "+" if net_daily >= 0 else ""
+    budget_section = f"""
+    <div class="card">
+      <div class="sec-title">Redistribución de presupuesto hoy</div>
+      {budget_rows if budget_rows else '<div style="font-size:12px;color:#aaa;">Sin cambios de presupuesto hoy</div>'}
+      <div style="font-size:12px;font-weight:500;color:#666;margin-top:10px;padding-top:10px;border-top:0.5px solid #e8e8e8;">
+        Balance neto: <span style="color:{net_color};">{net_sign}{_mxn(abs(net_daily))}/día</span>
+      </div>
+    </div>"""
+
+    # ── Keywords hoy ──────────────────────────────────────────────────────────
+    blocked_kws = [p for p in kp if p.get("action") == "add_negative" and (p.get("result") or {}).get("status") == "executed"]
+    added_kws   = [p for p in kp if p.get("action") == "add_keyword"  and (p.get("result") or {}).get("status") == "executed"]
+
+    kw_blocked_html = ""
+    total_saved = 0
+    for bkw in blocked_kws[:10]:
+        term  = _esc(bkw.get("keyword_text") or bkw.get("term") or "")
+        cost  = float(bkw.get("cost_mxn") or bkw.get("wasted_spend") or 0)
+        total_saved += cost
+        camp  = _esc(bkw.get("campaign_name") or "")
+        kw_blocked_html += f"""
+        <div style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;border-bottom:0.5px solid #f0f0f0;font-size:12px;">
+          <span style="flex:1;">"{term}"</span>
+          <span style="color:#E24B4A;width:44px;text-align:right;">{_mxn(cost)}</span>
+          <span style="color:#aaa;width:90px;text-align:right;font-size:11px;">{camp}</span>
+          <span class="kw-tag kw-blocked">bloqueada</span>
+        </div>"""
+
+    kw_added_html = ""
+    for akw in added_kws[:5]:
+        term = _esc(akw.get("keyword_text") or akw.get("term") or "")
+        camp = _esc(akw.get("campaign_name") or "")
+        kw_added_html += f"""
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid #f0f0f0;font-size:12px;">
+          <span style="flex:1;">"{term}"</span>
+          <span style="color:#aaa;font-size:11px;">{camp}</span>
+          <span class="kw-tag kw-added">agregada</span>
+        </div>"""
+
+    sonnet_html = ""
+    for cact in ca:
+        if cact.get("action") in ("add_headlines", "replace_headlines") \
+                and (cact.get("result") or {}).get("status") in ("executed", "success"):
+            hls = cact.get("headlines") or []
+            if hls:
+                ad_group = _esc(cact.get("ad_group_name") or cact.get("campaign_name") or "")
+                sonnet_html += f"""
+                <div style="padding:5px 0;border-bottom:0.5px solid #f0f0f0;font-size:12px;">
+                  <div style="color:#333;margin-bottom:3px;">{ad_group} <span class="kw-tag kw-auto">remediado</span></div>
+                  <div style="font-size:11px;color:#1565c0;">{' · '.join(_esc(h) for h in hls[:5])}</div>
+                  <div style="font-size:10px;color:#aaa;margin-top:2px;">Headlines generados por Sonnet — Google re-evalúa en 24-48h</div>
+                </div>"""
+
+    saved_html = f' · Ahorrado: {_mxn(total_saved)} MXN' if total_saved > 0 else ""
+    keywords_section = f"""
+    <div class="card">
+      <div class="sec-title">Keywords hoy</div>
+      {"" if not kw_blocked_html else f'<div style="font-size:11px;color:#666;font-weight:500;margin-bottom:6px;">Negativas bloqueadas — automático{saved_html}</div>' + kw_blocked_html}
+      {"" if not kw_added_html else '<div style="font-size:11px;color:#666;font-weight:500;margin:10px 0 6px;">Keywords nuevas agregadas — automático</div>' + kw_added_html}
+      {"" if not sonnet_html else '<div style="font-size:11px;color:#666;font-weight:500;margin:10px 0 6px;">Copy RSA generado por Sonnet</div>' + sonnet_html}
+      {"<div style='font-size:12px;color:#aaa;'>Sin cambios de keywords hoy</div>" if not (kw_blocked_html or kw_added_html or sonnet_html) else ""}
+    </div>"""
+
+    # ── Agente ejecutó solo hoy ───────────────────────────────────────────────
+    exec_items = []
+    if boo_exec:
+        for bdec in boo_exec:
+            if bdec.get("action") in ("scale", "reduce"):
+                exec_items.append(
+                    f'{bdec["campaign_name"]}: {bdec["action"].upper()} '
+                    f'{_mxn(bdec.get("current_daily_budget_mxn"))} → {_mxn(bdec.get("new_daily_budget_mxn"))}/día'
+                )
+    if blocked_kws:
+        exec_items.append(f'Bloqueó {len(blocked_kws)} términos desperdiciados ({_mxn(total_saved)} MXN ahorrados)')
+    if added_kws:
+        exec_items.append(f'Agregó {len(added_kws)} keywords estratégicas')
+    for cact in ca:
+        if cact.get("action") in ("add_headlines",) and (cact.get("result") or {}).get("status") in ("executed", "success"):
+            n = len(cact.get("headlines") or [])
+            exec_items.append(f'Generó {n} headlines para RSA "{_esc(cact.get("ad_group_name") or "")}" (Ad Strength POOR)')
+
+    exec_html = "\n".join(
+        f'<div class="check-row"><span class="check-done">✓</span><span>{_esc(item)}</span></div>'
+        for item in exec_items
+    ) if exec_items else '<div style="font-size:12px;color:#aaa;">Sin cambios automáticos hoy</div>'
+
+    exec_section = f"""
+    <div class="card">
+      <div class="sec-title">Agente ejecutó solo hoy</div>
+      {exec_html}
+    </div>"""
+
+    # ── Quick Wins pendientes ─────────────────────────────────────────────────
+    qw_rows = ""
+    for i, qw in enumerate(quick_wins, 1):
+        sev   = _esc(qw.get("severity", ""))
+        sev_color = "#E24B4A" if sev == "Critical" else ("#EF9F27" if sev == "High" else "#666")
+        mins  = qw.get("fix_minutes", 0)
+        desc  = _esc(qw.get("description", ""))
+        qw_rows += f"""
+        <tr>
+          <td>{i}</td>
+          <td>{desc}</td>
+          <td style="color:{sev_color};font-weight:500;">{sev}</td>
+          <td>{mins} min</td>
+        </tr>"""
+
+    qw_section = f"""
+    <div class="card">
+      <div class="sec-title">Quick wins pendientes — tú los resuelves</div>
+      <table class="data">
+        <tr><th>#</th><th>Acción</th><th>Severidad</th><th>Tiempo</th></tr>
+        {qw_rows if qw_rows else '<tr><td colspan="4" style="color:#aaa;">Sin quick wins pendientes</td></tr>'}
+      </table>
+    </div>"""
+
+    # ── Desglose por categoría (expandible) ───────────────────────────────────
+    CAT_SCORE_STYLE = lambda s: (
+        'background:#e8f5e9;color:#2e7d32' if (s or 0) >= 70
+        else ('background:#fff8e1;color:#e65100' if (s or 0) >= 45
+              else 'background:#fce4ec;color:#b71c1c')
+    )
+    cat_sections = ""
+    for cat_key, cat_label, _ in CAT_LABELS:
+        sv = cat_scores.get(cat_key)
+        sv_str = f"{sv:.0f}/100" if sv is not None else "N/D"
+        checks = checks_by_cat.get(cat_key) or []
+        checks_html = ""
+        for ch in checks:
+            icon_html = _check_icon(ch.get("result", ""))
+            detail = _esc(ch.get("detail", ""))
+            cid    = _esc(ch.get("id", ""))
+            sev_c  = ch.get("severity", "")
+            sev_badge = ""
+            if ch.get("result") in ("FAIL", "WARNING") and sev_c in ("Critical", "High"):
+                sev_color2 = "#E24B4A" if sev_c == "Critical" else "#EF9F27"
+                sev_badge = f' <span style="font-size:9px;color:{sev_color2};">({sev_c})</span>'
+            checks_html += f"""
+            <div style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;border-bottom:0.5px solid #f0f0f0;font-size:12px;">
+              <span style="flex-shrink:0;width:16px;">{icon_html}</span>
+              <div style="flex:1;"><span style="color:#aaa;margin-right:4px;font-size:10px;">{cid}</span><span style="color:#333;">{detail}{sev_badge}</span></div>
+            </div>"""
+        cat_sections += f"""
+        <div style="margin-bottom:8px;" id="cat-{cat_key}">
+          <div onclick="tc('{cat_key}')" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding-bottom:6px;border-bottom:0.5px solid #e8e8e8;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:13px;font-weight:500;color:#333;">{cat_label}</span>
+              <span style="font-size:10px;padding:1px 7px;border-radius:4px;font-weight:500;{CAT_SCORE_STYLE(sv)}">{sv_str}</span>
+            </div>
+            <span id="ico-{cat_key}" style="font-size:11px;color:#aaa;">▼</span>
+          </div>
+          <div id="body-{cat_key}" style="display:none;">{checks_html}</div>
+        </div>"""
+
+    desglose_section = f"""
+    <div class="card">
+      <div class="sec-title">Desglose por categoría — clic para expandir</div>
+      {cat_sections}
+    </div>"""
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    footer = """
+    <div style="font-size:11px;color:#aaa;text-align:center;padding-top:10px;border-top:0.5px solid #e8e8e8;">
+      Thai Thai Ads Agent · administracion@thaithaimerida.com.mx
+    </div>"""
+
+    toggle_js = """
+    <script>
+    function tc(id){
+      var b=document.getElementById('body-'+id);
+      var i=document.getElementById('ico-'+id);
+      if(b.style.display==='none'){b.style.display='block';i.textContent='▲';}
+      else{b.style.display='none';i.textContent='▼';}
+    }
+    </script>"""
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>{_CSS}</style></head>
+<body><div class="wrap">
+{score_section}
+{snapshot_section}
+{negocio_section}
+{budget_section}
+{keywords_section}
+{exec_section}
+{qw_section}
+{desglose_section}
+{footer}
+</div>{toggle_js}</body></html>"""
+
+
 def _build_daily_summary_html(run: dict) -> str:
     """
     Construye el HTML del resumen diario de actividad del sistema.
@@ -3172,7 +3612,11 @@ def send_daily_summary_email(run: dict, session_id: str) -> bool:
     fecha = run.get("timestamp_merida", "—")
     subject = f"[Thai Thai Agente] Actividad diaria — {_label} · {fecha}"
 
-    html_body = _build_daily_summary_html(run)
+    # Usar el nuevo reporte pro si hay datos del audit_engine
+    if run.get("audit_result") and run["audit_result"].get("score") is not None:
+        html_body = _build_pro_daily_html(run)
+    else:
+        html_body = _build_daily_summary_html(run)
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject

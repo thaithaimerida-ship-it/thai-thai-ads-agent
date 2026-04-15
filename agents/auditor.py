@@ -126,6 +126,78 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         # Índice de campañas para consultar datos de aprendizaje
         campaign_index = {str(c.get("id", "")): c for c in campaigns}
 
+        # ====================================================================
+        # FASE AUDIT ENGINE — Health Score 80 checks
+        # Corre antes de todas las demás fases para que el semáforo
+        # del audit score esté disponible para budget_optimizer.
+        # ====================================================================
+        _audit_result = None
+        try:
+            from engine.audit_data_collector import collect_audit_data as _collect_audit
+            from engine.audit_engine import run_audit as _run_audit, format_score_report as _fmt_score
+            _ga4_for_audit = {}
+            try:
+                from engine.ga4_client import fetch_ga4_events_detailed as _ga4_audit_fetch
+                _ga4_raw_audit = _ga4_audit_fetch(days=1)
+                if isinstance(_ga4_raw_audit, dict) and "error" not in _ga4_raw_audit:
+                    _ga4_for_audit = _ga4_raw_audit
+            except Exception:
+                pass
+            _audit_data = _collect_audit(
+                client, target_id,
+                ga4_data=_ga4_for_audit,
+                landing_data={}
+            )
+            _prev_score = None
+            try:
+                _prev_score_row = memory.get_last_audit_score() if hasattr(memory, "get_last_audit_score") else None
+                if _prev_score_row:
+                    _prev_score = float(_prev_score_row)
+            except Exception:
+                pass
+            _audit_result = _run_audit(_audit_data, previous_score=_prev_score)
+            results["audit_result"] = {
+                "score": _audit_result.score,
+                "grade": _audit_result.grade,
+                "category_scores": _audit_result.category_scores,
+                "score_delta": _audit_result.score_delta,
+                "previous_score": _audit_result.previous_score,
+                "quick_wins": [
+                    {
+                        "id": qw.id,
+                        "severity": qw.severity,
+                        "description": qw.description,
+                        "fix_minutes": qw.fix_minutes,
+                        "auto_executable": qw.auto_executable,
+                    }
+                    for qw in (_audit_result.quick_wins or [])[:6]
+                ],
+                "checks_summary": {
+                    "pass": sum(1 for c in _audit_result.checks if c.result == "PASS"),
+                    "fail": sum(1 for c in _audit_result.checks if c.result == "FAIL"),
+                    "warning": sum(1 for c in _audit_result.checks if c.result == "WARNING"),
+                    "skip": sum(1 for c in _audit_result.checks if c.result == "SKIP"),
+                    "na": sum(1 for c in _audit_result.checks if c.result == "N/A"),
+                },
+                "checks_by_category": {
+                    cat: [
+                        {"id": c.id, "result": c.result, "detail": c.detail, "severity": c.severity}
+                        for c in _audit_result.checks if c.category == cat
+                    ]
+                    for cat in ["CT", "Wasted", "Structure", "KW", "Ads", "Settings"]
+                }
+            }
+            logger.info(
+                "Fase AuditEngine: score=%.0f grade=%s delta=%s",
+                _audit_result.score, _audit_result.grade,
+                f"+{_audit_result.score_delta:.1f}" if (_audit_result.score_delta or 0) >= 0
+                else f"{_audit_result.score_delta:.1f}"
+                if _audit_result.score_delta is not None else "n/a"
+            )
+        except Exception as _ae_exc:
+            logger.warning("Fase AuditEngine: no crítico — %s", _ae_exc)
+            results["audit_result"] = {}
+
         results = {
             "session_id": session_id,
             "timestamp": datetime.now().isoformat(),
@@ -1358,6 +1430,159 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             logger.warning("Fase 6C.AUTO: error no crítico — %s", _ba2_auto_exc)
 
         # ====================================================================
+        # FASE BUDGET OPTIMIZER — Reglas deterministas + redistribución activa
+        # Reemplaza la lógica de Haiku para presupuesto con reglas del skill:
+        # Kill Rule, Rollback, Scale 20%, Reduce CPA crítico, 70/20/10.
+        # ====================================================================
+        _budget_opt_result = {}
+        try:
+            from engine.budget_optimizer import run_budget_optimization as _run_budget_opt
+
+            # Pedidos GloriaFood últimas 24h desde SQLite
+            _pedidos_gf_24h = 0
+            _pedidos_gf_detalle = []
+            try:
+                import sqlite3 as _sq_gf
+                from engine.db_sync import get_db_path as _get_db_gf
+                _conn_gf = _sq_gf.connect(_get_db_gf())
+                _rows_gf = _conn_gf.execute(
+                    "SELECT gloriafood_order_id, total_price_mxn, accepted_at "
+                    "FROM gloriafood_orders "
+                    "WHERE accepted_at > datetime('now', '-24 hours') "
+                    "ORDER BY accepted_at ASC"
+                ).fetchall()
+                _conn_gf.close()
+                _pedidos_gf_24h = len(_rows_gf)
+                _pedidos_gf_detalle = [
+                    {
+                        "order_id": r[0],
+                        "total_mxn": round(float(r[1] or 0), 2),
+                        "accepted_at": r[2],
+                    }
+                    for r in _rows_gf
+                ]
+            except Exception as _gf_exc:
+                logger.warning("Fase BudgetOptimizer: GloriaFood query falló — %s", _gf_exc)
+
+            # Historial de acciones recientes (últimas 48h) para rollback
+            _recent_budget_actions = []
+            try:
+                import sqlite3 as _sq_ba
+                from engine.db_sync import get_db_path as _get_db_ba
+                _conn_ba = _sq_ba.connect(_get_db_ba())
+                _rows_ba = _conn_ba.execute(
+                    "SELECT campaign_id, campaign_name, action_type, "
+                    "old_budget_mxn, new_budget_mxn_set, current_spend_mxn, "
+                    "current_cpa, current_conversions, timestamp "
+                    "FROM budget_actions "
+                    "WHERE timestamp > datetime('now', '-48 hours') "
+                    "ORDER BY timestamp DESC LIMIT 20"
+                ).fetchall()
+                _conn_ba.close()
+                _recent_budget_actions = [
+                    {
+                        "campaign_id": r[0],
+                        "campaign_name": r[1],
+                        "action_type": r[2],
+                        "old_budget_mxn": r[3],
+                        "new_budget_mxn_set": r[4],
+                        "current_spend_mxn": r[5],
+                        "current_cpa": r[6],
+                        "current_conversions": r[7],
+                        "timestamp": r[8],
+                    }
+                    for r in _rows_ba
+                ]
+            except Exception as _ba_exc:
+                logger.warning("Fase BudgetOptimizer: historial acciones falló — %s", _ba_exc)
+
+            # negocio_data para contexto Haiku
+            _negocio_data_budget = {}
+            try:
+                from engine.sheets_client import resumen_negocio_para_agente as _rna_b
+                _negocio_data_budget = _rna_b(days=1) or {}
+            except Exception:
+                pass
+
+            _budget_opt_result = _run_budget_opt(
+                campaigns=campaigns,
+                audit_result=_audit_result,
+                negocio_data=_negocio_data_budget,
+                pedidos_gloriafood_24h=_pedidos_gf_24h,
+                recent_actions=_recent_budget_actions,
+                monthly_budget_status=results.get("monthly_budget_status", {}),
+            )
+
+            # Ejecutar decisiones de presupuesto si AUTO_EXECUTE_ENABLED
+            _budget_opt_executed = []
+            if auto_execute_enabled and _budget_opt_result.get("decisions"):
+                from agents.executor import Executor as _BudgetExec
+                _bexec = _BudgetExec()
+                for _bdec in _budget_opt_result["decisions"]:
+                    if _bdec.get("action") in ("scale", "reduce", "rollback") \
+                            and _bdec.get("new_daily_budget_mxn") \
+                            and _bdec.get("new_daily_budget_mxn") != _bdec.get("current_daily_budget_mxn"):
+                        try:
+                            _br = _bexec.set_campaign_daily_budget(
+                                _bdec["campaign_id"],
+                                _bdec["new_daily_budget_mxn"]
+                            )
+                            _budget_opt_executed.append({**_bdec, "result": _br})
+                            logger.info(
+                                "BudgetOptimizer ejecutó: %s %s $%.0f→$%.0f",
+                                _bdec["action"], _bdec["campaign_name"],
+                                _bdec["current_daily_budget_mxn"], _bdec["new_daily_budget_mxn"]
+                            )
+                        except Exception as _be_exc:
+                            logger.warning(
+                                "BudgetOptimizer ejecutar %s falló: %s",
+                                _bdec["campaign_name"], _be_exc
+                            )
+                    elif _bdec.get("action") == "kill":
+                        try:
+                            _bexec.pause_campaign(_bdec["campaign_id"])
+                            _budget_opt_executed.append({**_bdec, "result": {"status": "paused"}})
+                        except Exception as _bk_exc:
+                            logger.warning("BudgetOptimizer kill %s falló: %s", _bdec["campaign_name"], _bk_exc)
+
+            # Resolver ambiguos con Haiku si hay casos HOLD amarillo
+            if _budget_opt_result.get("requires_haiku"):
+                try:
+                    from engine.decision_engine import get_haiku_budget_resolution as _haiku_res
+                    _occ_budget = {}
+                    try:
+                        from engine.sheets_client import get_occupancy_by_day_of_week as _get_occ_b
+                        _occ_budget = _get_occ_b(weeks=8)
+                    except Exception:
+                        pass
+                    _budget_opt_result["requires_haiku"] = _haiku_res(
+                        _budget_opt_result["requires_haiku"],
+                        negocio_data=_negocio_data_budget,
+                        ga4_data=_ga4_for_audit,
+                        occupancy=_occ_budget,
+                    )
+                except Exception as _hr_exc:
+                    logger.warning("BudgetOptimizer Haiku resolution falló: %s", _hr_exc)
+
+            results["budget_optimizer"] = {
+                "decisions": _budget_opt_result.get("decisions", []),
+                "redistribution": _budget_opt_result.get("redistribution", {}),
+                "redistribution_report": _budget_opt_result.get("report", ""),
+                "executed": _budget_opt_executed,
+                "pedidos_gloriafood_24h": _pedidos_gf_24h,
+                "pedidos_gloriafood_detalle": _pedidos_gf_detalle,
+            }
+            logger.info(
+                "Fase BudgetOptimizer: %d decisiones, %d ejecutadas, %d pedidos GF",
+                len(_budget_opt_result.get("decisions", [])),
+                len(_budget_opt_executed),
+                _pedidos_gf_24h,
+            )
+        except Exception as _bo_exc:
+            logger.warning("Fase BudgetOptimizer: no crítico — %s", _bo_exc)
+            results["budget_optimizer"] = {}
+
+        # ====================================================================
         # FASE 6D — Quality & Creative Health
         #
         # Lee Quality Score, Ad Strength e Impression Share.
@@ -2574,6 +2799,9 @@ Responde SOLO con JSON válido, sin markdown:
             # (no retener hasta el reporte semanal del lunes)
             _run_summary["smart_audit"]    = results.get("smart_audit")
             _run_summary["smart_removals"] = results.get("smart_removals") or []
+            # Módulo 3: audit_engine + budget_optimizer
+            _run_summary["audit_result"]   = results.get("audit_result", {})
+            _run_summary["budget_optimizer"] = results.get("budget_optimizer", {})
             # GEO unverified: campañas SMART con geo correcto según API pero sin confirmación de UI Express
             _geo_audit_d = results.get("geo_audit")
             if isinstance(_geo_audit_d, dict):
