@@ -605,6 +605,94 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+def get_haiku_budget_resolution(
+    ambiguous_decisions: list,
+    negocio_data: dict,
+    ga4_data: dict,
+    occupancy: dict = None,
+) -> list:
+    """
+    Llama a Haiku SOLO para decisiones marcadas como requires_haiku=True.
+    Haiku puede cambiar HOLD→SCALE o HOLD→REDUCE.
+    Haiku NO puede cambiar KILL ni ROLLBACK.
+    Retorna lista de decisiones resueltas (con action actualizada si Haiku cambió).
+    """
+    if not ambiguous_decisions:
+        return []
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return ambiguous_decisions
+
+    # Solo casos HOLD ambiguos — nunca KILL ni ROLLBACK
+    resolvable = [d for d in ambiguous_decisions if d.get("action") == "hold"]
+    if not resolvable:
+        return ambiguous_decisions
+
+    cases_text = "\n".join([
+        f"- Campaña: {d['campaign_name']} | CPA: ${d.get('context', {}).get('cpa_real', 'N/A')} | "
+        f"Semáforo audit: {d.get('audit_semaphore', 'N/A')} | Score: {d.get('context', {}).get('audit_score', 'N/A')}"
+        for d in resolvable
+    ])
+
+    nd = negocio_data or {}
+    prompt = f"""Eres el optimizador de presupuesto de Google Ads para Thai Thai Mérida, restaurante tailandés.
+
+CASOS AMBIGUOS QUE DEBES RESOLVER (todos están en HOLD):
+{cases_text}
+
+CONTEXTO DEL NEGOCIO (últimos 7 días):
+- Comensales: {nd.get('comensales_total', 'n/d')}
+- Ventas locales (tarjeta+efectivo): ${nd.get('venta_local_total', 0):,.0f} MXN
+- Pedidos GloriaFood 24h: {[d.get('context', {}).get('pedidos_gloriafood_24h', 0) for d in resolvable[:1]][0]}
+- Ocupación histórica hoy: {(occupancy or {}).get('today_level', 'no disponible')}
+
+OBJETIVO: Restaurante lleno + pedidos GloriaFood. No ahorrar por ahorrar.
+
+Para cada campaña en HOLD, decide:
+- "scale": si hay evidencia de que más presupuesto generaría más comensales o pedidos
+- "reduce": si hay evidencia de desperdicio claro
+- "hold": si no hay suficiente señal
+
+Responde SOLO con JSON válido, sin texto adicional:
+{{
+  "decisions": [
+    {{"campaign_id": "...", "action": "scale|reduce|hold", "reason": "...", "confidence": 70}}
+  ]
+}}
+Confidence mínimo para ejecutar: 70. Si estás bajo 70, usa "hold"."""
+
+    try:
+        import anthropic
+        import json
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        parsed = json.loads(text)
+        haiku_decisions = {d["campaign_id"]: d for d in parsed.get("decisions", [])}
+
+        for dec in resolvable:
+            hd = haiku_decisions.get(dec["campaign_id"])
+            if hd and hd.get("confidence", 0) >= 70:
+                dec["action"] = hd["action"]
+                dec["reason"] = f"[Haiku] {hd['reason']}"
+                dec["confidence"] = hd["confidence"]
+                dec["requires_haiku"] = False
+                logger.info(
+                    "[haiku_resolution] %s → %s (conf=%d)",
+                    dec["campaign_name"], dec["action"], hd["confidence"]
+                )
+
+    except Exception as e:
+        logger.error("[haiku_resolution] error: %s", e)
+
+    return ambiguous_decisions
+
+
 # Keyword Decision Engine — Haiku decide qué keywords agregar
 # ══════════════════════════════════════════════════════════════════════════════
 
