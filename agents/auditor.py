@@ -1476,6 +1476,21 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 import sqlite3 as _sq_ba
                 from engine.db_sync import get_db_path as _get_db_ba
                 _conn_ba = _sq_ba.connect(_get_db_ba())
+                _conn_ba.execute("""
+                    CREATE TABLE IF NOT EXISTS budget_actions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        campaign_id TEXT,
+                        campaign_name TEXT,
+                        action_type TEXT,
+                        old_budget_mxn REAL,
+                        new_budget_mxn_set REAL,
+                        current_spend_mxn REAL,
+                        current_cpa REAL,
+                        current_conversions REAL,
+                        timestamp TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                _conn_ba.commit()
                 _rows_ba = _conn_ba.execute(
                     "SELECT campaign_id, campaign_name, action_type, "
                     "old_budget_mxn, new_budget_mxn_set, current_spend_mxn, "

@@ -53,7 +53,8 @@ class Executor:
         try:
             v = verify_budget_still_actionable(
                 client, self.customer_id, campaign_id,
-                expected_budget_micros=int(current_budget * 1_000_000),
+                budget_at_proposal_mxn=current_budget,
+                suggested_budget_mxn=new_budget_mxn,
             )
             if not v.get("actionable", False):
                 return {"status": "blocked", "action": "update_budget", "reason": v.get("reason", "Verification failed")}

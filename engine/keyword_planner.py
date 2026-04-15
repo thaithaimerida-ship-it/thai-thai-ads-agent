@@ -49,7 +49,7 @@ def get_keyword_ideas(
         request.keyword_plan_network = client.enums.KeywordPlanNetworkEnum.GOOGLE_SEARCH
         request.page_size = page_size
 
-        request.keyword_seed.keywords.extend(keywords)
+        request.keyword_seed.keywords.extend(keywords[:20])  # API limit: max 20 seeds
 
         response = keyword_plan_idea_service.generate_keyword_ideas(request=request)
 
