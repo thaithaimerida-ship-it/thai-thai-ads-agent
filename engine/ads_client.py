@@ -1438,6 +1438,270 @@ def update_network_settings(client, customer_id: str, campaign_id: str,
         return {"status": "error", "message": str(e)}
 
 
+# ── AUDIT ENGINE DATA FETCHERS ────────────────────────────────────────────────
+
+def fetch_asset_extensions(client, customer_id: str) -> dict:
+    """
+    Lee assets activos a nivel cuenta.
+    Cubre: G50 sitelinks, G51 callouts, G52 snippets, G53 images, G54 calls.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    query = """
+        SELECT asset.type, asset.name, customer_asset.status
+        FROM customer_asset
+        WHERE customer_asset.status = 'ENABLED'
+    """
+    counts = {"sitelink": 0, "callout": 0, "structured_snippet": 0, "image": 0, "call": 0}
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            asset_type = str(row.asset.type_.name).lower()
+            if asset_type in counts:
+                counts[asset_type] += 1
+    except Exception as e:
+        print(f"[fetch_asset_extensions] error: {e}")
+    return counts
+
+
+def fetch_negative_shared_lists(client, customer_id: str) -> dict:
+    """
+    Lee listas negativas compartidas y su asignación a campañas.
+    Cubre: G14 (>=3 listas), G15 (aplicadas a campañas).
+    NOTA: Contar negativos de campaña directa Y de shared lists.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    result = {"lists": [], "campaign_assignments": []}
+    try:
+        query_lists = """
+            SELECT shared_set.id, shared_set.name, shared_set.type
+            FROM shared_set
+            WHERE shared_set.type = 'NEGATIVE_KEYWORDS'
+              AND shared_set.status = 'ENABLED'
+        """
+        for row in ga_service.search(customer_id=customer_id, query=query_lists):
+            result["lists"].append({"id": str(row.shared_set.id), "name": row.shared_set.name})
+    except Exception as e:
+        print(f"[fetch_negative_shared_lists] lists error: {e}")
+    try:
+        query_assign = """
+            SELECT campaign_shared_set.campaign, campaign_shared_set.shared_set
+            FROM campaign_shared_set
+            WHERE campaign_shared_set.status = 'ENABLED'
+        """
+        for row in ga_service.search(customer_id=customer_id, query=query_assign):
+            result["campaign_assignments"].append({
+                "campaign": row.campaign_shared_set.campaign,
+                "shared_set": row.campaign_shared_set.shared_set
+            })
+    except Exception as e:
+        print(f"[fetch_negative_shared_lists] assignments error: {e}")
+    return result
+
+
+def fetch_rsa_details(client, customer_id: str) -> list:
+    """
+    Lee detalles de RSAs: headlines, descriptions, pinning, strength.
+    Cubre: G26, G27, G28, G29, G30, G35, G-KW2.
+    Solo campañas SEARCH ENABLED. GAQL NOTE: sin segments.date (evita duplicados).
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    query = """
+        SELECT
+          ad_group_ad.ad.id,
+          ad_group_ad.ad.responsive_search_ad.headlines,
+          ad_group_ad.ad.responsive_search_ad.descriptions,
+          ad_group_ad.ad_strength,
+          ad_group.id,
+          ad_group.name,
+          campaign.id,
+          campaign.name,
+          campaign.advertising_channel_type
+        FROM ad_group_ad
+        WHERE campaign.status = 'ENABLED'
+          AND ad_group.status != 'REMOVED'
+          AND ad_group_ad.status != 'REMOVED'
+          AND ad_group_ad.ad.type = 'RESPONSIVE_SEARCH_AD'
+          AND campaign.advertising_channel_type = 'SEARCH'
+    """
+    rsas = []
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            headlines = list(row.ad_group_ad.ad.responsive_search_ad.headlines)
+            descriptions = list(row.ad_group_ad.ad.responsive_search_ad.descriptions)
+            pinned = [h for h in headlines if h.pinned_field and str(h.pinned_field) != "UNSPECIFIED"]
+            rsas.append({
+                "ad_id": str(row.ad_group_ad.ad.id),
+                "ad_group_id": str(row.ad_group.id),
+                "ad_group_name": row.ad_group.name,
+                "campaign_id": str(row.campaign.id),
+                "campaign_name": row.campaign.name,
+                "headline_count": len(headlines),
+                "description_count": len(descriptions),
+                "pinned_headline_count": len(pinned),
+                "headlines_text": [h.text for h in headlines if h.text],
+                "descriptions_text": [d.text for d in descriptions if d.text],
+                "ad_strength": str(row.ad_group_ad.ad_strength.name) if row.ad_group_ad.ad_strength else "UNKNOWN",
+            })
+    except Exception as e:
+        print(f"[fetch_rsa_details] error: {e}")
+    return rsas
+
+
+def fetch_audience_signals(client, customer_id: str) -> dict:
+    """
+    Lee audiencias aplicadas a campañas y listas Customer Match.
+    Cubre: G56 audiences, G57 Customer Match.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    result = {"campaign_audiences": [], "customer_match_lists": []}
+    try:
+        query_aud = """
+            SELECT
+              campaign_criterion.campaign,
+              campaign_criterion.type,
+              campaign_criterion.user_list.user_list
+            FROM campaign_criterion
+            WHERE campaign.status = 'ENABLED'
+              AND campaign_criterion.type = 'USER_LIST'
+              AND campaign_criterion.status != 'REMOVED'
+        """
+        for row in ga_service.search(customer_id=customer_id, query=query_aud):
+            result["campaign_audiences"].append({
+                "campaign": row.campaign_criterion.campaign,
+                "type": "USER_LIST",
+                "user_list": row.campaign_criterion.user_list.user_list
+            })
+    except Exception as e:
+        print(f"[fetch_audience_signals] audiences error: {e}")
+    try:
+        query_cm = """
+            SELECT user_list.id, user_list.name, user_list.size_for_search, user_list.type
+            FROM user_list
+            WHERE user_list.type = 'CRM_BASED'
+              AND user_list.membership_status = 'OPEN'
+        """
+        for row in ga_service.search(customer_id=customer_id, query=query_cm):
+            result["customer_match_lists"].append({
+                "id": str(row.user_list.id),
+                "name": row.user_list.name,
+                "size_for_search": row.user_list.size_for_search,
+            })
+    except Exception as e:
+        print(f"[fetch_audience_signals] customer match error: {e}")
+    return result
+
+
+def fetch_placement_exclusions(client, customer_id: str) -> dict:
+    """
+    Lee exclusiones de placement a nivel campaña.
+    Cubre: G58 placement exclusions.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    result = {"account_level": False, "campaign_level": []}
+    try:
+        query = """
+            SELECT campaign_criterion.campaign, campaign_criterion.type, campaign_criterion.negative
+            FROM campaign_criterion
+            WHERE campaign_criterion.negative = TRUE
+              AND campaign_criterion.type = 'PLACEMENT'
+              AND campaign.status = 'ENABLED'
+        """
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            cid = row.campaign_criterion.campaign
+            if cid not in result["campaign_level"]:
+                result["campaign_level"].append(cid)
+    except Exception as e:
+        print(f"[fetch_placement_exclusions] error: {e}")
+    return result
+
+
+def fetch_campaign_details_for_audit(client, customer_id: str) -> list:
+    """
+    Lee detalles de campaña para audit engine: network settings, bidding, serving status.
+    Cubre: G10, G12, G36, G37, G38, G39, G40, G41.
+    Solo campañas ENABLED. Sin segments.date para evitar duplicados.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    query = """
+        SELECT
+          campaign.id,
+          campaign.name,
+          campaign.advertising_channel_type,
+          campaign.bidding_strategy_type,
+          campaign.network_settings.target_content_network,
+          campaign.network_settings.target_search_network,
+          campaign.serving_status,
+          campaign_budget.amount_micros,
+          campaign_budget.has_recommended_budget,
+          metrics.cost_micros,
+          metrics.conversions,
+          metrics.search_impression_share
+        FROM campaign
+        WHERE campaign.status = 'ENABLED'
+        DURING LAST_30_DAYS
+    """
+    campaigns = []
+    seen = set()
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            cid = str(row.campaign.id)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            campaigns.append({
+                "id": cid,
+                "name": row.campaign.name,
+                "channel_type": str(row.campaign.advertising_channel_type.name),
+                "bidding_strategy_type": str(row.campaign.bidding_strategy_type.name),
+                "target_content_network": row.campaign.network_settings.target_content_network,
+                "target_search_network": row.campaign.network_settings.target_search_network,
+                "serving_status": str(row.campaign.serving_status.name),
+                "budget_micros": row.campaign_budget.amount_micros,
+                "has_recommended_budget": row.campaign_budget.has_recommended_budget,
+                "cost_micros_30d": row.metrics.cost_micros,
+                "conversions_30d": float(row.metrics.conversions),
+                "search_impression_share": float(row.metrics.search_impression_share or 0),
+            })
+    except Exception as e:
+        print(f"[fetch_campaign_details_for_audit] error: {e}")
+    return campaigns
+
+
+def fetch_enhanced_conversions(client, customer_id: str) -> list:
+    """
+    Lee si Enhanced Conversions está activo en acciones de conversión.
+    Cubre: G43 enhanced conversions enabled.
+    Solo conversiones ENABLED.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    query = """
+        SELECT
+          conversion_action.id,
+          conversion_action.name,
+          conversion_action.status,
+          conversion_action.primary_for_goal,
+          conversion_action.tag_snippets
+        FROM conversion_action
+        WHERE conversion_action.status = 'ENABLED'
+    """
+    conversions = []
+    try:
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            tag_snippets = list(row.conversion_action.tag_snippets)
+            enhanced = any(
+                getattr(ts, "uses_enhanced_conversions", False)
+                for ts in tag_snippets
+            )
+            conversions.append({
+                "id": str(row.conversion_action.id),
+                "name": row.conversion_action.name,
+                "primary": row.conversion_action.primary_for_goal,
+                "enhanced_conversions": enhanced,
+            })
+    except Exception as e:
+        print(f"[fetch_enhanced_conversions] error: {e}")
+    return conversions
+
+
 import logging as _logging
 _ads_logger = _logging.getLogger(__name__)
 
