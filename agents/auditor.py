@@ -2893,7 +2893,7 @@ Responde SOLO con JSON válido, sin markdown:
                 _run_summary["agent_insight"] = None
 
             _mem_daily    = _get_mem_daily()
-            # Corridas compensatorias siempre envían — son el fallback explícito
+            # Frecuencia controlada por Cloud Scheduler — sin guardia de 12h
             _already_sent = False
 
             _email_sent = False
