@@ -28,6 +28,11 @@ from config.agent_config import (
     SPEND_ANOMALY_MULTIPLIER_CRITICAL,
     CAMPAIGN_TYPE_CONFIG,
     CAMPAIGN_ID_TYPE_MAP,
+    SMALL_MODE_ENABLED,
+    SMALL_MODE_CONFIDENCE_MIN,
+    SMALL_MODE_CONFIDENCE_GAP_MIN,
+    FUNCTIONAL_CATEGORY_DEFAULT,
+    FUNCTIONAL_CATEGORY_SIGNALS,
 )
 
 # ============================================================================
@@ -98,6 +103,122 @@ def get_campaign_thresholds(campaign_name: str, campaign_id: str = None) -> dict
     """Retorna los thresholds de CPA y gasto para el tipo de campaña detectado."""
     campaign_type = get_campaign_type(campaign_name, campaign_id)
     return CAMPAIGN_TYPE_CONFIG.get(campaign_type, CAMPAIGN_TYPE_CONFIG["default"])
+
+
+# ============================================================================
+# CAPA FUNCIONAL / SMALL MODE (FASE 1)
+# Se mantiene separada de la lógica normal de tipo/riesgo existente.
+# ============================================================================
+
+def _contains_any(text: str, keywords: tuple) -> bool:
+    if not text or not keywords:
+        return False
+    text_norm = _normalize(text)
+    return any(_normalize(keyword) in text_norm for keyword in keywords)
+
+
+def _get_channel_type(campaign_data: Dict) -> str:
+    return str(
+        campaign_data.get("advertising_channel_type")
+        or campaign_data.get("channel_type")
+        or ""
+    ).upper()
+
+
+def _build_blocking_signals(campaign_data: Dict, channel_type: str, top_score: float, gap: float) -> list:
+    blocking = []
+    if not SMALL_MODE_ENABLED:
+        blocking.append("small_mode_disabled")
+    if campaign_data.get("tracking_broken"):
+        blocking.append("tracking_broken")
+    if campaign_data.get("landing_broken"):
+        blocking.append("landing_broken")
+    if campaign_data.get("risk_blocked"):
+        blocking.append("risk_blocked")
+    if campaign_data.get("data_inconsistent"):
+        blocking.append("data_inconsistent")
+    if top_score < SMALL_MODE_CONFIDENCE_MIN:
+        blocking.append("low_classification_confidence")
+    if gap < SMALL_MODE_CONFIDENCE_GAP_MIN:
+        blocking.append("classification_conflict")
+    return blocking
+
+
+def _resolve_functional_category_scores(campaign_data: Dict) -> Dict[str, float]:
+    name = str(campaign_data.get("name") or campaign_data.get("campaign_name") or "")
+    channel_type = _get_channel_type(campaign_data)
+    campaign_type = get_campaign_type(name, str(campaign_data.get("id") or campaign_data.get("campaign_id") or ""))
+
+    scores = {category: 0.0 for category in FUNCTIONAL_CATEGORY_SIGNALS}
+    for category, cfg in FUNCTIONAL_CATEGORY_SIGNALS.items():
+        score = 0.0
+        if _contains_any(name, cfg.get("name_keywords", ())):
+            score += float(cfg.get("default_weight", 0.0))
+        required_channels = tuple(cfg.get("required_channel_types", ()))
+        if required_channels and channel_type in required_channels:
+            score += 0.20
+        scores[category] = min(score, 1.0)
+
+    # Fallbacks compatibles con la lógica histórica actual
+    if scores["delivery_order"] == 0.0 and campaign_type == "delivery":
+        scores["delivery_order"] = 0.85
+    if scores["reservation_intent"] == 0.0 and campaign_type == "reservaciones":
+        scores["reservation_intent"] = 0.85
+    if scores["local_visit"] == 0.0 and campaign_type == "local":
+        scores["local_visit"] = 0.78
+    if channel_type == "SEARCH" and max(scores.values()) < SMALL_MODE_CONFIDENCE_MIN:
+        scores["generic_search"] = max(scores["generic_search"], 0.72)
+
+    return scores
+
+
+def classify_campaign_functionally(campaign_data: Dict) -> Dict[str, Any]:
+    """
+    Nueva capa funcional para small_mode.
+
+    No reemplaza la lógica normal existente.
+    Retorna solo los campos mínimos aprobados para fases posteriores:
+    - category
+    - classification_confidence
+    - small_mode_active
+    - decision_label
+    - blocking_signals
+    """
+    scores = _resolve_functional_category_scores(campaign_data)
+    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    top_category, top_score = ordered[0]
+    second_score = ordered[1][1] if len(ordered) > 1 else 0.0
+    gap = top_score - second_score
+    channel_type = _get_channel_type(campaign_data)
+    blocking_signals = _build_blocking_signals(campaign_data, channel_type, top_score, gap)
+
+    if any(signal in blocking_signals for signal in ("low_classification_confidence", "classification_conflict")):
+        category = FUNCTIONAL_CATEGORY_DEFAULT
+        confidence = round(top_score, 2)
+    else:
+        category = top_category
+        confidence = round(top_score, 2)
+
+    small_mode_active = (
+        SMALL_MODE_ENABLED
+        and category != FUNCTIONAL_CATEGORY_DEFAULT
+        and not any(signal in blocking_signals for signal in (
+            "tracking_broken",
+            "landing_broken",
+            "risk_blocked",
+            "data_inconsistent",
+        ))
+    )
+
+    decision_label = "no_action_risk" if blocking_signals else "hold"
+
+    return {
+        "category": category,
+        "classification_confidence": confidence,
+        "small_mode_active": small_mode_active,
+        "decision_label": decision_label,
+        "blocking_signals": blocking_signals,
+    }
 
 
 # ============================================================================

@@ -108,6 +108,67 @@ CAMPAIGN_ID_TYPE_MAP: dict = {
 }
 
 # ============================================================================
+# FASE SMALL MODE: CLASIFICACIÓN FUNCIONAL DINÁMICA
+# Base estructural para cuentas pequeñas. En Fase 1 NO cambia la ejecución real;
+# solo deja lista la capa de clasificación y etiquetado preparatorio.
+# ============================================================================
+
+SMALL_MODE_ENABLED = _os.getenv("SMALL_MODE_ENABLED", "true").lower() == "true"
+
+SMALL_MODE_CONFIDENCE_MIN = 0.70
+SMALL_MODE_CONFIDENCE_GAP_MIN = 0.15
+SMALL_MODE_SHORT_WINDOW_DAYS = 7
+SMALL_MODE_LONG_WINDOW_DAYS = 28
+SMALL_MODE_COOLDOWN_HOURS = 48
+
+SMALL_MODE_MAX_SCALE_PCT = 10.0
+SMALL_MODE_MAX_REDUCE_PCT = 10.0
+SMALL_MODE_MAX_REDUCE_LOCAL_PCT = 8.0
+SMALL_MODE_MAX_SCALE_EXPERIENCE_PCT = 8.0
+SMALL_MODE_MAX_REDUCE_EXPERIENCE_PCT = 8.0
+
+FUNCTIONAL_CATEGORY_DEFAULT = "unknown_safe"
+FUNCTIONAL_CATEGORIES = (
+    "local_visit",
+    "delivery_order",
+    "reservation_intent",
+    "experience_discovery",
+    "generic_search",
+    "unknown_safe",
+)
+
+# Señales compactas para clasificación dinámica.
+# Fase 1 usa principalmente nombre + channel type si existe; otras señales quedan
+# soportadas de forma opcional para fases posteriores sin romper la estructura.
+FUNCTIONAL_CATEGORY_SIGNALS = {
+    "local_visit": {
+        "name_keywords": ("local", "maps", "ubicacion", "cómo llegar", "como llegar", "visita"),
+        "required_channel_types": (),
+        "default_weight": 0.80,
+    },
+    "delivery_order": {
+        "name_keywords": ("delivery", "domicilio", "pedir", "pedido", "gloria food", "online"),
+        "required_channel_types": (),
+        "default_weight": 0.95,
+    },
+    "reservation_intent": {
+        "name_keywords": ("reserva", "reservaciones", "booking", "book", "mesa"),
+        "required_channel_types": ("SEARCH",),
+        "default_weight": 1.00,
+    },
+    "experience_discovery": {
+        "name_keywords": ("experiencia", "experience", "brand", "descubre", "thai"),
+        "required_channel_types": ("SEARCH",),
+        "default_weight": 0.70,
+    },
+    "generic_search": {
+        "name_keywords": (),
+        "required_channel_types": ("SEARCH",),
+        "default_weight": 0.72,
+    },
+}
+
+# ============================================================================
 # PROTECCIÓN DE FASE DE APRENDIZAJE
 # ============================================================================
 

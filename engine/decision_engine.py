@@ -27,6 +27,42 @@ _MIN_CONFIDENCE   = 70     # confianza mínima para ejecutar
 _MONTHLY_CAP_MXN  = 10_000.0
 
 
+def _get_campaign_small_mode_context(campaign_data: dict) -> dict:
+    """
+    Nueva capa funcional / small_mode.
+    Fase 1: solo clasifica y etiqueta. No altera la ejecución real.
+    """
+    try:
+        from engine.risk_classifier import classify_campaign_functionally
+        return classify_campaign_functionally(campaign_data or {})
+    except Exception as exc:
+        logger.debug("Decision engine: small_mode context no disponible — %s", exc)
+        return {
+            "category": "unknown_safe",
+            "classification_confidence": 0.0,
+            "small_mode_active": False,
+            "decision_label": "hold",
+            "blocking_signals": ["small_mode_context_unavailable"],
+        }
+
+
+def _get_preparatory_decision_label(action: str, small_mode_context: dict) -> str:
+    """
+    Etiqueta preparatoria para Fase 2.
+    No cambia la acción real actual del sistema.
+    """
+    blocking_signals = small_mode_context.get("blocking_signals", [])
+    if blocking_signals:
+        return "no_action_risk"
+    if not small_mode_context.get("small_mode_active"):
+        return "hold"
+    if action == "scale":
+        return "scale_micro"
+    if action == "reduce":
+        return "reduce_micro"
+    return "hold"
+
+
 def get_budget_decisions(
     campaigns: list,
     negocio_data: dict,
@@ -383,6 +419,12 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
     }
     # Mapa campaign_id → datos de campaña (CPA, nombre) para guardrails
     campaign_map = {str(c.get("id", "")): c for c in campaigns}
+    # Nueva capa funcional / small_mode.
+    # Fase 1: solo enriquece la salida; la lógica normal de validación sigue intacta.
+    small_mode_map = {
+        str(c.get("id", "")): _get_campaign_small_mode_context(c)
+        for c in campaigns
+    }
 
     try:
         # Intentar extraer JSON aunque haya texto alrededor
@@ -488,11 +530,20 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
 
             if action == "hold":
                 # hold no necesita más validación
+                _small_mode = small_mode_map.get(
+                    campaign_id,
+                    _get_campaign_small_mode_context(campaign_map.get(campaign_id, {})),
+                )
                 validated.append({
                     "action": "hold", "campaign_id": campaign_id,
                     "campaign_name": campaign_name, "new_budget_mxn": 0,
                     "change_pct": 0, "reason": reason, "confidence": confidence,
                     "sources": sources,
+                    "category": _small_mode["category"],
+                    "classification_confidence": _small_mode["classification_confidence"],
+                    "small_mode_active": _small_mode["small_mode_active"],
+                    "decision_label": _get_preparatory_decision_label("hold", _small_mode),
+                    "blocking_signals": _small_mode["blocking_signals"],
                 })
                 continue
 
@@ -539,6 +590,10 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                 )
 
             seen_ids.add(campaign_id)
+            _small_mode = small_mode_map.get(
+                campaign_id,
+                _get_campaign_small_mode_context(campaign_map.get(campaign_id, {})),
+            )
             _decision_entry = {
                 "action":         action,
                 "campaign_id":    campaign_id,
@@ -548,6 +603,11 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                 "reason":         reason,
                 "confidence":     confidence,
                 "sources":        sources,
+                "category":       _small_mode["category"],
+                "classification_confidence": _small_mode["classification_confidence"],
+                "small_mode_active": _small_mode["small_mode_active"],
+                "decision_label": _get_preparatory_decision_label(action, _small_mode),
+                "blocking_signals": _small_mode["blocking_signals"],
             }
             if _is_deferred:
                 _deferred_scales.append(_decision_entry)
@@ -592,6 +652,10 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                         f"(necesita ${_needs_daily:.0f}/día, ahorra ${_saves_daily:.0f}/día por reduces)."
                     ),
                     "confidence": 100,
+                    "decision_label": _get_preparatory_decision_label("hold", {
+                        "small_mode_active": _ds.get("small_mode_active", False),
+                        "blocking_signals": _ds.get("blocking_signals", []),
+                    }),
                 })
     elif _deferred_scales:
         # No SOBRE_RITMO — permitir todos los scales diferidos
