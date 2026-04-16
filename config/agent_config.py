@@ -126,6 +126,51 @@ SMALL_MODE_MAX_REDUCE_PCT = 10.0
 SMALL_MODE_MAX_REDUCE_LOCAL_PCT = 8.0
 SMALL_MODE_MAX_SCALE_EXPERIENCE_PCT = 8.0
 SMALL_MODE_MAX_REDUCE_EXPERIENCE_PCT = 8.0
+SMALL_MODE_MIN_POSITIVE_SIGNALS = 2
+
+SMALL_MODE_ENTRY_MAX_CONVERSIONS = 3
+SMALL_MODE_ENTRY_MAX_CLICKS = 120
+SMALL_MODE_ENTRY_MIN_COST_RATIO = 0.70
+
+SMALL_MODE_ROLLBACK_CPA_WORSEN_PCT = 25.0
+SMALL_MODE_ROLLBACK_CVR_DROP_PCT = 20.0
+SMALL_MODE_ROLLBACK_COST_INCREASE_PCT = 15.0
+
+SMALL_MODE_DECISION_PRIORITY = {
+    "no_action_risk": 1,
+    "hold": 2,
+    "rollback_micro": 3,
+    "reduce_micro": 4,
+    "scale_micro": 5,
+    "add_keywords_small": 5,
+}
+
+SMALL_MODE_CATEGORY_LIMITS = {
+    "local_visit": {
+        "scale_pct": SMALL_MODE_MAX_SCALE_PCT,
+        "reduce_pct": SMALL_MODE_MAX_REDUCE_LOCAL_PCT,
+    },
+    "delivery_order": {
+        "scale_pct": SMALL_MODE_MAX_SCALE_PCT,
+        "reduce_pct": SMALL_MODE_MAX_REDUCE_PCT,
+    },
+    "reservation_intent": {
+        "scale_pct": SMALL_MODE_MAX_SCALE_PCT,
+        "reduce_pct": SMALL_MODE_MAX_REDUCE_PCT,
+    },
+    "experience_discovery": {
+        "scale_pct": SMALL_MODE_MAX_SCALE_EXPERIENCE_PCT,
+        "reduce_pct": SMALL_MODE_MAX_REDUCE_EXPERIENCE_PCT,
+    },
+    "generic_search": {
+        "scale_pct": 0.0,
+        "reduce_pct": 0.0,
+    },
+    "unknown_safe": {
+        "scale_pct": 0.0,
+        "reduce_pct": 0.0,
+    },
+}
 
 FUNCTIONAL_CATEGORY_DEFAULT = "unknown_safe"
 FUNCTIONAL_CATEGORIES = (

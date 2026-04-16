@@ -41,6 +41,9 @@ Nota técnica — silencio post-aprobación (6B.1 pendiente):
 from config.agent_config import (
     CAMPAIGN_TYPE_CONFIG,
     CAMPAIGN_HEALTH_CONFIG,
+    SMALL_MODE_ENTRY_MIN_COST_RATIO,
+    SMALL_MODE_CATEGORY_LIMITS,
+    SMALL_MODE_ROLLBACK_CPA_WORSEN_PCT,
 )
 
 
@@ -69,6 +72,63 @@ def _get_campaign_type(name: str, campaign_id: str) -> str:
 
 def _type_cfg(campaign_type: str) -> dict:
     return CAMPAIGN_TYPE_CONFIG.get(campaign_type, CAMPAIGN_TYPE_CONFIG["default"])
+
+
+def _get_small_mode_context(campaign: dict) -> dict:
+    from engine.risk_classifier import classify_campaign_functionally
+    return classify_campaign_functionally(campaign)
+
+
+def _has_clear_deterioration(campaign: dict, cpa_real: float) -> bool:
+    prev_cpa = float(campaign.get("prev_cpa") or campaign.get("previous_cpa") or 0)
+    if prev_cpa > 0 and cpa_real >= prev_cpa * (1 + SMALL_MODE_ROLLBACK_CPA_WORSEN_PCT / 100):
+        return True
+    return False
+
+
+def _resolve_ba1_small_mode_decision(
+    campaign: dict,
+    campaign_type: str,
+    cost: float,
+    min_spend_window: float,
+    cpa_real: float,
+    cpa_critical: float,
+    small_mode_context: dict,
+) -> str:
+    from engine.risk_classifier import (
+        count_positive_signals,
+        has_minimum_positive_signals,
+        resolve_final_decision_label,
+    )
+
+    labels = [small_mode_context.get("decision_label", "hold")]
+    blocking_signals = list(small_mode_context.get("blocking_signals", []))
+
+    positive_signals = count_positive_signals(
+        cost >= (min_spend_window * SMALL_MODE_ENTRY_MIN_COST_RATIO),
+        cpa_real > cpa_critical,
+        campaign_type != "unknown_safe",
+    )
+
+    if "cooldown_active" in blocking_signals:
+        labels.append("hold")
+    elif any(signal in blocking_signals for signal in (
+        "tracking_broken",
+        "landing_broken",
+        "risk_blocked",
+        "data_inconsistent",
+        "classification_conflict",
+        "low_classification_confidence",
+    )):
+        labels.append("no_action_risk")
+    elif _has_clear_deterioration(campaign, cpa_real):
+        labels.append("rollback_micro")
+    elif has_minimum_positive_signals(positive_signals):
+        labels.append("reduce_micro")
+    else:
+        labels.append("hold")
+
+    return resolve_final_decision_label(labels)
 
 
 def _suggest_budget(current_budget: float, cpa_real: float, cpa_max: float,
@@ -235,6 +295,28 @@ def detect_budget_opportunities(campaigns: list, negocio_data: dict = None) -> l
             suggested_daily = None
             reduction_pct = None
 
+        small_mode_context = _get_small_mode_context({
+            **camp,
+            "campaign_type": campaign_type,
+            "cost_mxn": cost,
+            "conversions": conversions,
+        })
+        if small_mode_context.get("small_mode_active"):
+            final_action = _resolve_ba1_small_mode_decision(
+                camp, campaign_type, cost, min_spend_window, cpa_real, cpa_critical, small_mode_context
+            )
+            decision_label = final_action
+            if final_action == "reduce_micro" and daily_budget_mxn > 0:
+                _limits = SMALL_MODE_CATEGORY_LIMITS.get(campaign_type, SMALL_MODE_CATEGORY_LIMITS["unknown_safe"])
+                _micro_reduce_pct = float(_limits.get("reduce_pct", 0.0))
+                if _micro_reduce_pct > 0:
+                    _micro_budget = round(daily_budget_mxn * (1 - _micro_reduce_pct / 100.0), 2)
+                    suggested_daily = max(suggested_daily or _micro_budget, _micro_budget)
+                    reduction_pct = round((1.0 - suggested_daily / daily_budget_mxn) * 100.0, 1)
+        else:
+            decision_label = small_mode_context.get("decision_label", "hold")
+            final_action = "reduce"
+
         # Construir razón con evidencia completa
         reason_parts = [
             f"[{campaign_type}]",
@@ -269,6 +351,12 @@ def detect_budget_opportunities(campaigns: list, negocio_data: dict = None) -> l
             "min_spend_window":     min_spend_window,
             "min_days_active":      min_days,
             "reason":               " | ".join(reason_parts),
+            "category":             small_mode_context.get("category"),
+            "classification_confidence": small_mode_context.get("classification_confidence"),
+            "small_mode_active":    small_mode_context.get("small_mode_active", False),
+            "blocking_signals":     small_mode_context.get("blocking_signals", []),
+            "decision_label":       decision_label,
+            "final_action":         final_action,
             # Campos necesarios para ejecución en /approve (Fase 6B.1)
             "budget_resource_name":    camp.get("budget_resource_name", ""),
             "budget_explicitly_shared":camp.get("budget_explicitly_shared", False),

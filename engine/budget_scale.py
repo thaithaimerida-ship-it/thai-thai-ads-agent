@@ -28,6 +28,62 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _get_small_mode_context(campaign: dict) -> dict:
+    from engine.risk_classifier import classify_campaign_functionally
+    return classify_campaign_functionally(campaign)
+
+
+def _has_clear_deterioration(campaign: dict, cpa_actual: float | None) -> bool:
+    if cpa_actual is None:
+        return False
+    from config.agent_config import SMALL_MODE_ROLLBACK_CPA_WORSEN_PCT
+    prev_cpa = float(campaign.get("prev_cpa") or campaign.get("previous_cpa") or 0)
+    if prev_cpa > 0 and cpa_actual >= prev_cpa * (1 + SMALL_MODE_ROLLBACK_CPA_WORSEN_PCT / 100):
+        return True
+    return False
+
+
+def _resolve_ba2_small_mode_decision(
+    campaign: dict,
+    utilization_rate: float,
+    cpa_actual: float | None,
+    small_mode_context: dict,
+) -> str:
+    from engine.risk_classifier import (
+        count_positive_signals,
+        has_minimum_positive_signals,
+        resolve_final_decision_label,
+    )
+
+    labels = [small_mode_context.get("decision_label", "hold")]
+    blocking_signals = list(small_mode_context.get("blocking_signals", []))
+    positive_signals = count_positive_signals(
+        utilization_rate >= 0.85,
+        cpa_actual is None or cpa_actual > 0,
+        small_mode_context.get("category") not in ("generic_search", "unknown_safe"),
+    )
+
+    if "cooldown_active" in blocking_signals:
+        labels.append("hold")
+    elif any(signal in blocking_signals for signal in (
+        "tracking_broken",
+        "landing_broken",
+        "risk_blocked",
+        "data_inconsistent",
+        "classification_conflict",
+        "low_classification_confidence",
+    )):
+        labels.append("no_action_risk")
+    elif _has_clear_deterioration(campaign, cpa_actual):
+        labels.append("rollback_micro")
+    elif has_minimum_positive_signals(positive_signals):
+        labels.append("scale_micro")
+    else:
+        labels.append("hold")
+
+    return resolve_final_decision_label(labels)
+
+
 def _roi_real_ratio(
     campaign_type: str,
     ads_cost_mxn: float,
@@ -101,6 +157,11 @@ def detect_scale_opportunities(
     freed_daily_mxn = _calc_freed_budget(ba1_candidates or [])
 
     available_realloc = freed_daily_mxn  # MXN/día disponibles para reasignar
+    ba1_by_campaign = {
+        str(c.get("campaign_id")): c
+        for c in (ba1_candidates or [])
+        if c.get("campaign_id") is not None
+    }
 
     for camp in campaigns:
         name = camp.get("name", "")
@@ -204,6 +265,14 @@ def detect_scale_opportunities(
             )
             continue
 
+        # Si BA1 ya tomó una decisión para la misma campaña, BA2 se inhibe.
+        if str(camp_id) in ba1_by_campaign:
+            logger.info(
+                "BA2 skip %s — BA1 ya produjo decisión para la misma campaña",
+                name,
+            )
+            continue
+
         # --- Campaña candidata: elegible + presupuesto saturado ---
         scale_by_pct = min(max_scale_pct, 1.0)
         suggested_increase_mxn = min(
@@ -221,6 +290,27 @@ def detect_scale_opportunities(
         else:
             signal = "BA2_SCALE"
             fund_source = f"nueva inversión requerida: +${actual_increase:.0f} MXN/día"
+
+        small_mode_context = _get_small_mode_context({
+            **camp,
+            "campaign_type": camp_type,
+            "cost_mxn": cost_mxn,
+            "conversions": conversions,
+        })
+        if small_mode_context.get("small_mode_active"):
+            final_action = _resolve_ba2_small_mode_decision(camp, utilization_rate, cpa_actual, small_mode_context)
+            decision_label = final_action
+            from config.agent_config import SMALL_MODE_CATEGORY_LIMITS
+            if final_action == "scale_micro":
+                _limits = SMALL_MODE_CATEGORY_LIMITS.get(camp_type, SMALL_MODE_CATEGORY_LIMITS["unknown_safe"])
+                _micro_scale_pct = float(_limits.get("scale_pct", 0.0))
+                if _micro_scale_pct > 0:
+                    _micro_budget = round(daily_budget_mxn * (1 + _micro_scale_pct / 100.0), 2)
+                    new_budget_mxn = min(new_budget_mxn, _micro_budget)
+                    actual_increase = round(new_budget_mxn - daily_budget_mxn, 2)
+        else:
+            decision_label = small_mode_context.get("decision_label", "hold")
+            final_action = "scale"
 
         proposal: Dict[str, Any] = {
             "type": "budget_scale",
@@ -241,6 +331,12 @@ def detect_scale_opportunities(
             "fund_source": fund_source,
             "evidence_days": evidence_days,
             "fuente_datos": "sheets+ads" if via_sheets else "ads",
+            "category": small_mode_context.get("category"),
+            "classification_confidence": small_mode_context.get("classification_confidence"),
+            "small_mode_active": small_mode_context.get("small_mode_active", False),
+            "blocking_signals": small_mode_context.get("blocking_signals", []),
+            "decision_label": decision_label,
+            "final_action": final_action,
         }
 
         # Enriquecer con ROI real si está disponible

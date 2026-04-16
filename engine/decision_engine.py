@@ -51,6 +51,9 @@ def _get_preparatory_decision_label(action: str, small_mode_context: dict) -> st
     Etiqueta preparatoria para Fase 2.
     No cambia la acción real actual del sistema.
     """
+    preliminary = small_mode_context.get("decision_label")
+    if preliminary in ("no_action_risk", "hold"):
+        return preliminary
     blocking_signals = small_mode_context.get("blocking_signals", [])
     if blocking_signals:
         return "no_action_risk"
@@ -61,6 +64,22 @@ def _get_preparatory_decision_label(action: str, small_mode_context: dict) -> st
     if action == "reduce":
         return "reduce_micro"
     return "hold"
+
+
+def _resolve_final_action(action: str, small_mode_context: dict) -> str:
+    """
+    Fase 2: una sola decisión final por campaña.
+    - Si small_mode = false, manda la lógica normal.
+    - Si small_mode = true, se aplica la precedencia conservadora aprobada.
+    """
+    if not small_mode_context.get("small_mode_active"):
+        return action
+
+    from engine.risk_classifier import resolve_final_decision_label
+
+    preliminary = small_mode_context.get("decision_label", "hold")
+    action_label = _get_preparatory_decision_label(action, small_mode_context)
+    return resolve_final_decision_label([preliminary, action_label])
 
 
 def get_budget_decisions(
@@ -544,6 +563,7 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                     "small_mode_active": _small_mode["small_mode_active"],
                     "decision_label": _get_preparatory_decision_label("hold", _small_mode),
                     "blocking_signals": _small_mode["blocking_signals"],
+                    "final_action": _resolve_final_action("hold", _small_mode),
                 })
                 continue
 
@@ -608,6 +628,7 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                 "small_mode_active": _small_mode["small_mode_active"],
                 "decision_label": _get_preparatory_decision_label(action, _small_mode),
                 "blocking_signals": _small_mode["blocking_signals"],
+                "final_action": _resolve_final_action(action, _small_mode),
             }
             if _is_deferred:
                 _deferred_scales.append(_decision_entry)
@@ -654,6 +675,11 @@ def _parse_decisions(text: str, campaigns: list, monthly_budget_status: dict = N
                     "confidence": 100,
                     "decision_label": _get_preparatory_decision_label("hold", {
                         "small_mode_active": _ds.get("small_mode_active", False),
+                        "blocking_signals": _ds.get("blocking_signals", []),
+                    }),
+                    "final_action": _resolve_final_action("hold", {
+                        "small_mode_active": _ds.get("small_mode_active", False),
+                        "decision_label": _ds.get("decision_label", "hold"),
                         "blocking_signals": _ds.get("blocking_signals", []),
                     }),
                 })

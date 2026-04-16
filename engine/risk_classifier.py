@@ -33,6 +33,10 @@ from config.agent_config import (
     SMALL_MODE_CONFIDENCE_GAP_MIN,
     FUNCTIONAL_CATEGORY_DEFAULT,
     FUNCTIONAL_CATEGORY_SIGNALS,
+    SMALL_MODE_ENTRY_MAX_CONVERSIONS,
+    SMALL_MODE_ENTRY_MAX_CLICKS,
+    SMALL_MODE_DECISION_PRIORITY,
+    SMALL_MODE_MIN_POSITIVE_SIGNALS,
 )
 
 # ============================================================================
@@ -137,6 +141,8 @@ def _build_blocking_signals(campaign_data: Dict, channel_type: str, top_score: f
         blocking.append("risk_blocked")
     if campaign_data.get("data_inconsistent"):
         blocking.append("data_inconsistent")
+    if campaign_data.get("cooldown_active"):
+        blocking.append("cooldown_active")
     if top_score < SMALL_MODE_CONFIDENCE_MIN:
         blocking.append("low_classification_confidence")
     if gap < SMALL_MODE_CONFIDENCE_GAP_MIN:
@@ -199,18 +205,29 @@ def classify_campaign_functionally(campaign_data: Dict) -> Dict[str, Any]:
         category = top_category
         confidence = round(top_score, 2)
 
+    if category == FUNCTIONAL_CATEGORY_DEFAULT and "unknown_category" not in blocking_signals:
+        blocking_signals.append("unknown_category")
+
     small_mode_active = (
         SMALL_MODE_ENABLED
         and category != FUNCTIONAL_CATEGORY_DEFAULT
+        and (
+            float(campaign_data.get("conversions", 0) or 0) <= SMALL_MODE_ENTRY_MAX_CONVERSIONS
+            or int(campaign_data.get("clicks", 0) or 0) < SMALL_MODE_ENTRY_MAX_CLICKS
+        )
         and not any(signal in blocking_signals for signal in (
             "tracking_broken",
             "landing_broken",
             "risk_blocked",
             "data_inconsistent",
+            "cooldown_active",
         ))
     )
 
-    decision_label = "no_action_risk" if blocking_signals else "hold"
+    if "cooldown_active" in blocking_signals:
+        decision_label = "hold"
+    else:
+        decision_label = "no_action_risk" if blocking_signals else "hold"
 
     return {
         "category": category,
@@ -219,6 +236,28 @@ def classify_campaign_functionally(campaign_data: Dict) -> Dict[str, Any]:
         "decision_label": decision_label,
         "blocking_signals": blocking_signals,
     }
+
+
+def count_positive_signals(*signals: bool) -> int:
+    return sum(1 for signal in signals if signal)
+
+
+def resolve_final_decision_label(labels: list[str]) -> str:
+    """
+    Resuelve una sola decisión final por campaña.
+    La precedencia aprobada es conservadora: menor prioridad numérica gana.
+    """
+    clean_labels = [label for label in labels if label]
+    if not clean_labels:
+        return "hold"
+    return min(
+        clean_labels,
+        key=lambda label: SMALL_MODE_DECISION_PRIORITY.get(label, 999),
+    )
+
+
+def has_minimum_positive_signals(signal_count: int) -> bool:
+    return signal_count >= SMALL_MODE_MIN_POSITIVE_SIGNALS
 
 
 # ============================================================================
