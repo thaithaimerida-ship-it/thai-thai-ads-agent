@@ -56,7 +56,7 @@ class Executor:
                 budget_at_proposal_mxn=current_budget,
                 suggested_budget_mxn=new_budget_mxn,
             )
-            if not v.get("actionable", False):
+            if not v.get("ok", False):
                 return {"status": "blocked", "action": "update_budget", "reason": v.get("reason", "Verification failed")}
         except Exception as e:
             logger.warning("Budget verification failed: %s", e)

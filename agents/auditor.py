@@ -1546,9 +1546,10 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                             and _bdec.get("new_daily_budget_mxn") \
                             and _bdec.get("new_daily_budget_mxn") != _bdec.get("current_daily_budget_mxn"):
                         try:
-                            _br = _bexec.set_campaign_daily_budget(
+                            _br = _bexec.update_budget(
                                 _bdec["campaign_id"],
-                                _bdec["new_daily_budget_mxn"]
+                                _bdec["new_daily_budget_mxn"],
+                                reason=f"[BudgetOpt] {_bdec.get('rule', '')} — {_bdec.get('action', '')}",
                             )
                             _budget_opt_executed.append({**_bdec, "result": _br})
                             logger.info(
@@ -2687,10 +2688,23 @@ Responde SOLO con JSON válido, sin markdown:
         def _count_reason(reason_code):
             return sum(1 for i in all_items if i.get("block_reason") == reason_code)
 
-        actually_executed = sum(
+        # Legacy keyword/ad flow
+        _exec_legacy = sum(
             1 for i in results["executed"]
             if i.get("exec_result", {}).get("status") == "executed"
         )
+        # Fase 7: decisiones de presupuesto vía Haiku — clave "exec_result"
+        _exec_ai = sum(
+            1 for i in results.get("ai_decisions", [])
+            if i.get("exec_result", {}).get("status") == "executed"
+        )
+        # Budget Optimizer determinístico — clave "result" (distinta de ai_decisions)
+        # Cuenta tanto status "executed" (scale/reduce/rollback) como "paused" (kill)
+        _exec_budget_opt = sum(
+            1 for i in (results.get("budget_optimizer") or {}).get("executed", [])
+            if i.get("result", {}).get("status") in ("executed", "paused")
+        )
+        actually_executed = _exec_legacy + _exec_ai + _exec_budget_opt
         would_auto_execute = len(results["executed"])  # risk_level==1, independiente de dry_run
 
         # ── Cobertura real por tipo de campaña ──────────────────────────────

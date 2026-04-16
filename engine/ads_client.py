@@ -263,10 +263,9 @@ def verify_budget_still_actionable(
                    (explicitly_shared=True indica que múltiples campañas lo usan)
       G_drift    — el presupuesto actual no fue ya reducido >10% manualmente
                    respecto al presupuesto registrado en la propuesta
-      G_direction— el presupuesto sugerido es menor que el actual
-                   (BA1 solo reduce, nunca sube)
       G_min      — el presupuesto sugerido >= BUDGET_CHANGE_MIN_DAILY_MXN ($20 MXN)
-      G_max_cut  — la reducción no supera BUDGET_CHANGE_MAX_REDUCTION_PCT (60%)
+      G_max_cut  — solo aplica a reducciones: corte no supera BUDGET_CHANGE_MAX_REDUCTION_PCT (60%)
+                   Para aumentos (scale), G_max_cut no se activa (reduction_pct < 0)
 
     Retorna dict con:
       ok                      : bool — True si todas las guardas pasan
@@ -359,15 +358,6 @@ def verify_budget_still_actionable(
                 )
                 base["guard"] = "G_drift"
                 return base
-
-        # G_direction: solo reducimos presupuesto
-        if suggested_budget_mxn >= current_budget_mxn:
-            base["reason"] = (
-                f"el presupuesto sugerido ${suggested_budget_mxn:.2f} >= actual ${current_budget_mxn:.2f} — "
-                "BA1 solo propone reducciones, no aumentos"
-            )
-            base["guard"] = "G_direction"
-            return base
 
         # G_min: piso absoluto
         if suggested_budget_mxn < BUDGET_CHANGE_MIN_DAILY_MXN:
