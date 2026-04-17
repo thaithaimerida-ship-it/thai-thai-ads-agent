@@ -444,23 +444,37 @@ def _parse_fecha(s: str) -> Optional[date]:
     Parsea fechas de Google Sheets en dos formatos:
       '01 marzo 2026'      (Cortes_de_Caja — sin coma)
       '1 marzo, 2026'      (Ingresos_BD — con coma)
+      '01/03/2026'         (numérico dd/mm/YYYY)
+      '2026-03-01'         (ISO)
+      '01-03-2026'         (numérico dd-mm-YYYY)
+      '03/01/2026'         (numérico mm/dd/YYYY)
     Retorna None si no reconoce el formato.
     """
     if not s:
         return None
-    s = s.strip().replace(",", "")  # normaliza coma
-    parts = s.split()
-    if len(parts) != 3:
-        return None
+    s = s.strip()
+    normalized = s.replace(",", "")  # normaliza coma
+    parts = normalized.split()
+
+    # Intentar primero el formato textual actual para conservar comportamiento.
     try:
-        day = int(parts[0])
-        month = _MESES_ES.get(parts[1].lower())
-        year = int(parts[2])
-        if not month:
-            return None
-        return date(year, month, day)
+        if len(parts) == 3:
+            day = int(parts[0])
+            month = _MESES_ES.get(parts[1].lower())
+            year = int(parts[2])
+            if month:
+                return date(year, month, day)
     except (ValueError, AttributeError):
-        return None
+        pass
+
+    # Fallback: formatos numéricos comunes de Google Sheets/exportaciones.
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+
+    return None
 
 
 def _get_spreadsheet():
