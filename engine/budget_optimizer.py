@@ -546,6 +546,166 @@ def _calculate_redistribution(decisions: list, campaigns: list) -> dict:
     }
 
 
+def _select_redistribution_receivers(decisions: list, campaigns: list) -> list:
+    """Return deterministic, non-ambiguous SCALE candidates for analysis only."""
+    camp_map = {str(c.get("id", "")): c for c in campaigns}
+    receivers = []
+
+    for dec in decisions:
+        if dec.get("action") != "scale":
+            continue
+        if dec.get("requires_haiku"):
+            continue
+
+        camp = camp_map.get(dec.get("campaign_id", ""), {})
+        if _is_smart_campaign(camp):
+            continue
+
+        current = float(dec.get("current_daily_budget_mxn") or 0)
+        new = dec.get("new_daily_budget_mxn")
+        if new is None or new <= current:
+            continue
+
+        campaign_type = dec.get("campaign_type", "default")
+        cpa_now = _cpa_real(camp)
+        cpa_target = _cpa_target(campaign_type)
+        lost_budget_ratio = _is_lost_budget(camp)
+        conversions = _conversions(camp)
+        cpa_ratio = round((cpa_now / cpa_target), 4) if cpa_now and cpa_target > 0 else 9999.0
+
+        receivers.append({
+            "campaign_id": dec.get("campaign_id", ""),
+            "campaign_name": dec.get("campaign_name", ""),
+            "campaign_type": campaign_type,
+            "current_daily_budget_mxn": round(current, 2),
+            "max_receivable_daily_mxn": round(new - current, 2),
+            "eligibility_action": "scale",
+            "eligibility_reason": dec.get("reason", ""),
+            "ranking_signals": {
+                "priority_tier": 1,
+                "audit_semaphore": dec.get("audit_semaphore") or dec.get("context", {}).get("audit_semaphore"),
+                "has_lost_budget_signal": lost_budget_ratio > SCALE_IS_BUDGET_LOST_MIN,
+                "lost_budget_ratio": round(lost_budget_ratio, 4),
+                "cpa_real": cpa_now,
+                "cpa_target": cpa_target,
+                "conversions": conversions,
+            },
+            "_ranking_key": (
+                1,
+                cpa_ratio,
+                -lost_budget_ratio,
+                -conversions,
+                str(dec.get("campaign_id", "")),
+            ),
+        })
+
+    receivers.sort(key=lambda receiver: receiver["_ranking_key"])
+    for receiver in receivers:
+        receiver.pop("_ranking_key", None)
+    return receivers
+
+
+def _build_reallocation_matrix(fund_sources: list, receiver_candidates: list) -> list:
+    """Build a source-to-destination daily budget matrix without mutating decisions."""
+    allocation_matrix = []
+    remaining_by_receiver = {
+        receiver["campaign_id"]: round(receiver.get("max_receivable_daily_mxn", 0) or 0, 2)
+        for receiver in receiver_candidates
+    }
+
+    for source in fund_sources:
+        remaining_source = round(source.get("freed_daily_mxn", 0) or 0, 2)
+        if remaining_source <= 0:
+            continue
+
+        for receiver in receiver_candidates:
+            receiver_id = receiver.get("campaign_id", "")
+            receiver_room = round(remaining_by_receiver.get(receiver_id, 0) or 0, 2)
+            if receiver_room <= 0 or remaining_source <= 0:
+                continue
+
+            amount = round(min(remaining_source, receiver_room), 2)
+            if amount <= 0:
+                continue
+
+            allocation_matrix.append({
+                "from_campaign_id": source.get("campaign_id", ""),
+                "from_campaign_name": source.get("campaign_name", ""),
+                "to_campaign_id": receiver_id,
+                "to_campaign_name": receiver.get("campaign_name", ""),
+                "amount_daily_mxn": amount,
+                "allocation_reason": (
+                    f"Source {source.get('source_action')} -> eligible SCALE candidate "
+                    f"{receiver.get('campaign_name', '')}"
+                ),
+            })
+            remaining_source = round(remaining_source - amount, 2)
+            remaining_by_receiver[receiver_id] = round(receiver_room - amount, 2)
+
+    return allocation_matrix
+
+
+def _build_redistribution_analysis(decisions: list, campaigns: list) -> dict:
+    """Build a non-executable redistribution analysis using daily amounts as primary logic."""
+    fund_sources = []
+
+    for dec in decisions:
+        if dec.get("action") != "reduce":
+            continue
+        if dec.get("requires_haiku"):
+            continue
+
+        current = float(dec.get("current_daily_budget_mxn") or 0)
+        new = dec.get("new_daily_budget_mxn")
+        if new is None or new >= current:
+            continue
+
+        freed_daily = round(current - new, 2)
+        if freed_daily <= 0:
+            continue
+
+        fund_sources.append({
+            "campaign_id": dec.get("campaign_id", ""),
+            "campaign_name": dec.get("campaign_name", ""),
+            "campaign_type": dec.get("campaign_type", "default"),
+            "current_daily_budget_mxn": round(current, 2),
+            "proposed_new_daily_budget_mxn": round(new, 2),
+            "freed_daily_mxn": freed_daily,
+            "freed_monthly_mxn": round(freed_daily * 30, 2),
+            "source_action": "reduce",
+            "source_rule": dec.get("rule", ""),
+            "reason": dec.get("reason", ""),
+        })
+
+    receiver_candidates = _select_redistribution_receivers(decisions, campaigns)
+    allocation_matrix = _build_reallocation_matrix(fund_sources, receiver_candidates)
+
+    potential_freed_daily = round(sum(source["freed_daily_mxn"] for source in fund_sources), 2)
+    allocated_daily = round(sum(item["amount_daily_mxn"] for item in allocation_matrix), 2)
+    net_daily = round(allocated_daily - potential_freed_daily, 2)
+
+    return {
+        "potential_freed_daily_mxn": potential_freed_daily,
+        "potential_freed_monthly_mxn": round(potential_freed_daily * 30, 2),
+        "fund_sources": fund_sources,
+        "receiver_candidates": receiver_candidates,
+        "allocation_matrix": allocation_matrix,
+        "net_daily_mxn": net_daily,
+        "net_monthly_mxn": round(net_daily * 30, 2),
+        "guardrails": [
+            "No execution: analysis only",
+            "Daily amounts are the primary basis for analysis",
+            "Only non-ambiguous SCALE candidates are eligible receivers",
+            "Only justified REDUCE decisions are eligible sources",
+            "No net new spend",
+        ],
+        "notes": [
+            "Propuesta analitica sin mutacion",
+            "No cambia presupuestos todavia",
+        ],
+    }
+
+
 # ── Reporte de redistribución ─────────────────────────────────────────────────
 
 def format_redistribution_report(redistribution: dict) -> str:
@@ -578,6 +738,39 @@ def format_redistribution_report(redistribution: dict) -> str:
     net_sign = "+" if net >= 0 else ""
     lines.append(f"\n  BALANCE NETO: {net_sign}${net:.0f}/dia ({net_sign}${net_monthly:.0f} MXN/mes proyectados)")
 
+    return "\n".join(lines)
+
+
+def format_redistribution_analysis_report(analysis: dict) -> str:
+    """Generate a plain-text analytical redistribution block for the daily report."""
+    lines = ["REDISTRIBUCION POTENCIAL ANALIZADA:", "  Sin ejecucion automatica"]
+
+    potential_freed_daily = analysis.get("potential_freed_daily_mxn", 0) or 0
+    if potential_freed_daily <= 0:
+        lines.append("  - Sin fondo liberado potencial en esta corrida")
+        return "\n".join(lines)
+
+    lines.append(f"  Fondo liberado potencial: ${potential_freed_daily:.0f}/dia")
+
+    for source in analysis.get("fund_sources", []):
+        lines.append(
+            f"  - Fuente: {source['campaign_name']} libera ${source['freed_daily_mxn']:.0f}/dia "
+            f"via {source['source_action']}"
+        )
+
+    for receiver in analysis.get("receiver_candidates", []):
+        lines.append(
+            f"  - Receptora candidata: {receiver['campaign_name']} "
+            f"(hasta ${receiver['max_receivable_daily_mxn']:.0f}/dia)"
+        )
+
+    for allocation in analysis.get("allocation_matrix", []):
+        lines.append(
+            f"  - Propuesta: {allocation['from_campaign_name']} -> {allocation['to_campaign_name']} "
+            f"${allocation['amount_daily_mxn']:.0f}/dia"
+        )
+
+    lines.append(f"  Balance neto: ${analysis.get('net_daily_mxn', 0):.0f}/dia")
     return "\n".join(lines)
 
 
@@ -616,7 +809,14 @@ def run_budget_optimization(
         - report: str con el reporte formateado
     """
     if not campaigns:
-        return {"decisions": [], "redistribution": {}, "requires_haiku": [], "report": ""}
+        return {
+            "decisions": [],
+            "redistribution": {},
+            "redistribution_analysis": {},
+            "requires_haiku": [],
+            "report": "",
+            "redistribution_analysis_report": "",
+        }
 
     decisions = []
     requires_haiku = []
@@ -731,6 +931,9 @@ def run_budget_optimization(
                         requires_haiku.remove(dec)
 
     # Redistribución activa: dinero liberado por reduces fluye a campañas elegibles
+    analysis_decisions = [dict(dec) for dec in decisions]
+    redistribution_analysis = _build_redistribution_analysis(analysis_decisions, campaigns)
+    redistribution_analysis_report = format_redistribution_analysis_report(redistribution_analysis)
     decisions = _apply_active_redistribution(decisions, campaigns)
 
     redistribution = _calculate_redistribution(decisions, campaigns)
@@ -739,6 +942,8 @@ def run_budget_optimization(
     return {
         "decisions": decisions,
         "redistribution": redistribution,
+        "redistribution_analysis": redistribution_analysis,
         "requires_haiku": requires_haiku,
         "report": report,
+        "redistribution_analysis_report": redistribution_analysis_report,
     }

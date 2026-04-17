@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from engine.llm_client import generate_text
 
 _merida_tz = None
 try:
@@ -1548,7 +1549,6 @@ def generate_daily_insight(
     Retorna None si faltan datos suficientes o si Haiku no responde.
     """
     import os
-    import anthropic as _anthropic
 
     _spend    = float((ads_data or {}).get("spend_mxn", 0) or 0)
     _conv     = float((ads_data or {}).get("conversions", 0) or 0)
@@ -1667,13 +1667,11 @@ def generate_daily_insight(
     )
 
     try:
-        _client = _anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        _resp = _client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        _text = generate_text(
+            model_role="haiku",
+            user_prompt=_prompt,
             max_tokens=450,
-            messages=[{"role": "user", "content": _prompt}],
-        )
-        _text = (_resp.content[0].text or "").strip()
+        ).strip()
         # Truncar si el modelo se extendió (no debería, pero por seguridad)
         if len(_text) > 500:
             _text = _text[:300].rsplit(" ", 1)[0] + "."
@@ -1710,6 +1708,7 @@ def _build_pro_daily_html(run: dict) -> str:
     kp  = run.get("keyword_proposals") or []
     boo_dec = bo.get("decisions") or []
     boo_red = bo.get("redistribution") or {}
+    boo_analysis = bo.get("redistribution_analysis") or {}
     boo_ped = bo.get("pedidos_gloriafood_detalle") or []
     boo_ped_count = bo.get("pedidos_gloriafood_24h") or 0
     boo_exec = bo.get("executed") or []
@@ -1953,6 +1952,60 @@ def _build_pro_daily_html(run: dict) -> str:
     </div>"""
 
     # ── Keywords hoy ──────────────────────────────────────────────────────────
+    analysis_sources = boo_analysis.get("fund_sources") or []
+    analysis_receivers = boo_analysis.get("receiver_candidates") or []
+    analysis_matrix = boo_analysis.get("allocation_matrix") or []
+    analysis_rows = ""
+
+    if analysis_sources or analysis_receivers or analysis_matrix:
+        source_html = ""
+        for source in analysis_sources:
+            source_html += f"""
+            <div class="row row-border">
+              <span class="budget-type-r" style="width:68px;flex-shrink:0;font-size:11px;">Fuente</span>
+              <div style="flex:1;font-size:12px;color:#333;">{_esc(source.get('campaign_name',''))}
+                <div style="font-size:11px;color:#aaa;">{_esc(source.get('source_action','reduce'))} justificado · {_esc(str(source.get('reason',''))[:80])}</div>
+              </div>
+              <div style="text-align:right;font-size:12px;color:#E24B4A;">-{_mxn(source.get('freed_daily_mxn'))}/dia</div>
+            </div>"""
+
+        receiver_html = ""
+        for receiver in analysis_receivers:
+            receiver_html += f"""
+            <div class="row row-border">
+              <span class="budget-type-s" style="width:68px;flex-shrink:0;font-size:11px;">Candidata</span>
+              <div style="flex:1;font-size:12px;color:#333;">{_esc(receiver.get('campaign_name',''))}
+                <div style="font-size:11px;color:#aaa;">scale elegible · {_esc(str(receiver.get('eligibility_reason',''))[:80])}</div>
+              </div>
+              <div style="text-align:right;font-size:12px;color:#1D9E75;">+{_mxn(receiver.get('max_receivable_daily_mxn'))}/dia</div>
+            </div>"""
+
+        matrix_html = ""
+        for allocation in analysis_matrix:
+            matrix_html += f"""
+            <div class="row row-border">
+              <span style="width:68px;flex-shrink:0;font-size:11px;color:#1565c0;font-weight:500;">Traza</span>
+              <div style="flex:1;font-size:12px;color:#333;">{_esc(allocation.get('from_campaign_name',''))} -> {_esc(allocation.get('to_campaign_name',''))}</div>
+              <div style="text-align:right;font-size:12px;color:#1565c0;">{_mxn(allocation.get('amount_daily_mxn'))}/dia</div>
+            </div>"""
+
+        analysis_rows = f"""
+        <div style="font-size:12px;color:#1565c0;font-weight:500;margin-bottom:8px;">Sin ejecucion automatica</div>
+        <div style="font-size:12px;color:#666;margin-bottom:10px;">No cambia presupuestos todavia</div>
+        <div style="font-size:12px;font-weight:500;color:#333;margin-bottom:6px;">Fondo liberado potencial: {_mxn(boo_analysis.get('potential_freed_daily_mxn'))}/dia</div>
+        {source_html}
+        {receiver_html}
+        {matrix_html}
+        <div style="font-size:12px;font-weight:500;color:#666;margin-top:10px;padding-top:10px;border-top:0.5px solid #e8e8e8;">
+          Balance neto analizado: {_mxn(boo_analysis.get('net_daily_mxn'))}/dia
+        </div>"""
+
+    budget_analysis_section = f"""
+    <div class="card">
+      <div class="sec-title">Redistribucion potencial analizada</div>
+      {analysis_rows if analysis_rows else '<div style="font-size:12px;color:#aaa;">Sin redistribucion potencial analizada hoy</div>'}
+    </div>"""
+
     blocked_kws = [p for p in kp if p.get("action") == "add_negative" and (p.get("result") or {}).get("status") == "executed"]
     added_kws   = [p for p in kp if p.get("action") == "add_keyword"  and (p.get("result") or {}).get("status") == "executed"]
 
@@ -2116,6 +2169,7 @@ def _build_pro_daily_html(run: dict) -> str:
 {snapshot_section}
 {negocio_section}
 {budget_section}
+{budget_analysis_section}
 {keywords_section}
 {exec_section}
 {qw_section}
@@ -2185,6 +2239,8 @@ def _build_daily_summary_html(run: dict) -> str:
     _ga4_pedir    = int(_ga4_web.get("click_pedir", 0) or 0)      if _ga4_ok else 0
     _ga4_reservar = int(_ga4_web.get("click_reservar", 0) or 0)   if _ga4_ok else 0
     _ga4_activos  = int(_ga4_web.get("usuarios_activos", 0) or 0) if _ga4_ok else 0
+    _budget_optimizer = run.get("budget_optimizer") or {}
+    _redistribution_analysis = _budget_optimizer.get("redistribution_analysis") or {}
     _recently_approved       = int(run.get("recently_approved_count", 0) or 0)
     _agent_insight           = run.get("agent_insight")
     _quality_findings        = run.get("quality_creative_findings", []) or []
@@ -3353,6 +3409,56 @@ def _build_daily_summary_html(run: dict) -> str:
         _ai_block = _ai_block + _kw_ai_block
 
     # ── SECCIÓN 3: Alertas GEO ───────────────────────────────────────────────────
+    _redistribution_analysis_block = ""
+    _ra_sources = _redistribution_analysis.get("fund_sources") or []
+    _ra_receivers = _redistribution_analysis.get("receiver_candidates") or []
+    _ra_allocations = _redistribution_analysis.get("allocation_matrix") or []
+    if _ra_sources or _ra_receivers or _ra_allocations:
+        _ra_rows = ""
+        for _src in _ra_sources:
+            _ra_rows += (
+                f'<tr style="border-bottom:1px solid #f0f0f0;">'
+                f'<td style="padding:8px 0;">'
+                f'<p style="margin:0 0 2px 0;font-size:12px;font-weight:bold;color:#111;">'
+                f'Fuente: {_src.get("campaign_name", "—")}</p>'
+                f'<p style="margin:0;font-size:12px;color:#b91c1c;">'
+                f'Libera ${float(_src.get("freed_daily_mxn", 0) or 0):,.0f}/dia via {_src.get("source_action", "reduce")}</p>'
+                f'</td></tr>'
+            )
+        for _rcv in _ra_receivers:
+            _ra_rows += (
+                f'<tr style="border-bottom:1px solid #f0f0f0;">'
+                f'<td style="padding:8px 0;">'
+                f'<p style="margin:0 0 2px 0;font-size:12px;font-weight:bold;color:#111;">'
+                f'Candidata: {_rcv.get("campaign_name", "—")}</p>'
+                f'<p style="margin:0;font-size:12px;color:#166534;">'
+                f'Scale elegible hasta ${float(_rcv.get("max_receivable_daily_mxn", 0) or 0):,.0f}/dia</p>'
+                f'</td></tr>'
+            )
+        for _alloc in _ra_allocations:
+            _ra_rows += (
+                f'<tr style="border-bottom:1px solid #f0f0f0;">'
+                f'<td style="padding:8px 0;">'
+                f'<p style="margin:0 0 2px 0;font-size:12px;font-weight:bold;color:#111;">'
+                f'Traza: {_alloc.get("from_campaign_name", "—")} -> {_alloc.get("to_campaign_name", "—")}</p>'
+                f'<p style="margin:0;font-size:12px;color:#1d4ed8;">'
+                f'${float(_alloc.get("amount_daily_mxn", 0) or 0):,.0f}/dia analizados</p>'
+                f'</td></tr>'
+            )
+
+        _redistribution_analysis_block = (
+            f'<tr><td style="padding:14px 20px 4px 20px;">'
+            f'<p style="margin:0 0 6px 0;font-size:12px;font-weight:bold;color:#6b7280;'
+            f'text-transform:uppercase;letter-spacing:0.5px;">Redistribucion potencial analizada</p>'
+            f'<p style="margin:0 0 6px 0;font-size:12px;color:#1565c0;font-weight:bold;">Sin ejecucion automatica</p>'
+            f'<p style="margin:0 0 8px 0;font-size:12px;color:#6b7280;">No cambia presupuestos todavia.</p>'
+            f'<p style="margin:0 0 8px 0;font-size:12px;color:#111;">'
+            f'Fondo liberado potencial: <strong>${float(_redistribution_analysis.get("potential_freed_daily_mxn", 0) or 0):,.0f}/dia</strong>'
+            f' &nbsp;·&nbsp; Balance neto analizado: <strong>${float(_redistribution_analysis.get("net_daily_mxn", 0) or 0):,.0f}/dia</strong></p>'
+            f'<table width="100%" cellpadding="0" cellspacing="0">{_ra_rows}</table>'
+            f'</td></tr>'
+        )
+
     _geo_alerts_email = run.get("geo_issues_for_email", [])
     _geo_email_block = ""
     if _geo_alerts_email:
@@ -3496,6 +3602,7 @@ def _build_daily_summary_html(run: dict) -> str:
   {_ba_block}
   {_ba2_block}
   {_ai_block}
+  {_redistribution_analysis_block}
 
   <!-- SECCIÓN 3: Alertas GEO -->
   {_geo_email_block}
