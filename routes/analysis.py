@@ -375,3 +375,14 @@ async def get_activity_log_endpoint(n: int = 14):
         return {"status": "ok", "runs": runs, "count": len(runs)}
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
+
+
+@router.get("/last-email-preview")
+async def get_last_email_preview_endpoint():
+    """Retorna el último daily_summary enviado exitosamente."""
+    from engine.email_observability import get_last_email_preview as _get_preview
+    try:
+        preview = _get_preview()
+        return {"status": "ok", "preview": preview}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}

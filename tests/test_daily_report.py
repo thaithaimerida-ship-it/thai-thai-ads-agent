@@ -5,7 +5,13 @@ Protege la consistencia del correo diario.
 No realiza llamadas a API — todo con datos sintéticos.
 Ejecutar: python -m pytest tests/test_daily_report.py -v
 """
+import json
+from pathlib import Path
+
 import pytest
+
+from engine.email_sender import _build_daily_subject_from_contract, _build_pro_daily_html, _derive_report_contract
+from engine.report_contract import build_report_contract_v1
 
 
 # ============================================================
@@ -249,6 +255,31 @@ class TestSubjectLine:
         label = " + ".join(acciones) if acciones else "Sin cambios"
         assert label == "Sin cambios"
 
+    def test_subject_is_derived_from_contract(self):
+        run = {
+            "run_id": "audit_test_subject",
+            "timestamp_merida": "2026-04-10 07:01",
+            "result_class": "con_cambios",
+            "is_real_audit": True,
+            "campaigns_reviewed": 2,
+            "changes_executed": 2,
+            "had_change": True,
+            "human_pending": 0,
+            "audit_result": {"score": 82, "grade": "B", "category_scores": {}, "quick_wins": [], "checks_by_category": {}},
+            "budget_optimizer": {"executed": []},
+            "ai_keyword_decisions": [{"keyword_text": "pad thai merida", "exec_result": {"status": "executed"}}],
+            "builder_executed": [{"ad_group_name": "Branded", "result": {"status": "success"}}],
+            "creative_actions": [],
+            "paused_campaigns": [],
+            "keyword_proposals": [],
+            "executed_budget": [],
+        }
+
+        contract = _derive_report_contract(run)
+        subject = _build_daily_subject_from_contract(contract)
+
+        assert subject == "[Thai Thai Agente] Actividad diaria — 2 cambios automáticos · 2026-04-10 07:01"
+
 
 # ============================================================
 # TEST 5: CAMPAIGNS_TO_PAUSE está vacío
@@ -444,3 +475,528 @@ class TestPedidosOnlineBlock:
         )
         assert "Sin pedidos" in _pedidos_block
         assert len(_pedidos_block) > 0
+
+
+# ============================================================
+# TEST 8: Template pro alinea asunto y cuerpo
+# ============================================================
+class TestProDailyEmailBody:
+    """Verifica que el body pro refleje acciones reales ya ejecutadas."""
+
+    def _base_run(self):
+        return {
+            "audit_result": {
+                "score": 82,
+                "grade": "B",
+                "category_scores": {},
+                "quick_wins": [],
+                "checks_by_category": {},
+            },
+            "ventas_ayer": {},
+            "ads_24h": {},
+            "monthly_budget_status": {},
+            "keyword_proposals": [],
+            "creative_actions": [],
+            "ai_keyword_decisions": [],
+            "builder_executed": [],
+            "budget_optimizer": {
+                "decisions": [],
+                "redistribution": {},
+                "redistribution_analysis": {},
+                "executed": [],
+                "pedidos_gloriafood_24h": 0,
+                "pedidos_gloriafood_detalle": [],
+            },
+        }
+
+    def test_pro_body_shows_ai_keywords_and_builder_activity(self):
+        run = self._base_run()
+        run["ai_keyword_decisions"] = [
+            {
+                "keyword_text": "pad thai merida",
+                "match_type": "PHRASE",
+                "confidence": 88,
+                "reason": "Alta intención local",
+                "exec_result": {
+                    "status": "executed",
+                    "campaign_name": "Thai Mérida - Reservaciones",
+                },
+            }
+        ]
+        run["builder_executed"] = [
+            {
+                "campaign_name": "Thai Mérida - Reservaciones",
+                "ad_group_name": "Pad Thai Mérida",
+                "keywords": ["pad thai merida", "pad thai merida centro"],
+                "result": {"status": "success"},
+            }
+        ]
+
+        html = _build_pro_daily_html(run)
+
+        assert "Resumen Ejecutivo" in html
+        assert "Acciones Ejecutadas" in html
+        assert "pad thai merida" in html
+
+    def test_pro_body_opens_with_controlled_executive_summary_and_context_at_end(self):
+        run = self._base_run()
+        run["human_pending"] = 1
+        run["keyword_proposals"] = [
+            {
+                "keyword_text": "restaurante thai merida",
+                "campaign_name": "Thai MÃ©rida - Reservaciones",
+            }
+        ]
+        run["ai_keyword_decisions"] = [
+            {
+                "keyword_text": "pad thai merida",
+                "exec_result": {"status": "executed"},
+            }
+        ]
+        run["ads_24h"] = {
+            "por_campana": [
+                {"name": "Thai Merida - Local", "tipo": "SMART", "spend_mxn": 130.0, "clicks": 84, "conversions": 0.0}
+            ]
+        }
+
+        html = _build_pro_daily_html(run)
+
+        assert "Resumen Ejecutivo" in html
+        assert "Ejecución: 1 cambio" in html
+        assert "Propuestas: 1" in html
+        assert "Análisis: sí" in html
+        assert "Atención humana: requerida" in html
+        assert html.index("Resumen Ejecutivo") < html.index("Contexto de Cuenta")
+        assert html.index("Resumen Ejecutivo") < html.index("Google Ads Health Score")
+
+    def test_pro_body_uses_single_consolidated_empty_state(self):
+        html = _build_pro_daily_html(self._base_run())
+
+        assert "Sin cambios de keywords hoy" not in html
+        assert "Sin cambios de ad groups hoy" not in html
+        assert "Sin cambios de presupuesto ejecutados hoy" not in html
+        assert "Sin cambios automáticos hoy" not in html
+        assert "No hubo novedad operativa adicional fuera de los puntos anteriores." not in html
+        assert "Presupuesto evaluado sin ajuste ejecutable." in html
+        assert "Ad groups evaluados sin cambio ejecutable." in html
+        assert "No se detectaron oportunidades accionables adicionales en keywords." in html
+
+    @pytest.mark.skip(reason="Replaced by normalized snapshot semantics test")
+    def test_snapshot_labels_ads_semantics_and_real_period(self):
+        run = self._base_run()
+        run["ads_24h"] = {
+            "por_campana": [
+                {
+                    "name": "Thai MÃ©rida - Local",
+                    "tipo": "SMART",
+                    "spend_mxn": 130.0,
+                    "clicks": 84,
+                    "conversions": 0.0,
+                }
+            ]
+        }
+
+        html = _build_pro_daily_html(run)
+
+        assert "(24h)" in html
+        assert "Conv (Ads)" in html
+        assert "CPA (Ads)" in html
+        assert "SMART no comparte la misma semantica de conversion que SEARCH" in html
+        assert "Ad groups hoy" in html
+        assert "Pad Thai Mérida" in html
+
+    def test_snapshot_labels_ads_semantics_and_real_period_normalized(self):
+        run = self._base_run()
+        run["ads_24h"] = {
+            "por_campana": [
+                {
+                    "name": "Thai Merida - Local",
+                    "tipo": "SMART",
+                    "spend_mxn": 130.0,
+                    "clicks": 84,
+                    "conversions": 0.0,
+                }
+            ]
+        }
+
+        html = _build_pro_daily_html(run)
+
+        assert "(24h)" in html
+        assert "Conv (Ads)" in html
+        assert "CPA (Ads)" in html
+        assert "SMART no comparte la misma semantica de conversion que SEARCH" in html
+
+    def test_pro_body_renders_analysis_and_executed_budget_as_separate_concepts(self):
+        run = self._base_run()
+        run["budget_optimizer"] = {
+            "decisions": [],
+            "redistribution": {
+                "reduced": [
+                    {
+                        "name": "Thai Mérida - Reservaciones",
+                        "before": 100.0,
+                        "after": 80.0,
+                        "saved_daily": 20.0,
+                        "saved_monthly": 600.0,
+                        "reason": "CPA alto",
+                    }
+                ],
+                "scaled": [],
+                "protected": [],
+                "net_daily_mxn": -20.0,
+            },
+            "redistribution_analysis": {
+                "potential_freed_daily_mxn": 20.0,
+                "potential_freed_monthly_mxn": 600.0,
+                "fund_sources": [
+                    {
+                        "campaign_name": "Thai Mérida - Reservaciones",
+                        "source_action": "reduce",
+                        "freed_daily_mxn": 20.0,
+                        "reason": "CPA alto",
+                    }
+                ],
+                "receiver_candidates": [
+                    {
+                        "campaign_name": "Thai Mérida - Experiencia 2026",
+                        "max_receivable_daily_mxn": 20.0,
+                        "eligibility_reason": "scale elegible",
+                    }
+                ],
+                "allocation_matrix": [
+                    {
+                        "from_campaign_name": "Thai Mérida - Reservaciones",
+                        "to_campaign_name": "Thai Mérida - Experiencia 2026",
+                        "amount_daily_mxn": 20.0,
+                    }
+                ],
+                "net_daily_mxn": 0.0,
+            },
+            "executed": [],
+            "pedidos_gloriafood_24h": 0,
+            "pedidos_gloriafood_detalle": [],
+        }
+
+        html = _build_pro_daily_html(run)
+
+        assert "Análisis sin Ejecución" in html
+        assert "Redistribución" in html
+        assert "revisada sin ejecución automática" in html
+
+    def test_pro_body_restores_quick_wins_and_category_review(self):
+        run = self._base_run()
+        run["audit_result"]["quick_wins"] = [
+            {
+                "id": "G43",
+                "severity": "Critical",
+                "description": "Enhanced Conversions activo",
+                "fix_minutes": 5,
+                "auto_executable": False,
+            },
+            {
+                "id": "G42",
+                "severity": "High",
+                "description": ">=1 conversión primaria activa",
+                "fix_minutes": 10,
+                "auto_executable": False,
+            },
+        ]
+        run["audit_result"]["category_scores"] = {
+            "CT": 11.1,
+            "Wasted": 60.7,
+        }
+        run["audit_result"]["checks_by_category"] = {
+            "CT": [
+                {
+                    "id": "G42",
+                    "result": "FAIL",
+                    "detail": "0 primaria(s)",
+                    "severity": "Critical",
+                },
+                {
+                    "id": "G43",
+                    "result": "FAIL",
+                    "detail": "No activo",
+                    "severity": "Critical",
+                },
+            ],
+            "Wasted": [
+                {
+                    "id": "G16",
+                    "result": "WARNING",
+                    "detail": "100.0% en términos irrelevantes",
+                    "severity": "Critical",
+                }
+            ],
+        }
+
+        html = _build_pro_daily_html(run)
+
+        assert "Propuestas y Pendientes" in html
+        assert "Quick wins pendientes" in html
+        assert "Enhanced Conversions activo" in html
+        assert "Revisiones del Día" in html
+        assert "Conversion Tracking" in html
+        assert "Wasted Spend" in html
+        assert "0 primaria(s)" in html
+        assert "100.0% en términos irrelevantes" in html
+
+    def test_pro_body_keeps_reviews_section_when_audit_exists_without_category_breakdown(self):
+        run = self._base_run()
+        run["audit_result"]["quick_wins"] = [
+            {
+                "id": "G43",
+                "severity": "Critical",
+                "description": "Enhanced Conversions activo",
+                "fix_minutes": 5,
+                "auto_executable": False,
+            }
+        ]
+        run["audit_result"]["category_scores"] = {}
+        run["audit_result"]["checks_by_category"] = {}
+
+        html = _build_pro_daily_html(run)
+
+        assert "Revisiones del Día" in html
+        assert "Auditoría disponible en esta corrida, sin desglose detallado visible por categoría." in html
+
+    def test_exec_section_counts_ai_keywords_and_builder_successes(self):
+        run = self._base_run()
+        run["ai_keyword_decisions"] = [
+            {
+                "keyword_text": "pad thai merida",
+                "exec_result": {"status": "executed"},
+            }
+        ]
+        run["builder_executed"] = [
+            {
+                "ad_group_name": "Pad Thai Mérida",
+                "result": {"status": "success"},
+            }
+        ]
+
+        html = _build_pro_daily_html(run)
+
+        assert "Sin cambios automáticos hoy" not in html
+        assert "Agregó 1 keyword" in html
+        assert "Creó 1 ad group" in html
+
+    def test_pro_body_can_render_from_derived_contract(self):
+        run = self._base_run()
+        run["ai_keyword_decisions"] = [
+            {
+                "keyword_text": "pad thai merida",
+                "campaign_name": "Thai Mérida - Reservaciones",
+                "match_type": "PHRASE",
+                "exec_result": {"status": "executed", "campaign_name": "Thai Mérida - Reservaciones"},
+            }
+        ]
+
+        contract = _derive_report_contract(run)
+        html = _build_pro_daily_html(run, contract=contract)
+
+        assert "Keywords AI agregadas — automático" in html
+        assert "pad thai merida" in html
+
+
+def _load_report_contract_samples():
+    fixture_path = Path(__file__).parent / "fixtures" / "report_contract_samples.json"
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    return payload["samples"]
+
+
+class TestReportContractV1:
+    def test_report_contract_v1_exposes_all_required_blocks(self):
+        from engine.report_contract import build_report_contract_v1
+
+        for sample in _load_report_contract_samples():
+            contract = build_report_contract_v1(sample["raw_run"])
+            assert set(contract.keys()) >= {
+                "meta",
+                "summary",
+                "executed",
+                "proposed",
+                "analyzed",
+                "blocked",
+                "account_context",
+                "daily_reviews",
+            }
+
+    def test_report_contract_v1_has_compact_domain_status_for_all_core_domains(self):
+        from engine.report_contract import DOMAIN_STATUS_VALUES, build_report_contract_v1
+
+        for sample in _load_report_contract_samples():
+            contract = build_report_contract_v1(sample["raw_run"])
+            status = contract["summary"]["domain_status"]
+            assert set(status.keys()) == {"keywords", "ad_groups", "budget", "redistribution"}
+            for value in status.values():
+                assert value in DOMAIN_STATUS_VALUES
+
+    def test_report_contract_v1_keeps_semantic_uniqueness_by_fact_id(self):
+        from engine.report_contract import build_report_contract_v1
+
+        for sample in _load_report_contract_samples():
+            contract = build_report_contract_v1(sample["raw_run"])
+            seen = {}
+            for block_name in ("executed", "proposed", "analyzed", "blocked"):
+                for item in contract[block_name]["items"]:
+                    fact_id = item["fact_id"]
+                    assert fact_id not in seen, f"fact_id duplicated across primary blocks: {fact_id}"
+                    assert item["primary_block"] == block_name
+                    seen[fact_id] = block_name
+
+    def test_report_contract_v1_covers_core_domains_with_useful_signal(self):
+        from engine.report_contract import build_report_contract_v1
+
+        covered = set()
+        for sample in _load_report_contract_samples():
+            contract = build_report_contract_v1(sample["raw_run"])
+            for block_name in ("executed", "proposed", "analyzed", "blocked"):
+                for item in contract[block_name]["items"]:
+                    if item["domain"] in {"keywords", "ad_groups", "budget", "redistribution"}:
+                        covered.add(item["domain"])
+        assert covered == {"keywords", "ad_groups", "budget", "redistribution"}
+
+    def test_report_contract_v1_analyzed_items_are_not_empty_diplomatic_text(self):
+        from engine.report_contract import build_report_contract_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "analysis_redistribution_only")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        assert contract["analyzed"]["present"] is True
+        assert contract["analyzed"]["items"], "analyzed block should carry useful intermediate facts"
+        for item in contract["analyzed"]["items"]:
+            assert item["review_scope"]
+            assert item["finding"]
+            assert item["no_action_reason"]
+            assert "no hubo novedad" not in item["finding"].lower()
+            assert "sin cambios" not in item["finding"].lower()
+            assert "diplomatic" not in item["finding"].lower()
+            assert "next_step" in item
+
+    def test_report_contract_v1_blocked_block_exists_even_when_empty(self):
+        from engine.report_contract import build_report_contract_v1
+
+        for sample in _load_report_contract_samples():
+            contract = build_report_contract_v1(sample["raw_run"])
+            assert "blocked" in contract
+            assert "present" in contract["blocked"]
+            assert isinstance(contract["blocked"]["items"], list)
+
+    def test_report_contract_v1_daily_reviews_survives_audit_without_breakdown(self):
+        from engine.report_contract import build_report_contract_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "audit_without_breakdown")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        assert contract["daily_reviews"]["has_audit"] is True
+        assert contract["daily_reviews"]["present"] is True
+        assert contract["daily_reviews"]["fallback_message"]
+
+    def test_report_contract_v1_summary_matches_primary_block_precedence(self):
+        from engine.report_contract import build_report_contract_v1
+
+        executed_sample = next(s for s in _load_report_contract_samples() if s["id"] == "executed_keywords_and_adgroups")
+        executed_contract = build_report_contract_v1(executed_sample["raw_run"])
+        assert executed_contract["summary"]["domain_status"]["keywords"] == "executed"
+        assert executed_contract["summary"]["domain_status"]["ad_groups"] == "executed"
+
+        proposed_sample = next(s for s in _load_report_contract_samples() if s["id"] == "proposals_and_daily_reviews")
+        proposed_contract = build_report_contract_v1(proposed_sample["raw_run"])
+        assert proposed_contract["summary"]["domain_status"]["budget"] == "proposed"
+
+        analyzed_sample = next(s for s in _load_report_contract_samples() if s["id"] == "analysis_redistribution_only")
+        analyzed_contract = build_report_contract_v1(analyzed_sample["raw_run"])
+        assert analyzed_contract["summary"]["domain_status"]["redistribution"] == "analyzed"
+
+
+class TestProDailyEmailBodyV1:
+    def test_pro_body_v1_renders_from_contract_only(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "executed_keywords_and_adgroups")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert "Resumen Ejecutivo" in html
+        assert "Acciones Ejecutadas" in html
+        assert "pad thai merida" in html
+
+    def test_pro_body_v1_opens_with_executive_summary_and_keeps_context_below(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "proposals_and_daily_reviews")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert "Resumen Ejecutivo" in html
+        assert html.index("Resumen Ejecutivo") < html.index("Contexto de Cuenta")
+        assert html.index("Resumen Ejecutivo") < html.index("Google Ads Health Score")
+        assert html.index("Resumen Ejecutivo") < html.index("Snapshot de campañas (24h)")
+
+    def test_pro_body_v1_keeps_quick_wins_and_daily_reviews_visible(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "proposals_and_daily_reviews")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert "Propuestas y Pendientes" in html
+        assert "Quick wins pendientes" in html
+        assert "Enhanced Conversions activo" in html
+        assert "Revisiones del Día" in html
+        assert "Conversion Tracking" in html
+        assert "Wasted Spend" in html
+
+    def test_pro_body_v1_keeps_reviews_when_audit_exists_without_breakdown(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "audit_without_breakdown")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert "Revisiones del Día" in html
+        assert "Audit is available in this run, but no category breakdown is visible." in html
+
+    def test_pro_body_v1_uses_single_non_empty_analysis_without_multiple_sin_cambios(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "analysis_redistribution_only")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert html.count("Sin cambios") == 0
+        assert "Redistribution was analyzed" in html
+        assert "Budget module is present" in html
+
+    def test_pro_body_v1_uses_snapshot_ads_labels_and_has_no_mojibake(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "proposals_and_daily_reviews")
+        sample["raw_run"]["ads_24h"] = {
+            "por_campana": [
+                {
+                    "name": "Thai Merida - Local",
+                    "tipo": "SMART",
+                    "spend_mxn": 130.0,
+                    "clicks": 84,
+                    "conversions": 0.0,
+                }
+            ]
+        }
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert "Snapshot de campañas (24h)" in html
+        assert "Conv (Ads)" in html
+        assert "CPA (Ads)" in html
+        assert "Google Ads Health Score" in html
+        assert "Ã" not in html
+        assert "Â" not in html
+        assert "â" not in html

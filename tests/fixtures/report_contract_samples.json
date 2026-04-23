@@ -1,0 +1,288 @@
+{
+  "samples": [
+    {
+      "id": "executed_keywords_and_adgroups",
+      "source_ref": "tests.test_daily_report.TestProDailyEmailBody._base_run + test_pro_body_shows_ai_keywords_and_builder_activity",
+      "raw_run": {
+        "run_id": "sample_exec_001",
+        "timestamp_merida": "2026-04-18 00:44",
+        "result_class": "con_cambios",
+        "is_real_audit": true,
+        "campaigns_reviewed": 3,
+        "human_pending": 0,
+        "audit_result": {
+          "score": 82,
+          "grade": "B",
+          "category_scores": {},
+          "quick_wins": [],
+          "checks_by_category": {}
+        },
+        "ventas_ayer": {},
+        "ads_24h": {},
+        "monthly_budget_status": {
+          "spend_so_far": 5300,
+          "monthly_cap": 10000
+        },
+        "keyword_proposals": [],
+        "budget_proposals": [],
+        "ba2_proposals": [],
+        "creative_actions": [],
+        "ai_keyword_decisions": [
+          {
+            "keyword_text": "pad thai merida",
+            "match_type": "PHRASE",
+            "reason": "Alta intencion local",
+            "exec_result": {
+              "status": "executed",
+              "campaign_name": "Thai Merida - Reservaciones"
+            }
+          }
+        ],
+        "builder_executed": [
+          {
+            "campaign_name": "Thai Merida - Reservaciones",
+            "ad_group_name": "Pad Thai Merida",
+            "keywords": [
+              "pad thai merida",
+              "pad thai merida centro"
+            ],
+            "result": {
+              "status": "success"
+            }
+          }
+        ],
+        "budget_optimizer": {
+          "decisions": [],
+          "redistribution": {},
+          "redistribution_analysis": {},
+          "executed": [],
+          "pedidos_gloriafood_24h": 0,
+          "pedidos_gloriafood_detalle": []
+        },
+        "blocked": []
+      }
+    },
+    {
+      "id": "proposals_and_daily_reviews",
+      "source_ref": "tests.test_daily_report.TestProDailyEmailBody.test_pro_body_restores_quick_wins_and_category_review",
+      "raw_run": {
+        "run_id": "sample_prop_001",
+        "timestamp_merida": "2026-04-18 00:44",
+        "result_class": "con_observaciones",
+        "is_real_audit": true,
+        "campaigns_reviewed": 4,
+        "human_pending": 1,
+        "audit_result": {
+          "score": 55,
+          "grade": "D",
+          "category_scores": {
+            "CT": 11.1,
+            "Wasted": 60.7
+          },
+          "quick_wins": [
+            {
+              "id": "G43",
+              "severity": "Critical",
+              "description": "Enhanced Conversions activo",
+              "fix_minutes": 5,
+              "auto_executable": false
+            },
+            {
+              "id": "G42",
+              "severity": "High",
+              "description": ">=1 conversion primaria activa",
+              "fix_minutes": 10,
+              "auto_executable": false
+            }
+          ],
+          "checks_by_category": {
+            "CT": [
+              {
+                "id": "G42",
+                "result": "FAIL",
+                "detail": "0 primaria(s)",
+                "severity": "Critical"
+              },
+              {
+                "id": "G43",
+                "result": "FAIL",
+                "detail": "No activo",
+                "severity": "Critical"
+              }
+            ],
+            "Wasted": [
+              {
+                "id": "G16",
+                "result": "WARNING",
+                "detail": "100.0% en terminos irrelevantes",
+                "severity": "Critical"
+              }
+            ]
+          }
+        },
+        "ventas_ayer": {},
+        "ads_24h": {},
+        "monthly_budget_status": {
+          "spend_so_far": 5300,
+          "monthly_cap": 10000
+        },
+        "keyword_proposals": [
+          {
+            "keyword_text": "restaurante thai merida",
+            "campaign_name": "Thai Merida - Reservaciones",
+            "reason": "Termino con intencion comercial",
+            "urgency": "normal"
+          }
+        ],
+        "budget_proposals": [
+          {
+            "campaign_name": "Thai Merida - Experiencia 2026",
+            "cpa_real": 180,
+            "cpa_max": 120,
+            "daily_budget_mxn": 150,
+            "suggested_daily_budget": 120,
+            "reason": "CPA por arriba del limite"
+          }
+        ],
+        "ba2_proposals": [],
+        "creative_actions": [],
+        "ai_keyword_decisions": [],
+        "builder_executed": [],
+        "budget_optimizer": {
+          "decisions": [],
+          "redistribution": {},
+          "redistribution_analysis": {},
+          "executed": [],
+          "pedidos_gloriafood_24h": 0,
+          "pedidos_gloriafood_detalle": []
+        },
+        "blocked": []
+      }
+    },
+    {
+      "id": "analysis_redistribution_only",
+      "source_ref": "tests.test_daily_report.TestProDailyEmailBody.test_pro_body_renders_analysis_and_executed_budget_as_separate_concepts",
+      "raw_run": {
+        "run_id": "sample_analysis_001",
+        "timestamp_merida": "2026-04-18 00:44",
+        "result_class": "sin_acciones",
+        "is_real_audit": true,
+        "campaigns_reviewed": 4,
+        "human_pending": 0,
+        "audit_result": {
+          "score": 82,
+          "grade": "B",
+          "category_scores": {},
+          "quick_wins": [],
+          "checks_by_category": {}
+        },
+        "ventas_ayer": {},
+        "ads_24h": {},
+        "monthly_budget_status": {
+          "spend_so_far": 5300,
+          "monthly_cap": 10000
+        },
+        "keyword_proposals": [],
+        "budget_proposals": [],
+        "ba2_proposals": [],
+        "creative_actions": [],
+        "ai_keyword_decisions": [],
+        "builder_executed": [],
+        "budget_optimizer": {
+          "decisions": [],
+          "redistribution": {
+            "reduced": [
+              {
+                "name": "Thai Merida - Reservaciones",
+                "before": 100.0,
+                "after": 80.0,
+                "saved_daily": 20.0,
+                "saved_monthly": 600.0,
+                "reason": "CPA alto"
+              }
+            ],
+            "scaled": [],
+            "protected": [],
+            "net_daily_mxn": -20.0
+          },
+          "redistribution_analysis": {
+            "potential_freed_daily_mxn": 20.0,
+            "potential_freed_monthly_mxn": 600.0,
+            "fund_sources": [
+              {
+                "campaign_name": "Thai Merida - Reservaciones",
+                "source_action": "reduce",
+                "freed_daily_mxn": 20.0,
+                "reason": "CPA alto"
+              }
+            ],
+            "receiver_candidates": [
+              {
+                "campaign_name": "Thai Merida - Experiencia 2026",
+                "max_receivable_daily_mxn": 20.0,
+                "eligibility_reason": "scale elegible"
+              }
+            ],
+            "allocation_matrix": [
+              {
+                "from_campaign_name": "Thai Merida - Reservaciones",
+                "to_campaign_name": "Thai Merida - Experiencia 2026",
+                "amount_daily_mxn": 20.0
+              }
+            ],
+            "net_daily_mxn": 0.0
+          },
+          "executed": [],
+          "pedidos_gloriafood_24h": 0,
+          "pedidos_gloriafood_detalle": []
+        },
+        "blocked": []
+      }
+    },
+    {
+      "id": "audit_without_breakdown",
+      "source_ref": "tests.test_daily_report.TestProDailyEmailBody.test_pro_body_keeps_reviews_section_when_audit_exists_without_category_breakdown",
+      "raw_run": {
+        "run_id": "sample_reviews_001",
+        "timestamp_merida": "2026-04-18 00:44",
+        "result_class": "sin_acciones",
+        "is_real_audit": true,
+        "campaigns_reviewed": 4,
+        "human_pending": 1,
+        "audit_result": {
+          "score": 70,
+          "grade": "C",
+          "category_scores": {},
+          "quick_wins": [
+            {
+              "id": "G43",
+              "severity": "Critical",
+              "description": "Enhanced Conversions activo",
+              "fix_minutes": 5,
+              "auto_executable": false
+            }
+          ],
+          "checks_by_category": {}
+        },
+        "ventas_ayer": {},
+        "ads_24h": {},
+        "monthly_budget_status": {},
+        "keyword_proposals": [],
+        "budget_proposals": [],
+        "ba2_proposals": [],
+        "creative_actions": [],
+        "ai_keyword_decisions": [],
+        "builder_executed": [],
+        "budget_optimizer": {
+          "decisions": [],
+          "redistribution": {},
+          "redistribution_analysis": {},
+          "executed": [],
+          "pedidos_gloriafood_24h": 0,
+          "pedidos_gloriafood_detalle": []
+        },
+        "blocked": []
+      }
+    }
+  ]
+}

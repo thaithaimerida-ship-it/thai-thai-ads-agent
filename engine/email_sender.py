@@ -15,6 +15,7 @@ from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from engine.llm_client import generate_text
+from engine.report_contract import build_report_contract_v1
 
 _merida_tz = None
 try:
@@ -1686,7 +1687,448 @@ def generate_daily_insight(
 # RESUMEN DIARIO DE ACTIVIDAD
 # ============================================================================
 
-def _build_pro_daily_html(run: dict) -> str:
+def _derive_report_contract(run: dict) -> dict:
+    """Construye la capa semántica mínima para el reporte diario."""
+    bo = run.get("budget_optimizer") or {}
+
+    executed_budget = []
+    for item in bo.get("executed") or []:
+        result = item.get("result") or {}
+        if result.get("status") in ("executed", "paused"):
+            executed_budget.append({
+                "campaign_name": item.get("campaign_name") or item.get("campaign") or "",
+                "action": item.get("action") or "",
+                "current_daily_budget_mxn": item.get("current_daily_budget_mxn"),
+                "new_daily_budget_mxn": item.get("new_daily_budget_mxn"),
+                "reason": item.get("reason") or "",
+                "status": result.get("status"),
+            })
+    for item in run.get("executed_budget") or []:
+        status = ((item.get("result") or {}).get("status")) or ("executed" if item.get("action") else "")
+        if status in ("executed", "paused"):
+            candidate = {
+                "campaign_name": item.get("campaign_name") or item.get("campaign") or "",
+                "action": item.get("action") or "",
+                "current_daily_budget_mxn": item.get("current_daily_budget_mxn"),
+                "new_daily_budget_mxn": item.get("new_daily_budget_mxn"),
+                "reason": item.get("reason") or "",
+                "status": status,
+            }
+            if candidate not in executed_budget:
+                executed_budget.append(candidate)
+
+    executed_keywords = []
+    for item in run.get("keyword_proposals") or []:
+        result = item.get("result") or {}
+        if result.get("status") == "executed" and item.get("action") in ("add_negative", "add_keyword"):
+            executed_keywords.append({
+                "kind": item.get("action"),
+                "keyword_text": item.get("keyword_text") or item.get("term") or "",
+                "campaign_name": item.get("campaign_name") or "",
+                "cost_mxn": float(item.get("cost_mxn") or item.get("wasted_spend") or 0),
+                "match_type": item.get("match_type") or "",
+            })
+    for item in run.get("ai_keyword_decisions") or []:
+        exec_result = item.get("exec_result") or {}
+        if exec_result.get("status") == "executed":
+            executed_keywords.append({
+                "kind": "ai_keyword",
+                "keyword_text": item.get("keyword_text") or "",
+                "campaign_name": exec_result.get("campaign_name") or item.get("campaign_name") or "",
+                "cost_mxn": float(item.get("cost_mxn") or 0),
+                "match_type": item.get("match_type") or "PHRASE",
+            })
+
+    executed_adgroups = [
+        item for item in (run.get("builder_executed") or [])
+        if isinstance(item.get("result"), dict) and item["result"].get("status") == "success"
+    ]
+    executed_creative = [
+        item for item in (run.get("creative_actions") or [])
+        if (item.get("result") or {}).get("status") in ("executed", "success")
+    ]
+    executed_paused = [
+        item for item in (run.get("paused_campaigns") or [])
+        if isinstance(item.get("result"), dict) and item["result"].get("status") == "executed"
+    ]
+
+    executed_all = []
+    for item in executed_budget:
+        action = (item.get("action") or "").upper() or "AJUSTE"
+        executed_all.append({
+            "kind": "budget",
+            "label": (
+                f'{item.get("campaign_name")}: {action} '
+                f'{item.get("current_daily_budget_mxn")} -> {item.get("new_daily_budget_mxn")}'
+            ),
+        })
+    total_saved = sum(i.get("cost_mxn", 0) for i in executed_keywords if i.get("kind") == "add_negative")
+    blocked_count = sum(1 for i in executed_keywords if i.get("kind") == "add_negative")
+    added_count = sum(1 for i in executed_keywords if i.get("kind") == "add_keyword")
+    ai_count = sum(1 for i in executed_keywords if i.get("kind") == "ai_keyword")
+    if blocked_count:
+        executed_all.append({
+            "kind": "keywords",
+            "label": f'Bloqueó {blocked_count} términos desperdiciados (${total_saved:,.0f} MXN ahorrados)',
+        })
+    if added_count:
+        executed_all.append({
+            "kind": "keywords",
+            "label": f'Agregó {added_count} keywords estratégicas',
+        })
+    if ai_count:
+        executed_all.append({
+            "kind": "keywords",
+            "label": f'Agregó {ai_count} keyword{"s" if ai_count != 1 else ""} AI',
+        })
+    if executed_adgroups:
+        executed_all.append({
+            "kind": "adgroups",
+            "label": f'Creó {len(executed_adgroups)} ad group{"s" if len(executed_adgroups) != 1 else ""}',
+        })
+    for item in executed_creative:
+        if item.get("action") in ("add_headlines", "replace_headlines"):
+            count = len(item.get("headlines") or [])
+            executed_all.append({
+                "kind": "creative",
+                "label": f'Generó {count} headlines para RSA "{item.get("ad_group_name") or ""}"',
+            })
+    if executed_paused:
+        executed_all.append({
+            "kind": "paused",
+            "label": f'Pausó {len(executed_paused)} campaña{"s" if len(executed_paused) != 1 else ""}',
+        })
+
+    return {
+        "meta": {
+            "run_id": run.get("run_id") or "",
+            "timestamp_merida": run.get("timestamp_merida", "—"),
+            "result_class": run.get("result_class", "sin_acciones"),
+            "is_real_audit": bool(run.get("is_real_audit", False)),
+            "campaigns_reviewed": int(run.get("campaigns_reviewed", 0) or 0),
+            "changes_executed": int(run.get("changes_executed", 0) or 0),
+            "had_change": bool(run.get("had_change", False) or executed_all),
+            "human_pending": int(run.get("human_pending", 0) or 0),
+        },
+        "executed": {
+            "budget": executed_budget,
+            "keywords": executed_keywords,
+            "adgroups": executed_adgroups,
+            "creative": executed_creative,
+            "paused": executed_paused,
+            "all": executed_all,
+        },
+        "analyzed": {
+            "redistribution_analysis": bo.get("redistribution_analysis") or {},
+            "redistribution_analysis_present": bool(bo.get("redistribution_analysis")),
+        },
+        "observed": {
+            "audit_result": run.get("audit_result") or {},
+            "agent_insight": run.get("agent_insight"),
+            "quality_findings": run.get("quality_creative_findings", []) or [],
+            "smart_audit": run.get("smart_audit"),
+            "geo_issues": run.get("geo_issues_for_email", []) or [],
+            "geo_unverified_campaigns": run.get("geo_unverified_campaigns", []) or [],
+            "monthly_budget_status": run.get("monthly_budget_status", {}) or {},
+            "ventas_ayer": run.get("ventas_ayer", {}) or {},
+            "ga4_web": run.get("ga4_web"),
+            "ads_24h": run.get("ads_24h", {}) or {},
+        },
+        "proposed": {
+            "keyword_proposals": run.get("keyword_proposals", []) or [],
+            "budget_proposals": run.get("budget_proposals", []) or [],
+            "ba2_proposals": run.get("ba2_proposals", []) or [],
+        },
+    }
+
+
+def _build_daily_subject_from_contract(contract: dict) -> str:
+    meta = contract.get("meta") or {}
+    executed = contract.get("executed") or {}
+    analyzed = contract.get("analyzed") or {}
+    proposed = contract.get("proposed") or {}
+    summary = contract.get("summary") or {}
+
+    executed_count = len(executed.get("items") or executed.get("all") or [])
+    proposal_count = len(proposed.get("items") or []) + len(proposed.get("quick_wins") or [])
+    if executed_count:
+        label = f'{executed_count} cambio{"s" if executed_count != 1 else ""} automático{"s" if executed_count != 1 else ""}'
+    elif meta.get("result_class") == "con_observaciones":
+        label = "Con observaciones"
+    elif proposal_count:
+        label = "Con propuestas"
+    elif summary.get("analysis_present") or analyzed.get("items") or analyzed.get("redistribution_analysis_present"):
+        label = "Analisis sin ejecucion"
+    elif meta.get("result_class") == "con_alertas":
+        label = "Con alertas"
+    elif meta.get("result_class") == "con_errores":
+        label = "Con errores"
+    else:
+        label = "Sin cambios"
+
+    return f'[Thai Thai Agente] Actividad diaria — {label} · {meta.get("timestamp_merida", "—")}'
+
+
+def _build_pro_daily_html_v1(contract_v1: dict) -> str:
+    """Renderer v1: solo pinta el contrato intermedio, sin leer raw run."""
+    import html as _html_lib
+
+    def _esc(v): return _html_lib.escape(str(v or ""))
+
+    def _mxn(v):
+        try:
+            return f"${float(v):,.0f}"
+        except Exception:
+            return "—"
+
+    def _percent(v):
+        try:
+            return f"{float(v):.1f}%"
+        except Exception:
+            return "—"
+
+    def _plural(n, singular, plural=None):
+        plural = plural or f"{singular}s"
+        return singular if int(n or 0) == 1 else plural
+
+    def _check_icon(result):
+        icons = {
+            "PASS": ("&#10003;", "#1D9E75"),
+            "FAIL": ("&#10007;", "#E24B4A"),
+            "WARNING": ("&#9888;", "#EF9F27"),
+            "SKIP": ("&ndash;", "#999"),
+            "N/A": ("&ndash;", "#999"),
+        }
+        sym, col = icons.get(result, ("&bull;", "#6b7280"))
+        return f'<span style="color:{col};font-weight:600;flex-shrink:0;">{sym}</span>'
+
+    summary = contract_v1.get("summary") or {}
+    executed = contract_v1.get("executed") or {}
+    proposed = contract_v1.get("proposed") or {}
+    analyzed = contract_v1.get("analyzed") or {}
+    blocked = contract_v1.get("blocked") or {}
+    account_context = contract_v1.get("account_context") or {}
+    daily_reviews = contract_v1.get("daily_reviews") or {}
+
+    execution_count = int(summary.get("execution_count") or 0)
+    proposal_count = int(summary.get("proposal_count") or 0)
+    analysis_present = bool(summary.get("analysis_present"))
+    requires_attention = bool(summary.get("requires_human_attention"))
+
+    summary_line_1 = (
+        f'Ejecución: {execution_count} {_plural(execution_count, "cambio")} '
+        f'· Propuestas: {proposal_count} · Análisis: {"sí" if analysis_present else "no"}'
+    )
+    summary_line_2 = f'Atención humana: {"requerida" if requires_attention else "no requerida"}'
+
+    _CSS = """
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0;background:#f5f5f5;}
+    .wrap{max-width:600px;margin:0 auto;padding:16px;}
+    .card{background:#fff;border:0.5px solid #e0e0e0;border-radius:12px;padding:16px 18px;margin-bottom:12px;}
+    .sec-title{font-size:10px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;padding-bottom:6px;border-bottom:0.5px solid #e8e8e8;}
+    .check-row{display:flex;gap:8px;padding:4px 0;font-size:12px;align-items:flex-start;}
+    .check-done{color:#2e7d32;flex-shrink:0;}
+    table.data{width:100%;border-collapse:collapse;font-size:12px;}
+    table.data th{color:#999;font-weight:500;padding:4px 6px;border-bottom:0.5px solid #e8e8e8;text-align:left;}
+    table.data td{padding:5px 6px;border-bottom:0.5px solid #f0f0f0;color:#333;}
+    table.data tr:last-child td{border-bottom:none;}
+    .badge{display:inline-block;font-size:10px;padding:1px 7px;border-radius:4px;font-weight:500;}
+    .badge-green{background:#e8f5e9;color:#2e7d32;}
+    """
+
+    summary_section = f"""
+    <div class="card" style="background:#f8f9fa;">
+      <div class="sec-title">Resumen Ejecutivo</div>
+      <div style="font-size:16px;font-weight:600;color:#111;margin-bottom:6px;">{summary_line_1}</div>
+      <div style="font-size:13px;color:#555;">{summary_line_2}</div>
+    </div>"""
+
+    executed_rows = []
+    for item in executed.get("items") or []:
+        lead = _esc(item.get("action_label") or item.get("kind") or "executed")
+        subject = _esc(item.get("subject") or "")
+        target = _esc(item.get("target") or "")
+        evidence = _esc(item.get("evidence") or "")
+        main = f"{lead}: {subject}" if subject else lead
+        if target:
+            main += f" · {target}"
+        executed_rows.append(f'<div class="check-row"><span class="check-done">✓</span><span>{main}</span></div>')
+        if evidence:
+            executed_rows.append(f'<div class="check-row"><span style="color:#6b7280;flex-shrink:0;">•</span><span>{evidence}</span></div>')
+    executed_section = ""
+    if executed.get("present"):
+        executed_section = f"""
+        <div class="card">
+          <div class="sec-title">Acciones Ejecutadas</div>
+          <div style="font-size:12px;color:#666;margin-bottom:8px;">Cambios aplicados automáticamente hoy.</div>
+          {''.join(executed_rows)}
+        </div>"""
+
+    proposal_rows = []
+    for item in proposed.get("items") or []:
+        label = _esc(item.get("proposal_label") or item.get("kind") or "proposal")
+        subject = _esc(item.get("subject") or "")
+        target = _esc(item.get("target") or "")
+        reason = _esc(item.get("reason") or "")
+        main = f"{label}: {subject}" if subject else label
+        if target:
+            main += f" · {target}"
+        proposal_rows.append(f'<div class="check-row"><span style="color:#1565c0;flex-shrink:0;">•</span><span>{main}</span></div>')
+        if reason:
+            proposal_rows.append(f'<div class="check-row"><span style="color:#6b7280;flex-shrink:0;">•</span><span>{reason}</span></div>')
+    quick_wins = proposed.get("quick_wins") or []
+    if quick_wins:
+        proposal_rows.append('<div class="check-row"><span style="color:#1565c0;flex-shrink:0;">•</span><span>Quick wins pendientes</span></div>')
+        for item in quick_wins:
+            label = _esc(item.get("label") or "")
+            sev = _esc(item.get("severity") or "")
+            mins = item.get("eta_minutes")
+            suffix = []
+            if sev:
+                suffix.append(sev)
+            if mins:
+                suffix.append(f"{mins} min")
+            detail = f' · {" · ".join(suffix)}' if suffix else ""
+            proposal_rows.append(f'<div class="check-row"><span style="color:#1565c0;flex-shrink:0;">•</span><span>Quick win pendiente: {label}{detail}</span></div>')
+    proposals_section = ""
+    if proposed.get("present"):
+        proposals_section = f"""
+        <div class="card">
+          <div class="sec-title">Propuestas y Pendientes</div>
+          <div style="font-size:12px;color:#666;margin-bottom:8px;">Decisiones detectadas que requieren validación o seguimiento humano.</div>
+          {''.join(proposal_rows)}
+        </div>"""
+
+    analysis_rows = []
+    for item in analyzed.get("items") or []:
+        scope = _esc(item.get("review_scope") or item.get("domain") or "analysis")
+        finding = _esc(item.get("finding") or "")
+        next_step = _esc(item.get("next_step") or "")
+        analysis_rows.append(f'<div class="check-row"><span style="color:#6b7280;flex-shrink:0;">•</span><span>{scope.capitalize()}: {finding}</span></div>')
+        if next_step:
+            analysis_rows.append(f'<div class="check-row"><span style="color:#6b7280;flex-shrink:0;">•</span><span>Siguiente paso: {next_step}</span></div>')
+    analysis_section = ""
+    if analyzed.get("present"):
+        analysis_section = f"""
+        <div class="card">
+          <div class="sec-title">Análisis sin Ejecución</div>
+          {''.join(analysis_rows)}
+        </div>"""
+
+    blocked_rows = []
+    for item in blocked.get("items") or []:
+        scope = _esc(item.get("review_scope") or item.get("domain") or "blocked")
+        finding = _esc(item.get("finding") or "")
+        reason = _esc(item.get("block_reason") or "")
+        row = f"{scope.capitalize()}: {finding}"
+        if reason:
+            row += f" · {reason}"
+        blocked_rows.append(f'<div class="check-row"><span style="color:#b71c1c;flex-shrink:0;">•</span><span>{row}</span></div>')
+    blocked_section = ""
+    if blocked.get("present"):
+        blocked_section = f"""
+        <div class="card">
+          <div class="sec-title">Bloqueos y Guardas</div>
+          {''.join(blocked_rows)}
+        </div>"""
+
+    scorecard = account_context.get("scorecard") or {}
+    spend_context = account_context.get("spend_context") or {}
+    snapshot = account_context.get("campaign_snapshot") or {}
+    business_yesterday = account_context.get("business_yesterday") or {}
+    camp_rows = ""
+    for row in snapshot.get("rows") or []:
+        camp_rows += f"""
+        <tr>
+          <td>{_esc(row.get("campaign_name"))}</td>
+          <td style="color:#888;font-size:11px;">{_esc(row.get("campaign_type"))}</td>
+          <td>{_mxn(row.get("spend_mxn"))}</td>
+          <td>{int(row.get("clicks") or 0):,}</td>
+          <td>{int(float(row.get("conversions_ads") or 0))}</td>
+          <td>{_mxn(row.get("cpa_ads")) if row.get("cpa_ads") is not None else "—"}</td>
+          <td><span class="badge badge-green">{_esc(row.get("status") or "Activa")}</span></td>
+        </tr>"""
+    context_section = f"""
+    <div class="card">
+      <div class="sec-title">Contexto de Cuenta</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:#111;">Google Ads Health Score</div>
+          <div style="font-size:11px;color:#888;">{_esc(scorecard.get("period_label") or "")}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:24px;font-weight:600;color:#111;">{_esc(scorecard.get("score"))}<span style="font-size:13px;color:#999;">/100</span></div>
+          <div style="font-size:11px;color:#666;">{_esc(scorecard.get("grade") or "")}</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#777;margin:8px 0 12px 0;">Gasto Ads 24h: {_mxn(spend_context.get("ads_spend_24h_mxn"))} · Mes: {_mxn(spend_context.get("month_spend_mxn"))} / {_mxn(spend_context.get("month_cap_mxn"))} ({_percent(spend_context.get("month_pct"))})</div>
+      <div style="font-size:12px;font-weight:600;color:#333;margin-bottom:8px;">Snapshot de campañas (24h)</div>
+      <table class="data">
+        <tr><th>Campaña</th><th>Tipo</th><th>Gasto</th><th>Clics</th><th>Conv (Ads)</th><th>CPA (Ads)</th><th>Estado</th></tr>
+        {camp_rows if camp_rows else '<tr><td colspan="7" style="color:#aaa;text-align:center;">Sin datos de campañas</td></tr>'}
+      </table>
+      <div style="font-size:10px;color:#aaa;margin-top:8px;">*{_esc(snapshot.get("footnote") or "")}</div>
+      {f'<div style="font-size:11px;color:#777;margin-top:10px;">{_esc(business_yesterday.get("text"))}</div>' if business_yesterday.get("present") and business_yesterday.get("text") else ''}
+    </div>"""
+
+    review_blocks = []
+    for category in daily_reviews.get("categories") or []:
+        rows = []
+        for item in category.get("items") or []:
+            detail = _esc(item.get("detail") or "")
+            severity = _esc(item.get("severity") or "")
+            severity_html = f'<span style="color:#999;font-size:11px;"> · {severity}</span>' if severity else ""
+            rows.append(f'<div class="check-row"><span>{_check_icon(item.get("result"))}</span><span>{detail}{severity_html}</span></div>')
+        review_blocks.append(
+            f"""
+            <div style="padding:10px 0;border-bottom:0.5px solid #f0f0f0;">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:{'8px' if rows else '0'};">
+                <div style="font-size:12px;font-weight:600;color:#333;">{_esc(category.get("label"))}</div>
+                <div style="font-size:11px;color:#777;">{_esc(category.get("score")) if category.get("score") is not None else "N/D"}</div>
+              </div>
+              {''.join(rows)}
+            </div>"""
+        )
+    reviews_section = ""
+    if daily_reviews.get("present"):
+        review_body = "".join(review_blocks)
+        if not review_body and daily_reviews.get("fallback_message"):
+            review_body = f'<div style="font-size:12px;color:#666;">{_esc(daily_reviews.get("fallback_message"))}</div>'
+        reviews_section = f"""
+        <div class="card">
+          <div class="sec-title">Revisiones del Día</div>
+          <div style="font-size:12px;color:#666;margin-bottom:8px;">Detalle agrupado de revisiones y hallazgos por categoría.</div>
+          {review_body}
+        </div>"""
+
+    footer = """
+    <div style="font-size:11px;color:#aaa;text-align:center;padding-top:10px;border-top:0.5px solid #e8e8e8;">
+      Thai Thai Ads Agent · administracion@thaithaimerida.com.mx
+    </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>{_CSS}</style></head>
+<body><div class="wrap">
+{summary_section}
+{executed_section}
+{proposals_section}
+{analysis_section}
+{blocked_section}
+{context_section}
+{reviews_section}
+{footer}
+</div></body></html>"""
+
+    try:
+        from premailer import transform
+        html = transform(html)
+    except Exception:
+        pass
+    return html
+
+
+def _build_pro_daily_html_legacy_unused(run: dict, contract: dict | None = None) -> str:
     """
     Genera el correo diario pro — formato aprobado Módulo 3.
     Secciones: score, snapshot, negocio, redistribución, keywords, ad groups, checklist, quick wins.
@@ -1699,19 +2141,22 @@ def _build_pro_daily_html(run: dict) -> str:
         try: return f"${float(v):,.0f}"
         except: return "—"
 
-    ar  = run.get("audit_result") or {}
+    contract = contract or _derive_report_contract(run)
+    observed = contract.get("observed") or {}
+    executed = contract.get("executed") or {}
+    analyzed = contract.get("analyzed") or {}
+
+    ar  = observed.get("audit_result") or {}
     bo  = run.get("budget_optimizer") or {}
-    vy  = run.get("ventas_ayer") or {}
-    ads = run.get("ads_24h") or {}
-    mbs = run.get("monthly_budget_status") or {}
-    ca  = run.get("creative_actions") or []
-    kp  = run.get("keyword_proposals") or []
-    boo_dec = bo.get("decisions") or []
-    boo_red = bo.get("redistribution") or {}
-    boo_analysis = bo.get("redistribution_analysis") or {}
+    vy  = observed.get("ventas_ayer") or {}
+    ads = observed.get("ads_24h") or {}
+    mbs = observed.get("monthly_budget_status") or {}
+    ca  = executed.get("creative") or []
+    kp  = contract.get("proposed", {}).get("keyword_proposals") or []
+    boo_analysis = analyzed.get("redistribution_analysis") or {}
     boo_ped = bo.get("pedidos_gloriafood_detalle") or []
     boo_ped_count = bo.get("pedidos_gloriafood_24h") or 0
-    boo_exec = bo.get("executed") or []
+    budget_exec = executed.get("budget") or []
 
     score       = ar.get("score") or 0
     grade       = ar.get("grade") or "—"
@@ -1848,12 +2293,12 @@ def _build_pro_daily_html(run: dict) -> str:
         </tr>"""
     snapshot_section = f"""
     <div class="card">
-      <div class="sec-title">Snapshot de campañas (30d)</div>
+      <div class="sec-title">Snapshot de campañas (24h)</div>
       <table class="data">
-        <tr><th>Campaña</th><th>Tipo</th><th>Gasto</th><th>Clics</th><th>Conv</th><th>CPA</th><th>Estado</th></tr>
+        <tr><th>Campaña</th><th>Tipo</th><th>Gasto</th><th>Clics</th><th>Conv (Ads)</th><th>CPA (Ads)</th><th>Estado</th></tr>
         {camp_rows if camp_rows else '<tr><td colspan="7" style="color:#aaa;text-align:center;">Sin datos de campañas</td></tr>'}
       </table>
-      <div style="font-size:10px;color:#aaa;margin-top:8px;">*Smart: micro-acciones locales. No son reservas ni pedidos.</div>
+      <div style="font-size:10px;color:#aaa;margin-top:8px;">*SMART no comparte la misma semantica de conversion que SEARCH; "Conv (Ads)" y "CPA (Ads)" pueden no reflejar reservas, pedidos ni micro-acciones visibles en este correo.</div>
     </div>"""
 
     # ── Negocio ayer ──────────────────────────────────────────────────────────
@@ -1904,48 +2349,32 @@ def _build_pro_daily_html(run: dict) -> str:
     </div>"""
 
     # ── Redistribución de presupuesto ─────────────────────────────────────────
-    reduced   = boo_red.get("reduced") or []
-    scaled    = boo_red.get("scaled") or []
-    protected = boo_red.get("protected") or []
-    net_daily = boo_red.get("net_daily_mxn") or 0
+    net_daily = 0.0
 
     budget_rows = ""
-    for r in reduced:
+    for item in budget_exec:
+        before = float(item.get("current_daily_budget_mxn") or 0)
+        after = float(item.get("new_daily_budget_mxn") or before)
+        delta = after - before
+        net_daily += delta
+        label = "Escalado" if delta > 0 else ("Reducido" if delta < 0 else ((item.get("action") or "Ajustado").title()))
+        color = "#1D9E75" if delta > 0 else ("#E24B4A" if delta < 0 else "#999")
         budget_rows += f"""
         <div class="row row-border">
-          <span class="budget-type-r" style="width:68px;flex-shrink:0;font-size:11px;">Reducido</span>
-          <div style="flex:1;font-size:12px;color:#333;">{_esc(r.get('name',''))}
-            <div style="font-size:11px;color:#aaa;">{_esc(str(r.get('reason',''))[:80])} · Libera ~{_mxn(r.get('saved_monthly'))}/mes</div>
+          <span style="width:68px;flex-shrink:0;font-size:11px;color:{color};font-weight:500;">{label}</span>
+          <div style="flex:1;font-size:12px;color:#333;">{_esc(item.get('campaign_name',''))}
+            <div style="font-size:11px;color:#aaa;">{_esc(str(item.get('reason',''))[:80])}</div>
           </div>
-          <div style="text-align:right;font-size:12px;">{_mxn(r.get('before'))}/día → {_mxn(r.get('after'))}/día<br>
-            <span style="color:#E24B4A;font-size:11px;">-{_mxn(r.get('saved_daily'))}/día</span></div>
-        </div>"""
-    for s in scaled:
-        budget_rows += f"""
-        <div class="row row-border">
-          <span class="budget-type-s" style="width:68px;flex-shrink:0;font-size:11px;">Escalado</span>
-          <div style="flex:1;font-size:12px;color:#333;">{_esc(s.get('name',''))}
-            <div style="font-size:11px;color:#aaa;">{_esc(str(s.get('reason',''))[:80])} · Recibe +{_mxn(s.get('added_monthly'))}/mes</div>
-          </div>
-          <div style="text-align:right;font-size:12px;">{_mxn(s.get('before'))}/día → {_mxn(s.get('after'))}/día<br>
-            <span style="color:#1D9E75;font-size:11px;">+{_mxn(s.get('added_daily'))}/día</span></div>
-        </div>"""
-    for p in protected:
-        budget_rows += f"""
-        <div class="row row-border">
-          <span class="budget-type-p" style="width:68px;flex-shrink:0;font-size:11px;">Protegido</span>
-          <div style="flex:1;font-size:12px;color:#333;">{_esc(p.get('name',''))}
-            <div style="font-size:11px;color:#aaa;">70% motor del negocio — sin cambio</div>
-          </div>
-          <div style="text-align:right;font-size:12px;color:#999;">{_mxn(p.get('daily_budget'))}/día</div>
+          <div style="text-align:right;font-size:12px;">{_mxn(before)}/día → {_mxn(after)}/día<br>
+            <span style="color:{color};font-size:11px;">{"+" if delta > 0 else ""}{_mxn(delta)}/día</span></div>
         </div>"""
 
     net_color = "#1D9E75" if net_daily >= 0 else "#E24B4A"
     net_sign  = "+" if net_daily >= 0 else ""
     budget_section = f"""
     <div class="card">
-      <div class="sec-title">Redistribución de presupuesto hoy</div>
-      {budget_rows if budget_rows else '<div style="font-size:12px;color:#aaa;">Sin cambios de presupuesto hoy</div>'}
+      <div class="sec-title">Cambios de presupuesto ejecutados hoy</div>
+      {budget_rows if budget_rows else '<div style="font-size:12px;color:#aaa;">Sin cambios de presupuesto ejecutados hoy</div>'}
       <div style="font-size:12px;font-weight:500;color:#666;margin-top:10px;padding-top:10px;border-top:0.5px solid #e8e8e8;">
         Balance neto: <span style="color:{net_color};">{net_sign}{_mxn(abs(net_daily))}/día</span>
       </div>
@@ -1957,7 +2386,7 @@ def _build_pro_daily_html(run: dict) -> str:
     analysis_matrix = boo_analysis.get("allocation_matrix") or []
     analysis_rows = ""
 
-    if analysis_sources or analysis_receivers or analysis_matrix:
+    if boo_analysis:
         source_html = ""
         for source in analysis_sources:
             source_html += f"""
@@ -1989,6 +2418,14 @@ def _build_pro_daily_html(run: dict) -> str:
               <div style="text-align:right;font-size:12px;color:#1565c0;">{_mxn(allocation.get('amount_daily_mxn'))}/dia</div>
             </div>"""
 
+        _analysis_empty_state = ""
+        if not (analysis_sources or analysis_receivers or analysis_matrix):
+            _analysis_empty_state = (
+                '<div style="font-size:12px;color:#666;margin-top:10px;">'
+                'Análisis ejecutado sin fuentes o receptoras elegibles hoy'
+                '</div>'
+            )
+
         analysis_rows = f"""
         <div style="font-size:12px;color:#1565c0;font-weight:500;margin-bottom:8px;">Sin ejecucion automatica</div>
         <div style="font-size:12px;color:#666;margin-bottom:10px;">No cambia presupuestos todavia</div>
@@ -1996,6 +2433,7 @@ def _build_pro_daily_html(run: dict) -> str:
         {source_html}
         {receiver_html}
         {matrix_html}
+        {_analysis_empty_state}
         <div style="font-size:12px;font-weight:500;color:#666;margin-top:10px;padding-top:10px;border-top:0.5px solid #e8e8e8;">
           Balance neto analizado: {_mxn(boo_analysis.get('net_daily_mxn'))}/dia
         </div>"""
@@ -2006,14 +2444,16 @@ def _build_pro_daily_html(run: dict) -> str:
       {analysis_rows if analysis_rows else '<div style="font-size:12px;color:#aaa;">Sin redistribucion potencial analizada hoy</div>'}
     </div>"""
 
-    blocked_kws = [p for p in kp if p.get("action") == "add_negative" and (p.get("result") or {}).get("status") == "executed"]
-    added_kws   = [p for p in kp if p.get("action") == "add_keyword"  and (p.get("result") or {}).get("status") == "executed"]
+    blocked_kws = [p for p in executed.get("keywords") or [] if p.get("kind") == "add_negative"]
+    added_kws   = [p for p in executed.get("keywords") or [] if p.get("kind") == "add_keyword"]
+    ai_added_kws = [d for d in executed.get("keywords") or [] if d.get("kind") == "ai_keyword"]
+    builder_created = executed.get("adgroups") or []
 
     kw_blocked_html = ""
     total_saved = 0
     for bkw in blocked_kws[:10]:
-        term  = _esc(bkw.get("keyword_text") or bkw.get("term") or "")
-        cost  = float(bkw.get("cost_mxn") or bkw.get("wasted_spend") or 0)
+        term  = _esc(bkw.get("keyword_text") or "")
+        cost  = float(bkw.get("cost_mxn") or 0)
         total_saved += cost
         camp  = _esc(bkw.get("campaign_name") or "")
         kw_blocked_html += f"""
@@ -2026,13 +2466,25 @@ def _build_pro_daily_html(run: dict) -> str:
 
     kw_added_html = ""
     for akw in added_kws[:5]:
-        term = _esc(akw.get("keyword_text") or akw.get("term") or "")
+        term = _esc(akw.get("keyword_text") or "")
         camp = _esc(akw.get("campaign_name") or "")
         kw_added_html += f"""
         <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid #f0f0f0;font-size:12px;">
           <span style="flex:1;">"{term}"</span>
           <span style="color:#aaa;font-size:11px;">{camp}</span>
           <span class="kw-tag kw-added">agregada</span>
+        </div>"""
+
+    ai_kw_added_html = ""
+    for akw in ai_added_kws[:5]:
+        term = _esc(akw.get("keyword_text") or "")
+        camp = _esc(akw.get("campaign_name") or "")
+        match_type = _esc(akw.get("match_type") or "PHRASE")
+        ai_kw_added_html += f"""
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid #f0f0f0;font-size:12px;">
+          <span style="flex:1;">"{term}"</span>
+          <span style="color:#aaa;font-size:11px;">{camp}</span>
+          <span class="kw-tag kw-auto">{match_type}</span>
         </div>"""
 
     sonnet_html = ""
@@ -2046,7 +2498,7 @@ def _build_pro_daily_html(run: dict) -> str:
                 <div style="padding:5px 0;border-bottom:0.5px solid #f0f0f0;font-size:12px;">
                   <div style="color:#333;margin-bottom:3px;">{ad_group} <span class="kw-tag kw-auto">remediado</span></div>
                   <div style="font-size:11px;color:#1565c0;">{' · '.join(_esc(h) for h in hls[:5])}</div>
-                  <div style="font-size:10px;color:#aaa;margin-top:2px;">Headlines generados por Sonnet — Google re-evalúa en 24-48h</div>
+                  <div style="font-size:10px;color:#aaa;margin-top:2px;">Headlines generados por el agente — Google re-evalúa en 24-48h</div>
                 </div>"""
 
     saved_html = f' · Ahorrado: {_mxn(total_saved)} MXN' if total_saved > 0 else ""
@@ -2055,27 +2507,32 @@ def _build_pro_daily_html(run: dict) -> str:
       <div class="sec-title">Keywords hoy</div>
       {"" if not kw_blocked_html else f'<div style="font-size:11px;color:#666;font-weight:500;margin-bottom:6px;">Negativas bloqueadas — automático{saved_html}</div>' + kw_blocked_html}
       {"" if not kw_added_html else '<div style="font-size:11px;color:#666;font-weight:500;margin:10px 0 6px;">Keywords nuevas agregadas — automático</div>' + kw_added_html}
+      {"" if not ai_kw_added_html else '<div style="font-size:11px;color:#666;font-weight:500;margin:10px 0 6px;">Keywords AI agregadas — automático</div>' + ai_kw_added_html}
       {"" if not sonnet_html else '<div style="font-size:11px;color:#666;font-weight:500;margin:10px 0 6px;">Copy RSA generado por Sonnet</div>' + sonnet_html}
-      {"<div style='font-size:12px;color:#aaa;'>Sin cambios de keywords hoy</div>" if not (kw_blocked_html or kw_added_html or sonnet_html) else ""}
+      {"<div style='font-size:12px;color:#aaa;'>Sin cambios de keywords hoy</div>" if not (kw_blocked_html or kw_added_html or ai_kw_added_html or sonnet_html) else ""}
+    </div>"""
+
+    builder_rows = ""
+    for item in builder_created[:5]:
+        ad_group_name = _esc(item.get("ad_group_name") or "")
+        campaign_name = _esc(item.get("campaign_name") or "")
+        keywords = item.get("keywords") or []
+        kw_preview = " · ".join(_esc(k) for k in keywords[:3])
+        builder_rows += f"""
+        <div style="padding:5px 0;border-bottom:0.5px solid #f0f0f0;font-size:12px;">
+          <div style="color:#333;margin-bottom:3px;">{ad_group_name} <span class="kw-tag kw-added">creado</span></div>
+          <div style="font-size:11px;color:#aaa;">{campaign_name}</div>
+          {f'<div style="font-size:11px;color:#1565c0;margin-top:2px;">{kw_preview}</div>' if kw_preview else ''}
+        </div>"""
+
+    adgroups_section = f"""
+    <div class="card">
+      <div class="sec-title">Ad groups hoy</div>
+      {builder_rows if builder_rows else "<div style='font-size:12px;color:#aaa;'>Sin cambios de ad groups hoy</div>"}
     </div>"""
 
     # ── Agente ejecutó solo hoy ───────────────────────────────────────────────
-    exec_items = []
-    if boo_exec:
-        for bdec in boo_exec:
-            if bdec.get("action") in ("scale", "reduce"):
-                exec_items.append(
-                    f'{bdec["campaign_name"]}: {bdec["action"].upper()} '
-                    f'{_mxn(bdec.get("current_daily_budget_mxn"))} → {_mxn(bdec.get("new_daily_budget_mxn"))}/día'
-                )
-    if blocked_kws:
-        exec_items.append(f'Bloqueó {len(blocked_kws)} términos desperdiciados ({_mxn(total_saved)} MXN ahorrados)')
-    if added_kws:
-        exec_items.append(f'Agregó {len(added_kws)} keywords estratégicas')
-    for cact in ca:
-        if cact.get("action") in ("add_headlines",) and (cact.get("result") or {}).get("status") in ("executed", "success"):
-            n = len(cact.get("headlines") or [])
-            exec_items.append(f'Generó {n} headlines para RSA "{_esc(cact.get("ad_group_name") or "")}" (Ad Strength POOR)')
+    exec_items = [item.get("label") or "" for item in (executed.get("all") or []) if item.get("label")]
 
     exec_html = "\n".join(
         f'<div class="check-row"><span class="check-done">✓</span><span>{_esc(item)}</span></div>'
@@ -2171,6 +2628,7 @@ def _build_pro_daily_html(run: dict) -> str:
 {budget_section}
 {budget_analysis_section}
 {keywords_section}
+{adgroups_section}
 {exec_section}
 {qw_section}
 {desglose_section}
@@ -2185,7 +2643,417 @@ def _build_pro_daily_html(run: dict) -> str:
     return html
 
 
-def _build_daily_summary_html(run: dict) -> str:
+def _build_pro_daily_html(run: dict, contract: dict | None = None) -> str:
+    """
+    Genera el correo diario con composicion editorial ejecutiva.
+    """
+    from datetime import date as _date_cls
+    import html as _html_lib
+
+    def _esc(v): return _html_lib.escape(str(v or ""))
+    def _mxn(v):
+        try:
+            return f"${float(v):,.0f}"
+        except Exception:
+            return "—"
+
+    def _plural(n, singular, plural=None):
+        plural = plural or f"{singular}s"
+        return singular if n == 1 else plural
+
+    contract = contract or _derive_report_contract(run)
+    meta = contract.get("meta") or {}
+    observed = contract.get("observed") or {}
+    executed = contract.get("executed") or {}
+    analyzed = contract.get("analyzed") or {}
+    proposed = contract.get("proposed") or {}
+
+    ar = observed.get("audit_result") or {}
+    ads = observed.get("ads_24h") or {}
+    mbs = observed.get("monthly_budget_status") or {}
+    vy = observed.get("ventas_ayer") or {}
+    boo_analysis = analyzed.get("redistribution_analysis") or {}
+
+    score = ar.get("score") or 0
+    grade = ar.get("grade") or "—"
+    delta = ar.get("score_delta")
+    prev_score = ar.get("previous_score")
+    fecha = _date_cls.today().strftime("%Y-%m-%d")
+    _ads_spend = float(ads.get("spend_mxn") or 0)
+    _mes_cap = float(mbs.get("monthly_cap") or 10000)
+    _mes_spent = float(mbs.get("spend_so_far") or 0)
+    _mes_pct = round(_mes_spent / _mes_cap * 100, 1) if _mes_cap > 0 else 0
+
+    exec_items = [item.get("label") or "" for item in (executed.get("all") or []) if item.get("label")]
+    executed_count = len(exec_items)
+    proposal_keywords = proposed.get("keyword_proposals") or []
+    proposal_budget = proposed.get("budget_proposals") or []
+    proposal_ba2 = proposed.get("ba2_proposals") or []
+    quick_wins = ar.get("quick_wins") or []
+    checks_by_cat = ar.get("checks_by_category") or {}
+    cat_scores = ar.get("category_scores") or {}
+    proposals_count = len(proposal_keywords) + len(proposal_budget) + len(proposal_ba2) + len(quick_wins)
+    analysis_present = bool(
+        meta.get("is_real_audit")
+        or meta.get("campaigns_reviewed")
+        or ar
+        or boo_analysis
+        or proposals_count
+        or executed_count
+        or (ads.get("por_campana") or [])
+    )
+    blocked_count = int(
+        run.get("blocked_by_guard", 0)
+        or (run.get("summary") or {}).get("blocked_high_risk", 0)
+        or len(run.get("blocked") or [])
+    )
+    attention_required = proposals_count > 0 or blocked_count > 0 or int(meta.get("human_pending", 0) or 0) > 0
+
+    summary_line_1 = (
+        f'Ejecución: {executed_count} {_plural(executed_count, "cambio")} '
+        f'· Propuestas: {proposals_count} · Análisis: {"sí" if analysis_present else "no"}'
+    )
+    summary_line_2 = f'Atención humana: {"requerida" if attention_required else "no requerida"}'
+
+    CAT_LABELS = [
+        ("CT", "Conversion Tracking"),
+        ("Wasted", "Wasted Spend"),
+        ("Structure", "Account Structure"),
+        ("KW", "Keywords & QS"),
+        ("Ads", "Ads & Assets"),
+        ("Settings", "Settings & Targeting"),
+    ]
+
+    def _check_icon(result):
+        icons = {
+            "PASS": ("&#10003;", "#1D9E75"),
+            "FAIL": ("&#10007;", "#E24B4A"),
+            "WARNING": ("&#9888;", "#EF9F27"),
+            "SKIP": ("&ndash;", "#999"),
+            "N/A": ("&ndash;", "#999"),
+        }
+        sym, col = icons.get(result, ("&bull;", "#6b7280"))
+        return f'<span style="color:{col};font-weight:600;flex-shrink:0;">{sym}</span>'
+
+    proposal_lines = []
+    for item in proposal_keywords[:5]:
+        keyword_text = _esc(item.get("keyword_text") or item.get("term") or "")
+        campaign_name = _esc(item.get("campaign_name") or "")
+        proposal_lines.append(f'Keyword propuesta: "{keyword_text}"{f" · {campaign_name}" if campaign_name else ""}')
+    for item in proposal_budget[:5]:
+        campaign_name = _esc(item.get("campaign_name") or item.get("campaign") or "")
+        action = _esc((item.get("action") or "ajuste").lower())
+        new_budget = item.get("new_daily_budget_mxn") or item.get("proposed_budget_mxn")
+        proposal_lines.append(
+            f'Presupuesto propuesto: {campaign_name} · {action}{f" → {_mxn(new_budget)}/día" if new_budget is not None else ""}'
+        )
+    for item in proposal_ba2[:5]:
+        from_name = _esc(item.get("from_campaign_name") or item.get("source_campaign_name") or "")
+        to_name = _esc(item.get("to_campaign_name") or item.get("campaign_name") or "")
+        amount = item.get("amount_daily_mxn") or item.get("proposed_daily_mxn")
+        flow = f"{from_name} → {to_name}" if from_name and to_name else (to_name or from_name or "Redistribución")
+        proposal_lines.append(f'Redistribución propuesta: {flow}{f" · {_mxn(amount)}/día" if amount is not None else ""}')
+
+    quick_win_lines = []
+    for item in quick_wins[:5]:
+        desc = _esc(item.get("description") or item.get("title") or "Quick win pendiente")
+        sev = _esc(item.get("severity") or "")
+        mins = item.get("fix_minutes")
+        suffix = []
+        if sev:
+            suffix.append(sev)
+        if mins:
+            suffix.append(f"{mins} min")
+        detail = f' &middot; {" &middot; ".join(suffix)}' if suffix else ""
+        quick_win_lines.append(f"Quick win pendiente: {desc}{detail}")
+
+    if quick_win_lines:
+        proposal_lines.append("Quick wins pendientes")
+        proposal_lines.extend(quick_win_lines)
+
+    analysis_lines = []
+    analysis_sources = boo_analysis.get("fund_sources") or []
+    analysis_receivers = boo_analysis.get("receiver_candidates") or []
+    analysis_matrix = boo_analysis.get("allocation_matrix") or []
+    if boo_analysis:
+        if analysis_sources or analysis_receivers or analysis_matrix:
+            analysis_lines.append("Redistribución: analizada sin ejecución automática.")
+        else:
+            analysis_lines.append("Redistribución: analizada sin elegibles hoy.")
+    if not exec_items and not proposals_count:
+        analysis_lines.append("No hubo novedad operativa adicional fuera de los puntos anteriores.")
+
+    analysis_lines = [
+        line.replace("RedistribuciÃ³n: analizada", "Redistribuci\u00f3n: revisada")
+        for line in analysis_lines
+    ]
+    analysis_lines = [line for line in analysis_lines if "No hubo novedad operativa adicional fuera de los puntos anteriores." not in line]
+    if not boo_analysis and ar:
+        analysis_lines.append("Redistribuci\u00f3n: revisada sin condiciones v\u00e1lidas de acci\u00f3n.")
+    if not executed.get("budget") and not proposal_budget:
+        analysis_lines.append("Presupuesto evaluado sin ajuste ejecutable.")
+    if not executed.get("adgroups"):
+        analysis_lines.append("Ad groups evaluados sin cambio ejecutable.")
+    if not executed.get("keywords") and not proposal_keywords:
+        analysis_lines.append("No se detectaron oportunidades accionables adicionales en keywords.")
+    analysis_lines = [line for line in analysis_lines if "Redistribuci" not in line]
+    if boo_analysis:
+        if analysis_sources or analysis_receivers or analysis_matrix:
+            analysis_lines.insert(0, "Redistribuci\u00f3n: revisada sin ejecuci\u00f3n autom\u00e1tica.")
+        else:
+            analysis_lines.insert(0, "Redistribuci\u00f3n: revisada sin elegibles hoy.")
+    elif ar:
+        analysis_lines.insert(0, "Redistribuci\u00f3n: revisada sin condiciones v\u00e1lidas de acci\u00f3n.")
+
+    blocked_summary = []
+    by_reason = ((run.get("summary") or {}).get("by_reason") or {})
+    reason_labels = {
+        "learning_phase": "fase de aprendizaje",
+        "protected_keyword": "keyword protegida",
+        "protected_campaign": "campaña protegida",
+        "insufficient_evidence": "evidencia insuficiente",
+        "requires_approval": "requiere aprobación",
+        "high_risk_blocked": "riesgo alto",
+    }
+    for code, label in reason_labels.items():
+        count = int(by_reason.get(code, 0) or 0)
+        if count:
+            blocked_summary.append(f"{count} por {label}")
+
+    delta_html = ""
+    if delta is not None and prev_score is not None:
+        sign = "+" if delta >= 0 else ""
+        color = "#1D9E75" if delta >= 0 else "#E24B4A"
+        delta_html = f'<span style="color:{color};">{sign}{delta:.1f} pts vs ayer</span>'
+    score_color = "#1D9E75" if score >= 70 else ("#EF9F27" if score >= 45 else "#E24B4A")
+
+    camp_rows = ""
+    for c in ads.get("por_campana") or []:
+        cname = _esc(c.get("name", "—"))
+        tipo = _esc(c.get("tipo", "—"))
+        gasto = _mxn(c.get("spend_mxn"))
+        clics = int(c.get("clicks", 0) or 0)
+        conv = float(c.get("conversions", 0) or 0)
+        spend = float(c.get("spend_mxn", 0) or 0)
+        cpa = _mxn(spend / conv) if conv > 0 else "—"
+        camp_rows += f"""
+        <tr>
+          <td>{cname}</td>
+          <td style="color:#888;font-size:11px;">{tipo}</td>
+          <td>{gasto}</td>
+          <td>{clics:,}</td>
+          <td>{conv:.0f}</td>
+          <td>{cpa}</td>
+          <td><span class="badge badge-green">Activa</span></td>
+        </tr>"""
+
+    _CSS = """
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:0;background:#f5f5f5;}
+    .wrap{max-width:600px;margin:0 auto;padding:16px;}
+    .card{background:#fff;border:0.5px solid #e0e0e0;border-radius:12px;padding:16px 18px;margin-bottom:12px;}
+    .sec-title{font-size:10px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;padding-bottom:6px;border-bottom:0.5px solid #e8e8e8;}
+    .check-row{display:flex;gap:8px;padding:4px 0;font-size:12px;align-items:flex-start;}
+    .check-done{color:#2e7d32;flex-shrink:0;}
+    table.data{width:100%;border-collapse:collapse;font-size:12px;}
+    table.data th{color:#999;font-weight:500;padding:4px 6px;border-bottom:0.5px solid #e8e8e8;text-align:left;}
+    table.data td{padding:5px 6px;border-bottom:0.5px solid #f0f0f0;color:#333;}
+    table.data tr:last-child td{border-bottom:none;}
+    .badge{display:inline-block;font-size:10px;padding:1px 7px;border-radius:4px;font-weight:500;}
+    .badge-green{background:#e8f5e9;color:#2e7d32;}
+    """
+
+    detailed_exec_lines = []
+    for item in executed.get("keywords") or []:
+        keyword_text = _esc(item.get("keyword_text") or "")
+        campaign_name = _esc(item.get("campaign_name") or "")
+        if keyword_text:
+            detailed_exec_lines.append(
+                f'Keyword AI agregada: "{keyword_text}"{f" · {campaign_name}" if campaign_name else ""}'
+            )
+    for item in executed.get("adgroups") or []:
+        ad_group_name = _esc(item.get("ad_group_name") or "")
+        campaign_name = _esc(item.get("campaign_name") or "")
+        if ad_group_name:
+            detailed_exec_lines.append(
+                f'Ad group creado: {ad_group_name}{f" · {campaign_name}" if campaign_name else ""}'
+            )
+        for keyword in (item.get("keywords") or [])[:2]:
+            if keyword:
+                detailed_exec_lines.append(f'Keyword incluida en ad group: "{_esc(keyword)}"')
+    for item in executed.get("budget") or []:
+        campaign_name = _esc(item.get("campaign_name") or "")
+        action = _esc((item.get("action") or "ajuste").upper())
+        current_budget = item.get("current_daily_budget_mxn")
+        new_budget = item.get("new_daily_budget_mxn")
+        if campaign_name:
+            detailed_exec_lines.append(
+                f'Presupuesto ejecutado: {campaign_name} · {action}{f" {_mxn(current_budget)} → {_mxn(new_budget)}" if current_budget is not None and new_budget is not None else ""}'
+            )
+    detailed_exec_lines = detailed_exec_lines[:6]
+
+    summary_section = f"""
+    <div class="card" style="background:#f8f9fa;">
+      <div class="sec-title">Resumen Ejecutivo</div>
+      <div style="font-size:16px;font-weight:600;color:#111;margin-bottom:6px;">{summary_line_1}</div>
+      <div style="font-size:13px;color:#555;">{summary_line_2}</div>
+    </div>"""
+
+    executed_section = ""
+    if exec_items:
+        executed_rows = "".join(
+            f'<div class="check-row"><span class="check-done">✓</span><span>{_esc(item)}</span></div>'
+            for item in exec_items
+        )
+        executed_detail_rows = "".join(
+            f'<div class="check-row"><span style="color:#6b7280;flex-shrink:0;">•</span><span>{line}</span></div>'
+            for line in detailed_exec_lines
+        )
+        # Compatibilidad visible con wording anterior para tests y lectura humana.
+        legacy_lines = []
+        ai_kw_lines = [item for item in (executed.get("keywords") or []) if item.get("kind") == "ai_keyword"]
+        if ai_kw_lines:
+            legacy_lines.append(
+                f'<div style="font-size:11px;color:#666;font-weight:500;margin:0 0 8px 0;">Keywords AI agregadas — automático</div>'
+            )
+        executed_section = f"""
+        <div class="card">
+          <div class="sec-title">Acciones Ejecutadas</div>
+          <div style="font-size:12px;color:#666;margin-bottom:8px;">Cambios aplicados automáticamente hoy.</div>
+          {"".join(legacy_lines)}
+          {executed_rows}
+          {executed_detail_rows}
+        </div>"""
+
+    proposals_section = ""
+    if proposals_count:
+        proposals_section = f"""
+        <div class="card">
+          <div class="sec-title">Propuestas y Pendientes</div>
+          <div style="font-size:12px;color:#666;margin-bottom:8px;">Decisiones detectadas que requieren validación o seguimiento humano.</div>
+          {"".join(f'<div class="check-row"><span style="color:#1565c0;flex-shrink:0;">•</span><span>{line}</span></div>' for line in proposal_lines)}
+        </div>"""
+
+    analysis_section = ""
+    if analysis_lines:
+        analysis_section = f"""
+        <div class="card">
+          <div class="sec-title">Análisis sin Ejecución</div>
+          {"".join(f'<div class="check-row"><span style="color:#6b7280;flex-shrink:0;">•</span><span>{line}</span></div>' for line in analysis_lines)}
+        </div>"""
+
+    blocked_section = ""
+    if blocked_count:
+        blocked_section = f"""
+        <div class="card">
+          <div class="sec-title">Bloqueos y Guardas</div>
+          <div style="font-size:12px;color:#666;">Se bloquearon {blocked_count} {_plural(blocked_count, "acción")} por guardas o criterios de seguridad.</div>
+          {f'<div style="font-size:12px;color:#555;margin-top:8px;">{" · ".join(blocked_summary)}</div>' if blocked_summary else ''}
+        </div>"""
+
+    business_yesterday_line = ""
+    if vy:
+        business_yesterday_suffix = ""
+        if vy.get("comensales_total") is not None:
+            business_yesterday_suffix = f" &middot; comensales {int(vy.get('comensales_total') or 0)}"
+        business_yesterday_line = (
+            f'<div style="font-size:11px;color:#777;margin-top:10px;">'
+            f'Negocio ayer: venta total {_mxn(vy.get("venta_total_dia"))}{business_yesterday_suffix}'
+            f'</div>'
+        )
+
+    context_section = f"""
+    <div class="card">
+      <div class="sec-title">Contexto de Cuenta</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:#111;">Google Ads Health Score</div>
+          <div style="font-size:11px;color:#888;">{fecha} · Últimos 30 días</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:24px;font-weight:600;color:{score_color};">{score:.0f}<span style="font-size:13px;color:#999;">/100</span></div>
+          <div style="font-size:11px;color:#666;">{_esc(grade)} {delta_html}</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#777;margin:8px 0 12px 0;">Gasto Ads 24h: {_mxn(_ads_spend)} · Mes: {_mxn(_mes_spent)} / {_mxn(_mes_cap)} ({_mes_pct}%)</div>
+      <div style="font-size:12px;font-weight:600;color:#333;margin-bottom:8px;">Snapshot de campañas (24h)</div>
+      <table class="data">
+        <tr><th>Campaña</th><th>Tipo</th><th>Gasto</th><th>Clics</th><th>Conv (Ads)</th><th>CPA (Ads)</th><th>Estado</th></tr>
+        {camp_rows if camp_rows else '<tr><td colspan="7" style="color:#aaa;text-align:center;">Sin datos de campañas</td></tr>'}
+      </table>
+      <div style="font-size:10px;color:#aaa;margin-top:8px;">*SMART no comparte la misma semantica de conversion que SEARCH; "Conv (Ads)" y "CPA (Ads)" pueden no reflejar reservas, pedidos ni micro-acciones visibles en este correo.</div>
+      {business_yesterday_line}
+    </div>"""
+
+    review_blocks = []
+    for cat_key, cat_label in CAT_LABELS:
+        checks = checks_by_cat.get(cat_key) or []
+        score_value = cat_scores.get(cat_key)
+        if not checks and score_value is None:
+            continue
+        score_text = f"{float(score_value):.0f}/100" if score_value is not None else "N/D"
+        rows = []
+        for item in checks[:6]:
+            detail = _esc(item.get("detail") or item.get("description") or item.get("message") or "")
+            severity = _esc(item.get("severity") or "")
+            severity_html = f'<span style="color:#999;font-size:11px;"> &middot; {severity}</span>' if severity else ""
+            rows.append(f'<div class="check-row"><span>{_check_icon(item.get("result"))}</span><span>{detail}{severity_html}</span></div>')
+        review_blocks.append(
+            f"""
+            <div style="padding:10px 0;border-bottom:0.5px solid #f0f0f0;">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:{'8px' if rows else '0'};">
+                <div style="font-size:12px;font-weight:600;color:#333;">{cat_label}</div>
+                <div style="font-size:11px;color:#777;">{score_text}</div>
+              </div>
+              {''.join(rows)}
+            </div>"""
+        )
+
+    reviews_section = ""
+    audit_review_present = bool(ar and ar.get("score") is not None)
+    if review_blocks or audit_review_present:
+        review_body = "".join(review_blocks)
+        if not review_body:
+            review_body = (
+                '<div style="font-size:12px;color:#666;">'
+                'Auditoría disponible en esta corrida, sin desglose detallado visible por categoría.'
+                '</div>'
+            )
+        reviews_section = f"""
+        <div class="card">
+          <div class="sec-title">Revisiones del DÃ­a</div>
+          <div style="font-size:12px;color:#666;margin-bottom:8px;">Detalle agrupado de revisiones y hallazgos por categorÃ­a.</div>
+          {review_body}
+        </div>"""
+    reviews_section = reviews_section.replace("Revisiones del DÃ­a", "Revisiones del D\u00eda").replace("categorÃ­a", "categor\u00eda")
+
+    footer = """
+    <div style="font-size:11px;color:#aaa;text-align:center;padding-top:10px;border-top:0.5px solid #e8e8e8;">
+      Thai Thai Ads Agent · administracion@thaithaimerida.com.mx
+    </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>{_CSS}</style></head>
+<body><div class="wrap">
+{summary_section}
+{executed_section}
+{proposals_section}
+{analysis_section}
+{blocked_section}
+{context_section}
+{reviews_section}
+{footer}
+</div></body></html>"""
+
+    try:
+        from premailer import transform
+        html = transform(html)
+    except Exception:
+        pass
+    return html
+
+
+def _build_daily_summary_html(run: dict, contract: dict | None = None) -> str:
     """
     Construye el HTML del resumen diario de actividad del sistema.
 
@@ -2198,7 +3066,8 @@ def _build_daily_summary_html(run: dict) -> str:
       - ¿Necesito hacer algo hoy?
       - Estado del sistema (si fue restablecido tras fallo).
     """
-    rc              = run.get("result_class", "sin_acciones")
+    contract        = contract or _derive_report_contract(run)
+    rc              = (contract.get("meta") or {}).get("result_class", "sin_acciones")
     detail          = run.get("detail", {})
     errors          = run.get("errors", [])
     system_restored = run.get("system_restored", False)
@@ -2213,12 +3082,14 @@ def _build_daily_summary_html(run: dict) -> str:
     geo_unv  = detail.get("geo_unverified", 0)
 
     # Sección 1 — Salud de Canales
-    _monthly_budget_status = run.get("monthly_budget_status", {}) or {}
-    _ads_24h      = run.get("ads_24h", {})
+    _observed_contract = contract.get("observed") or {}
+    _executed_contract = contract.get("executed") or {}
+    _monthly_budget_status = _observed_contract.get("monthly_budget_status", {}) or {}
+    _ads_24h      = _observed_contract.get("ads_24h", {})
     _ads_spend    = float(_ads_24h.get("spend_mxn", 0) or 0)
     _ads_conv     = float(_ads_24h.get("conversions", 0) or 0)
     _landing_ms   = run.get("landing_response_ms")
-    _ventas_ayer        = run.get("ventas_ayer", {}) or {}
+    _ventas_ayer        = _observed_contract.get("ventas_ayer", {}) or {}
     # Nuevo formato: resumen_negocio_para_agente
     _COMENSALES_OBJ_DIA = 40
     _coms_ayer          = _ventas_ayer.get("comensales_total")          # personas en restaurante
@@ -2233,20 +3104,20 @@ def _build_daily_summary_html(run: dict) -> str:
     _venta_neta_prom    = float(_ventas_ayer.get("venta_neta_promedio_diario", 0) or 0)
 
     # GA4 web traffic (Sección 0: Movimiento en la Web)
-    _ga4_web      = run.get("ga4_web")
+    _ga4_web      = _observed_contract.get("ga4_web")
     _ga4_ok       = isinstance(_ga4_web, dict) and "error" not in _ga4_web and bool(_ga4_web)
     _ga4_views    = int(_ga4_web.get("page_views", 0) or 0)       if _ga4_ok else 0
     _ga4_pedir    = int(_ga4_web.get("click_pedir", 0) or 0)      if _ga4_ok else 0
     _ga4_reservar = int(_ga4_web.get("click_reservar", 0) or 0)   if _ga4_ok else 0
     _ga4_activos  = int(_ga4_web.get("usuarios_activos", 0) or 0) if _ga4_ok else 0
     _budget_optimizer = run.get("budget_optimizer") or {}
-    _redistribution_analysis = _budget_optimizer.get("redistribution_analysis") or {}
+    _redistribution_analysis = (contract.get("analyzed") or {}).get("redistribution_analysis") or {}
     _recently_approved       = int(run.get("recently_approved_count", 0) or 0)
-    _agent_insight           = run.get("agent_insight")
-    _quality_findings        = run.get("quality_creative_findings", []) or []
-    _creative_actions_email  = run.get("creative_actions", []) or []
-    _paused_campaigns_email  = run.get("paused_campaigns", []) or []
-    _builder_proposals_email = run.get("builder_executed", []) or []
+    _agent_insight           = _observed_contract.get("agent_insight")
+    _quality_findings        = _observed_contract.get("quality_findings", []) or []
+    _creative_actions_email  = _executed_contract.get("creative", []) or []
+    _paused_campaigns_email  = _executed_contract.get("paused", []) or []
+    _builder_proposals_email = _executed_contract.get("adgroups", []) or []
 
     _smart_issues_email = detail.get("smart_issues", 0)
 
@@ -3684,49 +4555,13 @@ def send_daily_summary_email(run: dict, session_id: str) -> bool:
         logger.warning("send_daily_summary_email: GMAIL_APP_PASSWORD no configurado")
         return False
 
-    rc = run.get("result_class", "sin_acciones")
+    report_contract = build_report_contract_v1(run)
+    rc = (report_contract.get("meta") or {}).get("result_class", "sin_acciones")
+    subject = _build_daily_subject_from_contract(report_contract)
 
-    # Construir label dinámico basado en acciones reales
-    _acciones = []
-    _exec_budget = run.get("executed_budget", [])
-    _exec_kw = run.get("ai_keyword_decisions", [])
-    _builder = run.get("builder_executed", [])
-    _paused = run.get("paused_campaigns", [])
-
-    if _exec_budget:
-        _budget_count = len(_exec_budget)
-        _acciones.append(f"{_budget_count} ajuste{'s' if _budget_count > 1 else ''} de presupuesto")
-    if _exec_kw:
-        _kw_count = len(_exec_kw)
-        _acciones.append(f"{_kw_count} keyword{'s' if _kw_count > 1 else ''}")
-    if _builder:
-        _bg_count = len([b for b in _builder if isinstance(b.get("result"), dict) and b["result"].get("status") == "success"])
-        if _bg_count:
-            _acciones.append(f"{_bg_count} ad group{'s' if _bg_count > 1 else ''} creado{'s' if _bg_count > 1 else ''}")
-    if _paused:
-        _pc_count = len([p for p in _paused if isinstance(p.get("result"), dict) and p["result"].get("status") == "executed"])
-        if _pc_count:
-            _acciones.append(f"{_pc_count} campaña{'s' if _pc_count > 1 else ''} pausada{'s' if _pc_count > 1 else ''}")
-
-    if _acciones:
-        _label = " + ".join(_acciones)
-    elif rc == "con_observaciones":
-        _label = "Con observaciones"
-    elif rc == "con_alertas":
-        _label = "Con alertas"
-    elif rc == "con_errores":
-        _label = "Con errores"
-    else:
-        _label = "Sin cambios"
-
-    fecha = run.get("timestamp_merida", "—")
-    subject = f"[Thai Thai Agente] Actividad diaria — {_label} · {fecha}"
-
-    # Usar el nuevo reporte pro si hay datos del audit_engine
-    if run.get("audit_result") and run["audit_result"].get("score") is not None:
-        html_body = _build_pro_daily_html(run)
-    else:
-        html_body = _build_daily_summary_html(run)
+    # Ruta nueva v1: raw run -> report contract v1 -> renderer HTML v1.
+    # La ruta vieja permanece en código, pero deja de ser el camino principal.
+    html_body = _build_pro_daily_html_v1(report_contract)
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -3741,6 +4576,18 @@ def send_daily_summary_email(run: dict, session_id: str) -> bool:
             smtp.ehlo()
             smtp.login(EMAIL_FROM, GMAIL_APP_PASSWORD)
             smtp.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+        try:
+            from engine.email_observability import save_last_email_preview as _save_email_preview
+            _save_email_preview(
+                session_id=session_id,
+                subject=subject,
+                result_class=rc,
+                is_real_audit=run.get("is_real_audit", False),
+                html_body=html_body,
+                report_contract=report_contract,
+            )
+        except Exception as _obs_exc:
+            logger.warning("send_daily_summary_email: no se pudo guardar preview — %s", _obs_exc)
         logger.info(
             "send_daily_summary_email: enviado — resultado=%s sesión=%s",
             rc, session_id,
