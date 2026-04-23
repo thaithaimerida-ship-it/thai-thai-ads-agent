@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request, HTTPException
 
 logger = logging.getLogger("gloriafood_webhook")
+logger.setLevel(logging.INFO)
 router = APIRouter()
 
 # Master key configurado en GloriaFood — se valida en cada request
