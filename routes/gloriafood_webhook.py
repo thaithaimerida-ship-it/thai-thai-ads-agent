@@ -6,6 +6,7 @@ Doc: https://github.com/GlobalFood/integration_docs/blob/master/accepted_orders/
 import logging
 import os
 import json
+import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request, HTTPException
 
@@ -194,7 +195,7 @@ def _send_google_ads_conversion(parsed_order: dict):
             logger.info("[CONV %s] email identifier agregado", order_id)
 
         if parsed_order.get("client_phone"):
-            phone_clean = parsed_order["client_phone"].strip()
+            phone_clean = re.sub(r'[\s\-\(\)]', '', parsed_order["client_phone"].strip())
             if not phone_clean.startswith("+"):
                 phone_clean = "+52" + phone_clean
             phone_hash = hashlib.sha256(phone_clean.encode()).hexdigest()
