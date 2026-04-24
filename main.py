@@ -6,6 +6,7 @@ Backend COMPLETO con 7 skills integradas para autonomía total
 import os
 import json
 import logging
+logging.basicConfig(level=logging.INFO)
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
