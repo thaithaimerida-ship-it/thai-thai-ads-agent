@@ -5,7 +5,7 @@ python-dotenv
 google-ads
 google-analytics-data
 requests
-anthropic>=0.40.0
+openai>=1.99.5
 gspread>=6.0.0
 google-auth>=2.0.0
 google-cloud-storage>=2.10.0
@@ -13,3 +13,4 @@ streamlit>=1.30.0
 plotly>=5.18.0
 pandas>=2.0.0
 premailer
+psycopg2-binary>=2.9
