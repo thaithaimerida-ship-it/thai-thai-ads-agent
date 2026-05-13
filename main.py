@@ -634,7 +634,6 @@ async def run_quick_wins():
         update_bidding_strategy, update_network_settings,
         clear_ad_schedules, update_ad_schedule
     )
-    from engine.credentials import load_credentials
 
     CUSTOMER_ID = "4021070209"
     EXPERIENCIA_ID = "23730364039"
@@ -656,8 +655,7 @@ async def run_quick_wins():
     }
 
     try:
-        creds = load_credentials()
-        client = get_ads_client(creds)
+        client = get_ads_client()
 
         # QW2 — Pausar conversiones legacy duplicadas
         for conv in fetch_conversion_actions(client, CUSTOMER_ID):
