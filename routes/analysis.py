@@ -120,6 +120,13 @@ VALID_DATE_RANGES = {
     "LAST_30_DAYS", "THIS_MONTH", "LAST_MONTH",
 }
 
+# Local (22612348265) y Experiencia 2026 (23730364039) miden por conversiones
+# SECUNDARIAS por diseno (reserva_completada / micros de sistema). metrics.conversions
+# (solo primarias) siempre da ~0 para ellas -> falso "Sin conversiones / Pausar".
+# Para estas dos, la logica de semaforo/alertas/acciones usa all_conversions.
+# Delivery y Delivery Search siguen usando conversions (su primaria click_pedir_online).
+ALL_CONVERSIONS_CAMPAIGN_IDS = {"22612348265", "23730364039"}
+
 
 @router.get("/analyze-campaigns-detailed")
 async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
@@ -154,24 +161,29 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
             all_conversions = float(c.get("all_conversions", 0))
             clicks = int(c.get("clicks", 0))
             impressions = int(c.get("impressions", 0))
-            cpa = spend / conversions if conversions > 0 else 0
             ctr = round(clicks / impressions * 100, 2) if impressions > 0 else 0
             camp_id = str(c.get("id", ""))
             waste = waste_by_campaign.get(camp_id, 0)
 
-            if conversions == 0 and spend > 100:
+            if camp_id in ALL_CONVERSIONS_CAMPAIGN_IDS:
+                effective_conversions = all_conversions
+            else:
+                effective_conversions = conversions
+            effective_cpa = spend / effective_conversions if effective_conversions > 0 else 0
+
+            if effective_conversions == 0 and spend > 100:
                 semaphore = "critical"
                 alerts = ["Sin conversiones con alto gasto"]
                 actions = ["Pausar campaña", "Revisar targeting"]
-            elif cpa > 25:
+            elif effective_cpa > 25:
                 semaphore = "critical"
-                alerts = [f"CPA ${cpa:.2f} muy sobre target $15"]
+                alerts = [f"CPA ${effective_cpa:.2f} muy sobre target $15"]
                 actions = ["Reducir bids", "Revisar keywords"]
-            elif cpa > 20:
+            elif effective_cpa > 20:
                 semaphore = "warning"
-                alerts = [f"CPA ${cpa:.2f} sobre target $15"]
+                alerts = [f"CPA ${effective_cpa:.2f} sobre target $15"]
                 actions = ["Optimizar bids"]
-            elif cpa > 0 and cpa <= 15:
+            elif effective_cpa > 0 and effective_cpa <= 15:
                 semaphore = "excellent"
                 alerts = []
                 actions = ["Escalar presupuesto"]
@@ -190,7 +202,7 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
                 "spend": round(spend, 2),
                 "conversions": round(conversions, 1),
                 "all_conversions": round(all_conversions, 1),
-                "cpa": round(cpa, 2),
+                "cpa": round(effective_cpa, 2),
                 "ctr": ctr,
                 "impressions": impressions,
                 "clicks": clicks,
