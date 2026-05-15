@@ -446,6 +446,7 @@ def fetch_campaign_data(client: GoogleAdsClient, customer_id: str, date_range: s
           campaign_budget.explicitly_shared,
           metrics.cost_micros,
           metrics.conversions,
+          metrics.all_conversions,
           metrics.clicks,
           metrics.impressions
         FROM campaign
@@ -469,6 +470,7 @@ def fetch_campaign_data(client: GoogleAdsClient, customer_id: str, date_range: s
                 "budget_explicitly_shared": bool(row.campaign_budget.explicitly_shared),
                 "cost_micros": row.metrics.cost_micros,
                 "conversions": row.metrics.conversions,
+                "all_conversions": row.metrics.all_conversions,
                 "clicks": row.metrics.clicks,
                 "impressions": row.metrics.impressions,
             })

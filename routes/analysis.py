@@ -115,17 +115,29 @@ async def analyze_keywords():
         return {"status": "error", "message": str(e), "details": traceback.format_exc()}
 
 
+VALID_DATE_RANGES = {
+    "TODAY", "YESTERDAY", "LAST_7_DAYS", "LAST_14_DAYS",
+    "LAST_30_DAYS", "THIS_MONTH", "LAST_MONTH",
+}
+
+
 @router.get("/analyze-campaigns-detailed")
-async def analyze_campaigns_detailed():
+async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
     try:
+        date_range = date_range.strip().upper()
+        if date_range not in VALID_DATE_RANGES:
+            return {
+                "status": "error",
+                "message": f"date_range invalido: '{date_range}'. Validos: {sorted(VALID_DATE_RANGES)}",
+            }
         engine = _get_engine()
         if not engine:
             raise Exception("Engine not available")
         target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
         client = engine["get_ads_client"]()
-        campaigns = engine["fetch_campaign_data"](client, target_id)
-        keywords = engine["fetch_keyword_data"](client, target_id)
-        search_terms = engine["fetch_search_term_data"](client, target_id)
+        campaigns = engine["fetch_campaign_data"](client, target_id, date_range)
+        keywords = engine["fetch_keyword_data"](client, target_id, date_range)
+        search_terms = engine["fetch_search_term_data"](client, target_id, date_range)
 
         waste_data = _detect_waste(campaigns, keywords, search_terms)
         waste_by_campaign = {}
@@ -139,6 +151,7 @@ async def analyze_campaigns_detailed():
         for c in campaigns:
             spend = c.get("cost_micros", 0) / 1_000_000
             conversions = float(c.get("conversions", 0))
+            all_conversions = float(c.get("all_conversions", 0))
             clicks = int(c.get("clicks", 0))
             impressions = int(c.get("impressions", 0))
             cpa = spend / conversions if conversions > 0 else 0
@@ -176,6 +189,7 @@ async def analyze_campaigns_detailed():
                 "name": c.get("name", ""),
                 "spend": round(spend, 2),
                 "conversions": round(conversions, 1),
+                "all_conversions": round(all_conversions, 1),
                 "cpa": round(cpa, 2),
                 "ctr": ctr,
                 "impressions": impressions,
@@ -188,6 +202,7 @@ async def analyze_campaigns_detailed():
 
         return {
             "status": "success",
+            "date_range": date_range,
             "campaigns": formatted,
             "summary": {
                 "total": cnt["total"],
