@@ -7,6 +7,7 @@ Si Sonnet falla o el JSON es inválido, retorna lista vacía (nunca lanza excepc
 import os
 import json
 import logging
+from engine.llm_client import generate_text, has_llm_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +115,8 @@ def remediate_weak_ads(
         [{"action": "add_headlines"|"add_descriptions", "ad_id", "ad_group_resource",
           "campaign_name", "headlines"|"descriptions", "reasoning"}]
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        logger.warning("creative_remediation: ANTHROPIC_API_KEY no configurada — skip")
+    if not has_llm_api_key():
+        logger.warning("creative_remediation: OPENAI_API_KEY no configurada — skip")
         return []
 
     if not ad_health_data:
@@ -153,12 +153,6 @@ def remediate_weak_ads(
             qs_low_kw_by_campaign.setdefault(cid, []).append(kw.get("keyword_text", ""))
 
     actions = []
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-    except Exception as e:
-        logger.warning("creative_remediation: no se pudo inicializar Anthropic — %s", e)
-        return []
 
     for ad in candidates:
         ad_id          = ad.get("ad_id", "")
@@ -226,13 +220,13 @@ Formato:
 }}"""
 
         try:
-            response = client.messages.create(
-                model="claude-sonnet-4-6",
+            raw = generate_text(
+                model_role="sonnet",
+                user_prompt=user_prompt,
+                system_prompt=_SYSTEM_PROMPT,
                 max_tokens=800,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
             )
-            raw = response.content[0].text.strip()
+            raw = raw.strip()
             # Limpiar markdown si hay
             if raw.startswith("```"):
                 raw = raw.split("```")[1]

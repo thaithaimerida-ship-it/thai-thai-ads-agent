@@ -17,6 +17,7 @@ Guardrails de seguridad (aplicados tanto en el prompt como en _parse_decisions):
 import os
 import json
 import logging
+from engine.llm_client import generate_text, has_llm_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -108,9 +109,8 @@ def get_budget_decisions(
           "reason": str,            # en español, 1 frase
           "confidence": int}]       # 0–100
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        logger.warning("Decision engine: ANTHROPIC_API_KEY no configurada — sin decisiones AI")
+    if not has_llm_api_key():
+        logger.warning("Decision engine: OPENAI_API_KEY no configurada — sin decisiones AI")
         return []
 
     if not campaigns:
@@ -132,14 +132,11 @@ def get_budget_decisions(
                                     monthly_budget_status=monthly_budget_status)
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        text = generate_text(
+            model_role="haiku",
+            user_prompt=prompt,
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text
         logger.debug("Decision engine raw response: %s", text[:500])
         return _parse_decisions(text, campaigns, monthly_budget_status=monthly_budget_status, quality_findings=quality_findings)
     except Exception as e:
@@ -710,8 +707,7 @@ def get_haiku_budget_resolution(
     if not ambiguous_decisions:
         return []
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not has_llm_api_key():
         return ambiguous_decisions
 
     # Solo casos HOLD ambiguos — nunca KILL ni ROLLBACK
@@ -753,15 +749,12 @@ Responde SOLO con JSON válido, sin texto adicional:
 Confidence mínimo para ejecutar: 70. Si estás bajo 70, usa "hold"."""
 
     try:
-        import anthropic
         import json
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        text = generate_text(
+            model_role="haiku",
+            user_prompt=prompt,
             max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
+        ).strip()
         parsed = json.loads(text)
         haiku_decisions = {d["campaign_id"]: d for d in parsed.get("decisions", [])}
 
@@ -818,9 +811,8 @@ def get_keyword_decisions(
           "reason": str,
           "confidence": int}]
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        logger.warning("Keyword engine: ANTHROPIC_API_KEY no configurada — skip")
+    if not has_llm_api_key():
+        logger.warning("Keyword engine: OPENAI_API_KEY no configurada — skip")
         return []
 
     if not search_ad_groups:
@@ -832,14 +824,11 @@ def get_keyword_decisions(
     )
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        text = generate_text(
+            model_role="haiku",
+            user_prompt=prompt,
             max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text
         logger.debug("Keyword engine raw response: %s", text[:400])
         return _parse_keyword_decisions(text, current_keywords, search_ad_groups)
     except Exception as e:

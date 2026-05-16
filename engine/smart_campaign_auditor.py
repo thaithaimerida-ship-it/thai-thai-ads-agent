@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 
 import logging
+from engine.llm_client import generate_text
 logger = logging.getLogger(__name__)
 
 # Contexto de negocio inyectado en el prompt del LLM.
@@ -86,16 +87,12 @@ def _evaluate_themes_with_llm(themes: List[str]) -> List[str]:
         Lista de temas que el LLM considera irrelevantes.
         En caso de error de API, retorna [] — el agente continúa con solo la lista estática.
     """
-    import anthropic
     import json
-    import os
 
     if not themes:
         return []
 
     try:
-        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
         prompt = f"""{_BUSINESS_CONTEXT}
 
 Se te entrega la siguiente lista de keyword themes actualmente activos en las
@@ -127,13 +124,11 @@ Incluye solo los temas que son DESPERDICIO REAL.
 Si todos son relevantes, responde con [].
 No escribas explicaciones, código markdown, ni texto adicional. Solo el JSON array."""
 
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        raw = generate_text(
+            model_role="haiku",
+            user_prompt=prompt,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        raw = response.content[0].text.strip()
+        ).strip()
         # Limpiar posibles backticks de markdown si el modelo los incluye
         if raw.startswith("```"):
             raw = raw.split("```")[1]

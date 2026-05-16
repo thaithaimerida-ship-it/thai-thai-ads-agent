@@ -5,6 +5,7 @@ Fetches real business data: comensales, ingresos, gastos, canales de venta.
 import os
 import calendar
 from datetime import datetime, timedelta, date
+from zoneinfo import ZoneInfo
 from typing import List, Dict, Optional
 
 
@@ -823,7 +824,8 @@ def resumen_negocio_para_agente(days: int = 7) -> dict:
     try:
         sh = _get_spreadsheet()
 
-        end = date.today() - timedelta(days=1)
+        local_today = datetime.now(ZoneInfo("America/Merida")).date()
+        end = local_today - timedelta(days=1)
         start = end - timedelta(days=days - 1)
 
         # ── Cortes_de_Caja: fuente primaria para todos los datos de venta ────

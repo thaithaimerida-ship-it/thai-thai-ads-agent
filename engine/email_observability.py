@@ -1,23 +1,49 @@
 """
-Persistencia mínima del último correo diario enviado exitosamente.
+Persistencia durable del ultimo correo diario enviado exitosamente.
 
 Objetivo:
   - inspeccionar subject y html final sin depender de IMAP
-  - guardar solo el último snapshot enviado con éxito
+  - guardar solo el ultimo snapshot enviado con exito
+  - persistir de forma estable entre instancias de Cloud Run usando GCS
 """
 
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
 from html import unescape
 
+logger = logging.getLogger(__name__)
 
-def _get_preview_path() -> str:
-    env_path = os.getenv("EMAIL_PREVIEW_PATH")
-    if env_path:
-        return env_path
-    return os.path.join(os.path.dirname(__file__), "..", "data", "last_email_preview.json")
+_PREVIEW_GCS_BUCKET = os.getenv("AGENT_GCS_BUCKET") or os.getenv("GCS_BUCKET") or "thai-thai-agent-data"
+_PREVIEW_GCS_BLOB = os.getenv("EMAIL_PREVIEW_GCS_BLOB", "observability/last_email_preview.json")
+
+_gcs_client = None
+
+
+def _get_gcs_client():
+    global _gcs_client
+    if _gcs_client is None:
+        try:
+            from google.cloud import storage
+
+            _gcs_client = storage.Client()
+        except ImportError as exc:
+            logger.error("email_observability: google-cloud-storage no instalado")
+            raise RuntimeError("google-cloud-storage no instalado") from exc
+        except Exception as exc:
+            logger.error("email_observability: no se pudo inicializar GCS client: %s", exc)
+            raise RuntimeError("no se pudo inicializar GCS client") from exc
+    return _gcs_client
+
+
+def _get_preview_blob():
+    if not _PREVIEW_GCS_BUCKET:
+        logger.error("email_observability: bucket GCS no configurado para last_email_preview")
+        raise RuntimeError("bucket GCS no configurado para last_email_preview")
+    client = _get_gcs_client()
+    return client.bucket(_PREVIEW_GCS_BUCKET).blob(_PREVIEW_GCS_BLOB)
 
 
 def _html_to_text_preview(html_body: str, max_chars: int = 600) -> str:
@@ -43,9 +69,12 @@ def save_last_email_preview(
     html_body: str,
     report_contract: dict | None = None,
 ) -> dict:
+    saved_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "session_id": session_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": saved_at,
+        "saved_at": saved_at,
+        "storage_backend": "gcs",
         "subject": subject,
         "result_class": result_class,
         "is_real_audit": bool(is_real_audit),
@@ -55,19 +84,36 @@ def save_last_email_preview(
         "report_contract": report_contract or {},
     }
 
-    path = _get_preview_path()
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    return payload
+    try:
+        blob = _get_preview_blob()
+        blob.upload_from_string(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            content_type="application/json",
+        )
+        return payload
+    except Exception as exc:
+        logger.error(
+            "email_observability.save_last_email_preview: fallo guardando gs://%s/%s: %s",
+            _PREVIEW_GCS_BUCKET,
+            _PREVIEW_GCS_BLOB,
+            exc,
+        )
+        raise RuntimeError("fallo guardando last_email_preview en GCS") from exc
 
 
 def get_last_email_preview() -> dict | None:
-    path = _get_preview_path()
-    if not os.path.exists(path):
-        return None
     try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+        blob = _get_preview_blob()
+        if not blob.exists():
+            return None
+        return json.loads(blob.download_as_text())
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        logger.error(
+            "email_observability.get_last_email_preview: fallo leyendo gs://%s/%s: %s",
+            _PREVIEW_GCS_BUCKET,
+            _PREVIEW_GCS_BLOB,
+            exc,
+        )
+        raise RuntimeError("fallo leyendo last_email_preview en GCS") from exc

@@ -49,6 +49,47 @@ CATEGORY_LABELS = (
     ("Settings", "Settings & Targeting"),
 )
 
+DISPLAY_ACTION_LABELS = {
+    "keyword_added": "Keyword agregada",
+    "ad_group_created": "Ad group creado",
+    "budget_action_executed": "Ajuste de presupuesto aplicado",
+}
+
+DISPLAY_PROPOSAL_LABELS = {
+    "keyword_proposal": "Keyword propuesta",
+    "budget_proposal": "Ajuste de presupuesto propuesto",
+    "ba2_scale": "Escalado de presupuesto propuesto",
+    "ba2_realloc": "Redistribución propuesta",
+}
+
+DISPLAY_EVIDENCE_VALUES = {
+    "AI keyword executed in raw run.": "Cambio visible en la corrida de hoy.",
+    "Executed keyword action visible in raw run.": "Cambio visible en la corrida de hoy.",
+    "Builder executed ad group successfully.": "Cambio visible en la corrida de hoy.",
+    "Executed budget action visible in raw run.": "Cambio visible en la corrida de hoy.",
+}
+
+DISPLAY_FINDING_VALUES = {
+    "No eligible source or receiver campaigns in redistribution analysis.": "Redistribución revisada sin campañas elegibles.",
+    "Redistribution was analyzed without an executable allocation.": "Redistribución revisada sin asignación ejecutable visible.",
+    "Redistribution was analyzed, but no automatic execution is visible in the raw run.": "Redistribución revisada sin ejecución automática visible.",
+    "Budget module is present, but the raw run does not expose a specific no-action reason.": "Presupuesto revisado sin motivo observable adicional en esta corrida.",
+}
+
+DISPLAY_SCOPE_VALUES = {
+    "keywords": "Keywords",
+    "ad_groups": "Ad groups",
+    "budget": "Presupuesto",
+    "redistribution": "Redistribución",
+}
+
+HIDDEN_TECHNICAL_STEPS = {"human_review", "monitor_next_runs"}
+HIDDEN_INTERNAL_REASONS = {
+    "not_observable_from_run",
+    "no_valid_adjustment_case",
+    "no_eligible_entities",
+}
+
 
 # ============================================================================
 # Normalization from raw run
@@ -110,6 +151,53 @@ def _mxn_int(value: Any) -> int | None:
         return None
 
 
+def _display_action_label(value: Any, fallback: str = "Cambio aplicado") -> str:
+    text = _non_empty(value)
+    if not text:
+        return fallback
+    return DISPLAY_ACTION_LABELS.get(text, fallback)
+
+
+def _display_proposal_label(value: Any, fallback: str = "Propuesta detectada") -> str:
+    text = _non_empty(value)
+    if not text:
+        return fallback
+    return DISPLAY_PROPOSAL_LABELS.get(text, fallback)
+
+
+def _display_evidence(value: Any) -> str | None:
+    text = _non_empty(value)
+    if not text:
+        return None
+    return DISPLAY_EVIDENCE_VALUES.get(text, text)
+
+
+def _display_finding(value: Any) -> str | None:
+    text = _non_empty(value)
+    if not text:
+        return None
+    return DISPLAY_FINDING_VALUES.get(text, text)
+
+
+def _display_scope(value: Any, fallback: str) -> str:
+    text = _non_empty(value) or fallback
+    return DISPLAY_SCOPE_VALUES.get(text, text)
+
+
+def _visible_next_step(value: Any) -> str | None:
+    text = _non_empty(value)
+    if not text or text in HIDDEN_TECHNICAL_STEPS:
+        return None
+    return text
+
+
+def _visible_internal_reason(value: Any) -> str | None:
+    text = _non_empty(value)
+    if not text or text in HIDDEN_INTERNAL_REASONS:
+        return None
+    return text
+
+
 def _campaign_snapshot_rows(ads_24h: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for row in _as_list(ads_24h.get("por_campana")):
@@ -160,8 +248,8 @@ def _build_executed_facts(nr: dict[str, Any]) -> list[dict[str, Any]]:
                 "kind": "budget_action_executed",
                 "subject": campaign_name,
                 "target": None,
-                "action_label": action or "budget_change",
-                "evidence": item.get("reason") or "Executed budget action visible in raw run.",
+                "action_label": _display_action_label("budget_action_executed"),
+                "evidence": _display_evidence(item.get("reason") or "Executed budget action visible in raw run."),
             }
         )
 
@@ -179,8 +267,8 @@ def _build_executed_facts(nr: dict[str, Any]) -> list[dict[str, Any]]:
                 "kind": "ai_keyword_executed",
                 "subject": keyword_text,
                 "target": campaign_name,
-                "action_label": "keyword_added",
-                "evidence": "AI keyword executed in raw run.",
+                "action_label": _display_action_label("keyword_added"),
+                "evidence": _display_evidence("AI keyword executed in raw run."),
             }
         )
 
@@ -199,8 +287,8 @@ def _build_executed_facts(nr: dict[str, Any]) -> list[dict[str, Any]]:
                 "kind": action,
                 "subject": keyword_text,
                 "target": campaign_name,
-                "action_label": action,
-                "evidence": item.get("reason") or "Executed keyword action visible in raw run.",
+                "action_label": _display_action_label(action),
+                "evidence": _display_evidence(item.get("reason") or "Executed keyword action visible in raw run."),
             }
         )
 
@@ -218,8 +306,8 @@ def _build_executed_facts(nr: dict[str, Any]) -> list[dict[str, Any]]:
                 "kind": "ad_group_created",
                 "subject": ad_group_name,
                 "target": campaign_name,
-                "action_label": "ad_group_created",
-                "evidence": "Builder executed ad group successfully.",
+                "action_label": _display_action_label("ad_group_created"),
+                "evidence": _display_evidence("Builder executed ad group successfully."),
             }
         )
 
@@ -238,9 +326,9 @@ def _build_blocked_facts(nr: dict[str, Any]) -> list[dict[str, Any]]:
                 "primary_block": "blocked",
                 "domain": "keywords",
                 "kind": "keyword_blocked",
-                "review_scope": "keywords",
-                "finding": item.get("reason") or "Keyword action blocked in raw run.",
-                "block_reason": item.get("block_reason") or "not_observable_from_run",
+                "review_scope": _display_scope("keywords", "keywords"),
+                "finding": _display_finding(item.get("reason") or "Keyword action blocked in raw run."),
+                "block_reason": _visible_internal_reason(item.get("block_reason") or "not_observable_from_run"),
                 "next_step": None,
                 "severity": item.get("urgency") or item.get("risk_level") or "unknown",
             }
@@ -254,9 +342,9 @@ def _build_blocked_facts(nr: dict[str, Any]) -> list[dict[str, Any]]:
                 "primary_block": "blocked",
                 "domain": "budget",
                 "kind": "budget_blocked",
-                "review_scope": "budget",
-                "finding": item.get("guardrail_msg") or item.get("reason") or "Budget action blocked in raw run.",
-                "block_reason": item.get("reason") or "not_observable_from_run",
+                "review_scope": _display_scope("budget", "budget"),
+                "finding": _display_finding(item.get("guardrail_msg") or item.get("reason") or "Budget action blocked in raw run."),
+                "block_reason": _visible_internal_reason(item.get("reason") or "not_observable_from_run"),
                 "next_step": None,
                 "severity": "high",
             }
@@ -283,9 +371,9 @@ def _build_proposed_facts(nr: dict[str, Any]) -> tuple[list[dict[str, Any]], lis
                 "kind": "keyword_proposal",
                 "subject": keyword_text,
                 "target": campaign_name,
-                "proposal_label": "keyword_proposal",
+                "proposal_label": _display_proposal_label("keyword_proposal"),
                 "reason": item.get("reason") or "Keyword proposal visible in raw run.",
-                "next_step": "human_review",
+                "next_step": _visible_next_step("human_review"),
             }
         )
 
@@ -299,9 +387,9 @@ def _build_proposed_facts(nr: dict[str, Any]) -> tuple[list[dict[str, Any]], lis
                 "kind": "budget_proposal",
                 "subject": campaign_name,
                 "target": None,
-                "proposal_label": "budget_proposal",
+                "proposal_label": _display_proposal_label("budget_proposal"),
                 "reason": item.get("reason") or "Budget proposal visible in raw run.",
-                "next_step": "human_review",
+                "next_step": _visible_next_step("human_review"),
             }
         )
 
@@ -317,9 +405,9 @@ def _build_proposed_facts(nr: dict[str, Any]) -> tuple[list[dict[str, Any]], lis
                 "kind": signal.lower(),
                 "subject": campaign_name,
                 "target": None,
-                "proposal_label": signal.lower(),
+                "proposal_label": _display_proposal_label(signal.lower()),
                 "reason": item.get("fund_source") or "Scale or reallocation proposal visible in raw run.",
-                "next_step": "human_review",
+                "next_step": _visible_next_step("human_review"),
             }
         )
 
@@ -363,10 +451,10 @@ def _build_analyzed_facts(nr: dict[str, Any]) -> list[dict[str, Any]]:
                 "primary_block": "analyzed",
                 "domain": "redistribution",
                 "kind": "reviewed_no_action",
-                "review_scope": "redistribution",
-                "finding": finding,
+                "review_scope": _display_scope("redistribution", "redistribution"),
+                "finding": _display_finding(finding),
                 "no_action_reason": reason,
-                "next_step": "monitor_next_runs",
+                "next_step": _visible_next_step("monitor_next_runs"),
             }
         )
 
@@ -377,8 +465,8 @@ def _build_analyzed_facts(nr: dict[str, Any]) -> list[dict[str, Any]]:
                 "primary_block": "analyzed",
                 "domain": "budget",
                 "kind": "reviewed_no_action",
-                "review_scope": "budget",
-                "finding": "Budget module is present, but the raw run does not expose a specific no-action reason.",
+                "review_scope": _display_scope("budget", "budget"),
+                "finding": _display_finding("Budget module is present, but the raw run does not expose a specific no-action reason."),
                 "no_action_reason": "not_observable_from_run",
                 "next_step": None,
             }

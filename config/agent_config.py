@@ -114,6 +114,11 @@ CAMPAIGN_ID_TYPE_MAP: dict = {
 # ============================================================================
 
 SMALL_MODE_ENABLED = _os.getenv("SMALL_MODE_ENABLED", "true").lower() == "true"
+SMALL_MODE_MANUAL_REDUCE_ENABLED = _os.getenv("SMALL_MODE_MANUAL_REDUCE_ENABLED", "false").lower() == "true"
+SMALL_MODE_AUTO_REDUCE_ENABLED = _os.getenv("SMALL_MODE_AUTO_REDUCE_ENABLED", "false").lower() == "true"
+SMALL_MODE_AUTO_SCALE_ENABLED = _os.getenv("SMALL_MODE_AUTO_SCALE_ENABLED", "false").lower() == "true"
+SMALL_MODE_AUTO_ROLLBACK_ENABLED = _os.getenv("SMALL_MODE_AUTO_ROLLBACK_ENABLED", "false").lower() == "true"
+SMALL_MODE_REQUIRE_PERSISTED_FINAL_ACTION = _os.getenv("SMALL_MODE_REQUIRE_PERSISTED_FINAL_ACTION", "true").lower() == "true"
 
 SMALL_MODE_CONFIDENCE_MIN = 0.70
 SMALL_MODE_CONFIDENCE_GAP_MIN = 0.15

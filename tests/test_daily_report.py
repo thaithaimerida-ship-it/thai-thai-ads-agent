@@ -971,8 +971,8 @@ class TestProDailyEmailBodyV1:
         html = _build_pro_daily_html_v1(contract)
 
         assert html.count("Sin cambios") == 0
-        assert "Redistribution was analyzed" in html
-        assert "Budget module is present" in html
+        assert "Redistribución revisada sin" in html
+        assert "Presupuesto revisado sin motivo observable adicional en esta corrida." in html
 
     def test_pro_body_v1_uses_snapshot_ads_labels_and_has_no_mojibake(self):
         from engine.email_sender import _build_pro_daily_html_v1
@@ -1000,3 +1000,50 @@ class TestProDailyEmailBodyV1:
         assert "Ã" not in html
         assert "Â" not in html
         assert "â" not in html
+class TestProDailyEmailBodyV1SemanticCuration:
+    def test_v1_curates_internal_labels_and_technical_wording(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "executed_keywords_and_adgroups")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert "keyword_added:" not in html
+        assert "AI keyword executed in raw run." not in html
+        assert "Executed keyword action visible in raw run." not in html
+        assert "Builder executed ad group successfully." not in html
+        assert "Keyword agregada" in html
+        assert "Cambio visible en la corrida de hoy." in html
+
+    def test_v1_hides_technical_next_steps_and_curates_analyzed_copy(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "analysis_redistribution_only")
+        sample["raw_run"]["budget_optimizer"]["redistribution_analysis"] = {
+            "fund_sources": [],
+            "receiver_candidates": [],
+            "allocation_matrix": [],
+        }
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert "No eligible source or receiver campaigns in redistribution analysis." not in html
+        assert "Budget module is present, but the raw run does not expose a specific no-action reason." not in html
+        assert "monitor_next_runs" not in html
+        assert "human_review" not in html
+        assert "Redistribución revisada sin campañas elegibles." in html
+        assert "Presupuesto revisado sin motivo observable adicional en esta corrida." in html
+
+    def test_v1_curates_proposal_labels_without_exposing_raw_keys(self):
+        from engine.email_sender import _build_pro_daily_html_v1
+
+        sample = next(s for s in _load_report_contract_samples() if s["id"] == "proposals_and_daily_reviews")
+        contract = build_report_contract_v1(sample["raw_run"])
+
+        html = _build_pro_daily_html_v1(contract)
+
+        assert "keyword_proposal:" not in html
+        assert "budget_proposal:" not in html
+        assert "Keyword propuesta" in html

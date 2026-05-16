@@ -3,6 +3,7 @@ Routes de Aprobaciones — /approve-proposals, /approve-legacy, /approve.
 """
 import os
 import logging
+import sqlite3
 from datetime import datetime
 from typing import List
 
@@ -276,6 +277,31 @@ async def approve_proposal(d: str, action: str):
     campaign_id   = decision.get("campaign_id", "")
     campaign_name = decision.get("campaign_name", "")
     action_type   = decision.get("action_type", "block_keyword")
+    session_id    = decision.get("session_id", "")
+
+    def _has_executed_microaction_this_run(current_decision_id: int, current_session_id: str, current_campaign_id: str) -> bool:
+        if not current_session_id or not current_campaign_id:
+            return False
+        with sqlite3.connect(get_db_path()) as conn:
+            row = conn.execute(
+                """
+                SELECT id
+                FROM autonomous_decisions
+                WHERE session_id = ?
+                  AND campaign_id = ?
+                  AND executed = 1
+                  AND id != ?
+                  AND action_type IN (
+                      'budget_action',
+                      'budget_scale',
+                      'budget_auto_executed',
+                      'budget_scale_auto_executed'
+                  )
+                LIMIT 1
+                """,
+                (current_session_id, str(current_campaign_id), current_decision_id),
+            ).fetchone()
+            return row is not None
 
     # ── Dispatch por tipo de propuesta ───────────────────────────────────────
     # Cada rama maneja su propia lógica de aprobación/rechazo.
@@ -690,6 +716,11 @@ async def approve_proposal(d: str, action: str):
         reduction_pct         = evidence.get("reduction_pct")
         budget_resource_name  = evidence.get("budget_resource_name", "")
         is_shared_budget      = bool(evidence.get("budget_explicitly_shared", False))
+        final_action          = str(evidence.get("final_action", "") or "").strip()
+        campaign_execution_key = str(
+            evidence.get("campaign_execution_key")
+            or (f"{session_id}:{campaign_id}" if session_id and campaign_id else "")
+        ).strip()
 
         # ── Rechazo ──────────────────────────────────────────────────────────
         if action != "approve":
@@ -707,6 +738,82 @@ async def approve_proposal(d: str, action: str):
             )
 
         # ── Presupuesto compartido: rutina de separación ─────────────────────
+        from config.agent_config import (
+            SMALL_MODE_MANUAL_REDUCE_ENABLED,
+            SMALL_MODE_REQUIRE_PERSISTED_FINAL_ACTION,
+        )
+
+        if SMALL_MODE_REQUIRE_PERSISTED_FINAL_ACTION and not final_action:
+            memory.mark_budget_approved_blocked(
+                decision["id"],
+                reason="missing_persisted_final_action",
+                approve_outcome="approved_blocked",
+            )
+            logger.info(
+                "/approve: budget_action bloqueada por evidencia incompleta ? campa?a '%s' (decision_id=%d)",
+                campaign_name, decision["id"],
+            )
+            return _html(
+                "Ejecuci?n bloqueada ? evidencia incompleta",
+                f"<p>La propuesta de <strong>\"{campaign_name}\"</strong> no trae "
+                f"<code>final_action</code> persistido.</p>"
+                f"<p>Se bloquea conservadoramente para no inferir una microacci?n retroactivamente.</p>",
+                "#d97706",
+            )
+
+        if not SMALL_MODE_MANUAL_REDUCE_ENABLED or final_action != "reduce_micro":
+            memory.mark_budget_approved_blocked(
+                decision["id"],
+                reason="manual_action_not_enabled_for_phase_3a",
+                approve_outcome="approved_blocked",
+            )
+            logger.info(
+                "/approve: budget_action bloqueada por gating 3A ? campa?a '%s' final_action=%s (decision_id=%d)",
+                campaign_name, final_action or "missing", decision["id"],
+            )
+            return _html(
+                "Ejecuci?n bloqueada ? acci?n no habilitada en Fase 3A",
+                f"<p>Fase 3A solo permite aprobaci?n manual de "
+                f"<code>budget_action</code> con <code>final_action=reduce_micro</code>.</p>"
+                f"<p>Valor recibido: <strong>{final_action or 'missing'}</strong>.</p>",
+                "#d97706",
+            )
+
+        if _has_executed_microaction_this_run(decision["id"], session_id, campaign_id):
+            memory.mark_budget_approved_blocked(
+                decision["id"],
+                reason="campaign_already_executed_in_run",
+                approve_outcome="approved_blocked",
+            )
+            logger.info(
+                "/approve: budget_action bloqueada por unicidad de corrida ? campaign_execution_key=%s (decision_id=%d)",
+                campaign_execution_key or "missing", decision["id"],
+            )
+            return _html(
+                "Ejecuci?n bloqueada ? campa?a ya ejecutada en esta corrida",
+                f"<p>La campa?a <strong>\"{campaign_name}\"</strong> ya recibi? una microacci?n ejecutada "
+                f"en esta corrida.</p>"
+                f"<p>Clave: <code>{campaign_execution_key or 'missing'}</code></p>",
+                "#d97706",
+            )
+
+        if is_shared_budget:
+            memory.mark_budget_approved_blocked(
+                decision["id"],
+                reason="manual_reduce_micro_shared_budget_not_enabled_for_phase_3a",
+                approve_outcome="approved_blocked",
+            )
+            logger.info(
+                "/approve: budget_action bloqueada por shared budget en Fase 3A — campaña '%s' (decision_id=%d)",
+                campaign_name, decision["id"],
+            )
+            return _html(
+                "Ejecución bloqueada — presupuesto compartido no habilitado en Fase 3A",
+                f"<p>Fase 3A solo permite <code>reduce_micro</code> manual sobre presupuestos no compartidos.</p>"
+                f"<p>La campaña <strong>\"{campaign_name}\"</strong> usa presupuesto compartido, así que la mutación queda bloqueada.</p>",
+                "#d97706",
+            )
+
         # Si el budget es explicitly_shared, el agente NO puede modificarlo directamente.
         # En su lugar, crea un presupuesto individual nuevo y reasigna la campaña.
         if is_shared_budget and action == "approve":
@@ -1317,6 +1424,22 @@ async def approve_proposal(d: str, action: str):
                 f"<p>No se realizaron cambios en Google Ads.</p>",
                 "#c0392b",
             )
+
+        memory.mark_budget_approved_blocked(
+            decision["id"],
+            reason="manual_action_not_enabled_for_phase_3a",
+            approve_outcome="approved_blocked",
+        )
+        logger.info(
+            "/approve: budget_scale bloqueada por gating 3A ? campa?a '%s' (decision_id=%d)",
+            campaign_name, decision["id"],
+        )
+        return _html(
+            "Ejecuci?n bloqueada ? budget_scale no habilitado en Fase 3A",
+            f"<p>Fase 3A no permite aprobaci?n manual de <code>budget_scale</code>.</p>"
+            f"<p>La propuesta de <strong>\"{campaign_name}\"</strong> queda registrada sin mutaci?n.</p>",
+            "#d97706",
+        )
 
         from config.agent_config import BUDGET_CHANGE_ENABLED, BUDGET_CHANGE_ALLOW_IDS
         target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")

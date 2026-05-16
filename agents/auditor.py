@@ -1082,6 +1082,13 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                             "min_spend_window":      ba.get("min_spend_window"),
                             "reason":                ba["reason"],
                             "dry_run":               dry_run,
+                            "decision_label":        ba.get("decision_label", "hold"),
+                            "final_action":          ba.get("final_action", ""),
+                            "small_mode_active":     bool(ba.get("small_mode_active", False)),
+                            "category":              ba.get("category"),
+                            "classification_confidence": ba.get("classification_confidence"),
+                            "blocking_signals":      ba.get("blocking_signals", []),
+                            "campaign_execution_key": f"{session_id}:{ba_campaign_id}",
                             # Guardas 6B.1: capturar al momento de propuesta
                             # El verify siempre re-fetcha estado fresco en /approve
                             "budget_resource_name":    ba.get("budget_resource_name", ""),
@@ -1096,6 +1103,7 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         **ba,
                         "decision_id":    decision_id,
                         "approval_token": ba_token,
+                        "campaign_execution_key": f"{session_id}:{ba_campaign_id}",
                     })
 
         except Exception as _ba_exc:
@@ -1128,35 +1136,151 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         # que NO aparezcan como propuestas pendientes en el correo.
         # ====================================================================
         _auto_executed_budget: list = []
+        _blocked_budget_auto: list = []
         _auto_executed_ids: set = set()
         try:
+            import json as _json_ba_auto
+            import sqlite3 as _sq_ba_auto
+            from engine.db_sync import get_db_path as _get_db_ba_auto
             from config.agent_config import (
                 MONTHLY_ADS_BUDGET_MXN as _monthly_budget_cap,
                 BUDGET_CHANGE_ENABLED as _bc_enabled,
                 BUDGET_CHANGE_ALLOW_IDS as _bc_allow_ids,
+                SMALL_MODE_AUTO_REDUCE_ENABLED as _sm_auto_reduce_enabled,
             )
             from engine.risk_classifier import classify_budget_change as _clf_budget, RISK_EXECUTE as _RE_BUDGET
             from agents.executor import Executor as _BudgetExecutor
 
             _auto_exec_global = os.getenv("AUTO_EXECUTE_ENABLED", "false").lower() == "true"
 
-            if _auto_exec_global and _bc_enabled and _pending_ba_proposals:
+            def _load_persisted_evidence(_decision_id):
+                if not _decision_id:
+                    return {}
+                try:
+                    with _sq_ba_auto.connect(_get_db_ba_auto()) as _conn_ba_auto:
+                        _row_ba_auto = _conn_ba_auto.execute(
+                            "SELECT evidence_json FROM autonomous_decisions WHERE id = ?",
+                            (_decision_id,),
+                        ).fetchone()
+                    if not _row_ba_auto or not _row_ba_auto[0]:
+                        return {}
+                    return _json_ba_auto.loads(_row_ba_auto[0]) or {}
+                except Exception as _persist_exc:
+                    logger.warning("Fase 6B.AUTO: no se pudo leer evidence persistida — %s", _persist_exc)
+                    return {}
+
+            def _campaign_already_executed_in_run(_session_id, _campaign_id, _decision_id):
+                if not _session_id or not _campaign_id:
+                    return False
+                try:
+                    with _sq_ba_auto.connect(_get_db_ba_auto()) as _conn_ba_auto:
+                        _row_ba_auto = _conn_ba_auto.execute(
+                            """
+                            SELECT id
+                            FROM autonomous_decisions
+                            WHERE session_id = ?
+                              AND campaign_id = ?
+                              AND executed = 1
+                              AND id != ?
+                              AND action_type IN (
+                                  'budget_action',
+                                  'budget_scale',
+                                  'budget_auto_executed',
+                                  'budget_scale_auto_executed'
+                              )
+                            LIMIT 1
+                            """,
+                            (_session_id, str(_campaign_id), int(_decision_id or 0)),
+                        ).fetchone()
+                    return _row_ba_auto is not None
+                except Exception as _uniq_exc:
+                    logger.warning("Fase 6B.AUTO: no se pudo verificar unicidad por corrida — %s", _uniq_exc)
+                    return False
+
+            if _auto_exec_global and _bc_enabled and _sm_auto_reduce_enabled and _pending_ba_proposals:
                 _bexec = _BudgetExecutor()
                 for _ba in _pending_ba_proposals:
+                    _decision_id = _ba.get("decision_id")
+                    _action_type = str(_ba.get("action_type", "budget_action") or "")
                     _cid  = str(_ba.get("campaign_id", ""))
                     _cname = _ba.get("campaign_name", "")
                     _cur  = float(_ba.get("daily_budget_mxn") or 0)
                     _new  = float(_ba.get("suggested_daily_budget") or 0)
+                    _persisted = _load_persisted_evidence(_decision_id)
+                    _small_mode_active = bool(_persisted.get("small_mode_active", False))
+                    _final_action = str(_persisted.get("final_action", "") or "").strip()
+                    _campaign_execution_key = str(_persisted.get("campaign_execution_key", "") or "").strip()
+                    _is_shared_budget = bool(_persisted.get("budget_explicitly_shared", _ba.get("budget_explicitly_shared", False)))
 
                     if _cur <= 0 or _new <= 0:
                         continue
 
+                    if _action_type != "budget_action":
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "final_action_not_auto_executable",
+                        })
+                        continue
+
+                    if not _small_mode_active:
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "small_mode_not_active",
+                        })
+                        continue
+
+                    if not _final_action:
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "missing_persisted_final_action",
+                        })
+                        continue
+
+                    if _final_action != "reduce_micro":
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "final_action_not_auto_executable",
+                        })
+                        continue
+
+                    if not _campaign_execution_key:
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "missing_campaign_execution_key",
+                        })
+                        continue
+
+                    if _campaign_already_executed_in_run(session_id, _cid, _decision_id):
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "campaign_already_executed_in_run",
+                            "campaign_execution_key": _campaign_execution_key,
+                        })
+                        continue
+
+                    if _is_shared_budget:
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "auto_reduce_micro_shared_budget_not_enabled_for_phase_3b",
+                            "campaign_execution_key": _campaign_execution_key,
+                        })
+                        continue
+
                     # Whitelist de campañas si está configurada
                     if _bc_allow_ids and _cid not in _bc_allow_ids:
-                        logger.info(
-                            "Fase 6B.AUTO: campaña %s no está en BUDGET_CHANGE_ALLOW_IDS — omitida",
-                            _cid,
-                        )
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "campaign_not_allowed_by_budget_change_allow_ids",
+                            "campaign_execution_key": _campaign_execution_key,
+                        })
                         continue
 
                     _rc, _, _rc_msg = _clf_budget(
@@ -1165,22 +1289,27 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     )
 
                     if _rc != _RE_BUDGET:
-                        logger.info(
-                            "Fase 6B.AUTO: %s cambio %.1f%% → RISK_PROPOSE, se mantiene como propuesta",
-                            _cname, abs(_new - _cur) / _cur * 100,
-                        )
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "budget_change_not_risk_execute",
+                            "risk_reason": _rc_msg,
+                            "campaign_execution_key": _campaign_execution_key,
+                        })
                         continue
 
                     # Guardrail mensual: evitar que el presupuesto diario × 30 supere el cap
                     _monthly_equiv = _new * 30
                     if _monthly_equiv > _monthly_budget_cap:
-                        _auto_executed_budget.append({
+                        _blocked_budget_auto.append({
                             **_ba,
-                            "status":        "guardrail_blocked",
+                            "status": "blocked",
+                            "reason": "monthly_budget_guardrail_exceeded",
                             "guardrail_msg": (
                                 f"${_new:.0f}/día × 30 = ${_monthly_equiv:.0f} MXN "
                                 f"excede guardrail mensual ${_monthly_budget_cap:.0f} MXN"
                             ),
+                            "campaign_execution_key": _campaign_execution_key,
                         })
                         logger.warning(
                             "Fase 6B.AUTO: guardrail mensual bloqueó %s — $%.0f/día × 30 = $%.0f > $%.0f",
@@ -1193,14 +1322,15 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         _cid, _new,
                         reason=f"Auto-ejecutado por agente: {_ba.get('reason', '')}",
                     )
-                    _auto_executed_budget.append({
-                        **_ba,
-                        "exec_result":   _exec_res,
-                        "risk_reason":   _rc_msg,
-                        "auto_executed": True,
-                    })
 
                     if _exec_res.get("status") == "executed":
+                        _auto_executed_budget.append({
+                            **_ba,
+                            "exec_result":   _exec_res,
+                            "risk_reason":   _rc_msg,
+                            "auto_executed": True,
+                            "campaign_execution_key": _campaign_execution_key,
+                        })
                         _auto_executed_ids.add(_ba.get("decision_id"))
                         logger.info(
                             "Fase 6B.AUTO: ✓ presupuesto actualizado — %s $%.0f→$%.0f MXN/día",
@@ -1225,6 +1355,14 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                             session_id=session_id,
                         )
                     else:
+                        _blocked_budget_auto.append({
+                            **_ba,
+                            "status": "blocked",
+                            "reason": "executor_update_budget_failed",
+                            "exec_result": _exec_res,
+                            "risk_reason": _rc_msg,
+                            "campaign_execution_key": _campaign_execution_key,
+                        })
                         logger.warning(
                             "Fase 6B.AUTO: error ejecutando %s — %s",
                             _cname, _exec_res.get("error", "unknown"),
@@ -1243,15 +1381,20 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
 
                 if _auto_executed_budget:
                     results["executed_budget"] = _auto_executed_budget
+                if _blocked_budget_auto:
+                    results["blocked_budget_auto"] = _blocked_budget_auto
+                if _auto_executed_budget or _blocked_budget_auto:
                     print(
                         f"Fase 6B.AUTO: {len(_auto_executed_ids)} ejecutado(s), "
-                        f"{len(_auto_executed_budget) - len(_auto_executed_ids)} bloqueado(s)/error"
+                        f"{len(_blocked_budget_auto)} bloqueado(s)/error"
                     )
             else:
                 if not _auto_exec_global:
                     logger.debug("Fase 6B.AUTO: AUTO_EXECUTE_ENABLED=false — sin ejecución autónoma")
                 elif not _bc_enabled:
                     logger.debug("Fase 6B.AUTO: BUDGET_CHANGE_ENABLED=false — sin ejecución de budget")
+                elif not _sm_auto_reduce_enabled:
+                    logger.debug("Fase 6B.AUTO: SMALL_MODE_AUTO_REDUCE_ENABLED=false — sin reduce_micro autónomo")
 
         except Exception as _auto_exc:
             logger.warning("Fase 6B.AUTO: error no crítico — %s", _auto_exc)
@@ -1282,6 +1425,19 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             )
 
             if _ba2_raw.get("proposals"):
+                _campaign_meta_by_id = {
+                    str(c.get("id", "")): c
+                    for c in campaigns
+                    if c.get("id") is not None
+                }
+                for _proposal_ba2 in _ba2_raw.get("proposals", []):
+                    _cid_ba2_meta = str(_proposal_ba2.get("campaign_id", "") or "")
+                    _camp_meta = _campaign_meta_by_id.get(_cid_ba2_meta, {})
+                    _proposal_ba2["campaign_execution_key"] = f"{session_id}:{_cid_ba2_meta}"
+                    _proposal_ba2["budget_explicitly_shared"] = bool(
+                        _camp_meta.get("budget_explicitly_shared", _proposal_ba2.get("budget_explicitly_shared", False))
+                    )
+
                 budget_scale_result = _ba2_raw
                 results["budget_scale"] = _ba2_raw
 
@@ -1313,35 +1469,139 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         # Las propuestas auto-ejecutadas se eliminan del correo informativo.
         # ====================================================================
         _auto_executed_ba2: list = []
+        _blocked_budget_scale_auto: list = []
         _auto_executed_ba2_ids: set = set()
         try:
+            import sqlite3 as _sq_ba2_auto
+            from engine.db_sync import get_db_path as _get_db_ba2_auto
             from config.agent_config import (
                 MONTHLY_ADS_BUDGET_MXN as _monthly_cap_ba2,
                 BUDGET_CHANGE_ENABLED as _bc_enabled_ba2,
                 BUDGET_CHANGE_ALLOW_IDS as _bc_allow_ids_ba2,
+                SMALL_MODE_AUTO_SCALE_ENABLED as _sm_auto_scale_enabled,
             )
             from engine.risk_classifier import classify_budget_change as _clf_ba2, RISK_EXECUTE as _RE_BA2
             from agents.executor import Executor as _BA2Executor
 
             _auto_exec_ba2 = os.getenv("AUTO_EXECUTE_ENABLED", "false").lower() == "true"
 
-            if _auto_exec_ba2 and _bc_enabled_ba2 and _pending_ba2_proposals:
+            def _campaign_already_executed_in_run_ba2(_session_id, _campaign_id):
+                if not _session_id or not _campaign_id:
+                    return False
+                try:
+                    with _sq_ba2_auto.connect(_get_db_ba2_auto()) as _conn_ba2_auto:
+                        _row_ba2_auto = _conn_ba2_auto.execute(
+                            """
+                            SELECT id
+                            FROM autonomous_decisions
+                            WHERE session_id = ?
+                              AND campaign_id = ?
+                              AND executed = 1
+                              AND action_type IN (
+                                  'budget_action',
+                                  'budget_scale',
+                                  'budget_auto_executed',
+                                  'budget_scale_auto_executed'
+                              )
+                            LIMIT 1
+                            """,
+                            (_session_id, str(_campaign_id)),
+                        ).fetchone()
+                    return _row_ba2_auto is not None
+                except Exception as _uniq_exc_ba2:
+                    logger.warning("Fase 6C.AUTO: no se pudo verificar unicidad por corrida — %s", _uniq_exc_ba2)
+                    return False
+
+            if _auto_exec_ba2 and _bc_enabled_ba2 and _sm_auto_scale_enabled and _pending_ba2_proposals:
                 _ba2exec = _BA2Executor()
                 for _p in _pending_ba2_proposals:
                     _cid_ba2  = str(_p.get("campaign_id", ""))
                     _cname_ba2 = _p.get("campaign_name", "")
                     _cur_ba2  = float(_p.get("current_daily_budget_mxn") or 0)
                     _new_ba2  = float(_p.get("suggested_daily_budget_mxn") or 0)
+                    _ptype_ba2 = str(_p.get("type", "") or "")
+                    _small_mode_active_ba2 = bool(_p.get("small_mode_active", False))
+                    _final_action_ba2 = str(_p.get("final_action", "") or "").strip()
+                    _campaign_execution_key_ba2 = str(_p.get("campaign_execution_key", "") or "").strip()
+                    _is_shared_budget_ba2 = bool(_p.get("budget_explicitly_shared", False))
 
                     if _cur_ba2 <= 0 or _new_ba2 <= 0:
                         continue
 
+                    if _ptype_ba2 != "budget_scale":
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "final_action_not_auto_executable",
+                        })
+                        continue
+
+                    if not _small_mode_active_ba2:
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "small_mode_not_active",
+                        })
+                        continue
+
+                    if not _final_action_ba2:
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "missing_persisted_final_action",
+                        })
+                        continue
+
+                    if _final_action_ba2 == "rollback_micro":
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "rollback_micro_frozen_until_persisted_target_available",
+                        })
+                        continue
+
+                    if _final_action_ba2 != "scale_micro":
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "final_action_not_auto_executable",
+                        })
+                        continue
+
+                    if not _campaign_execution_key_ba2:
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "missing_campaign_execution_key",
+                        })
+                        continue
+
+                    if _campaign_already_executed_in_run_ba2(session_id, _cid_ba2):
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "campaign_already_executed_in_run",
+                            "campaign_execution_key": _campaign_execution_key_ba2,
+                        })
+                        continue
+
+                    if _is_shared_budget_ba2:
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "auto_scale_micro_shared_budget_not_enabled_for_phase_3c",
+                            "campaign_execution_key": _campaign_execution_key_ba2,
+                        })
+                        continue
+
                     # Whitelist de campañas si está configurada
                     if _bc_allow_ids_ba2 and _cid_ba2 not in _bc_allow_ids_ba2:
-                        logger.info(
-                            "Fase 6C.AUTO: campaña %s no está en BUDGET_CHANGE_ALLOW_IDS — omitida",
-                            _cid_ba2,
-                        )
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "campaign_not_allowed_by_budget_change_allow_ids",
+                            "campaign_execution_key": _campaign_execution_key_ba2,
+                        })
                         continue
 
                     _rc_ba2, _, _rc_msg_ba2 = _clf_ba2(
@@ -1350,22 +1610,27 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                     )
 
                     if _rc_ba2 != _RE_BA2:
-                        logger.info(
-                            "Fase 6C.AUTO: %s incremento %.1f%% → RISK_PROPOSE, se mantiene como propuesta",
-                            _cname_ba2, (_new_ba2 - _cur_ba2) / _cur_ba2 * 100,
-                        )
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "budget_change_not_risk_execute",
+                            "risk_reason": _rc_msg_ba2,
+                            "campaign_execution_key": _campaign_execution_key_ba2,
+                        })
                         continue
 
                     # Guardrail mensual
                     _monthly_equiv_ba2 = _new_ba2 * 30
                     if _monthly_equiv_ba2 > _monthly_cap_ba2:
-                        _auto_executed_ba2.append({
+                        _blocked_budget_scale_auto.append({
                             **_p,
-                            "status":        "guardrail_blocked",
+                            "status": "blocked",
+                            "reason": "monthly_budget_guardrail_exceeded",
                             "guardrail_msg": (
                                 f"${_new_ba2:.0f}/día × 30 = ${_monthly_equiv_ba2:.0f} MXN "
                                 f"excede guardrail mensual ${_monthly_cap_ba2:.0f} MXN"
                             ),
+                            "campaign_execution_key": _campaign_execution_key_ba2,
                         })
                         logger.warning(
                             "Fase 6C.AUTO: guardrail mensual bloqueó %s — $%.0f/día × 30 = $%.0f > $%.0f",
@@ -1377,14 +1642,15 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         _cid_ba2, _new_ba2,
                         reason=f"BA2 auto-ejecutado ({_p.get('signal','')}) — {_p.get('fund_source', '')}",
                     )
-                    _auto_executed_ba2.append({
-                        **_p,
-                        "exec_result":   _exec_res_ba2,
-                        "risk_reason":   _rc_msg_ba2,
-                        "auto_executed": True,
-                    })
 
                     if _exec_res_ba2.get("status") == "executed":
+                        _auto_executed_ba2.append({
+                            **_p,
+                            "exec_result":   _exec_res_ba2,
+                            "risk_reason":   _rc_msg_ba2,
+                            "auto_executed": True,
+                            "campaign_execution_key": _campaign_execution_key_ba2,
+                        })
                         _idx_ba2 = _pending_ba2_proposals.index(_p)
                         _auto_executed_ba2_ids.add(_idx_ba2)
                         logger.info(
@@ -1411,6 +1677,14 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                             session_id=session_id,
                         )
                     else:
+                        _blocked_budget_scale_auto.append({
+                            **_p,
+                            "status": "blocked",
+                            "reason": "executor_update_budget_failed",
+                            "exec_result": _exec_res_ba2,
+                            "risk_reason": _rc_msg_ba2,
+                            "campaign_execution_key": _campaign_execution_key_ba2,
+                        })
                         logger.warning(
                             "Fase 6C.AUTO: error escalando %s — %s",
                             _cname_ba2, _exec_res_ba2.get("error", "unknown"),
@@ -1429,10 +1703,20 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
 
                 if _auto_executed_ba2:
                     results["executed_budget_scale"] = _auto_executed_ba2
+                if _blocked_budget_scale_auto:
+                    results["blocked_budget_scale_auto"] = _blocked_budget_scale_auto
+                if _auto_executed_ba2 or _blocked_budget_scale_auto:
                     print(
                         f"Fase 6C.AUTO: {len(_auto_executed_ba2_ids)} ejecutado(s), "
-                        f"{len(_auto_executed_ba2) - len(_auto_executed_ba2_ids)} bloqueado(s)/error"
+                        f"{len(_blocked_budget_scale_auto)} bloqueado(s)/error"
                     )
+            else:
+                if not _auto_exec_ba2:
+                    logger.debug("Fase 6C.AUTO: AUTO_EXECUTE_ENABLED=false — sin ejecución autónoma")
+                elif not _bc_enabled_ba2:
+                    logger.debug("Fase 6C.AUTO: BUDGET_CHANGE_ENABLED=false — sin ejecución de budget")
+                elif not _sm_auto_scale_enabled:
+                    logger.debug("Fase 6C.AUTO: SMALL_MODE_AUTO_SCALE_ENABLED=false — sin scale_micro autónomo")
 
         except Exception as _ba2_auto_exc:
             logger.warning("Fase 6C.AUTO: error no crítico — %s", _ba2_auto_exc)
@@ -1591,7 +1875,9 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
             results["budget_optimizer"] = {
                 "decisions": _budget_opt_result.get("decisions", []),
                 "redistribution": _budget_opt_result.get("redistribution", {}),
+                "redistribution_analysis": _budget_opt_result.get("redistribution_analysis", {}),
                 "redistribution_report": _budget_opt_result.get("report", ""),
+                "redistribution_analysis_report": _budget_opt_result.get("redistribution_analysis_report", ""),
                 "executed": _budget_opt_executed,
                 "pedidos_gloriafood_24h": _pedidos_gf_24h,
                 "pedidos_gloriafood_detalle": _pedidos_gf_detalle,
@@ -1856,9 +2142,9 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                 f for f in results.get("quality_creative_findings", [])
                 if f.get("type") == "CTR_STRUCTURAL_ISSUE"
             ]
-            _api_key_6e = os.getenv("ANTHROPIC_API_KEY")
+            _api_key_6e = os.getenv("OPENAI_API_KEY")
             if _ctr_structural and _api_key_6e:
-                import anthropic as _ant_6e
+                from engine.llm_client import generate_text as _generate_llm_text_6e
 
                 # Agrupar keywords por campaign_id
                 _camp_kw_map: dict = {}
@@ -1872,7 +2158,6 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
                         _camp_kw_map[_cid_6e]["keywords"].append(_ktext_6e)
 
                 _builder_executed = []
-                _ant_client_6e = _ant_6e.Anthropic(api_key=_api_key_6e)
 
                 for _cid_6e, _cdata_6e in _camp_kw_map.items():
                     if len(_builder_executed) >= 2:
@@ -1919,12 +2204,11 @@ Responde SOLO con JSON válido, sin markdown:
 }}"""
 
                     try:
-                        _resp_6e = _ant_client_6e.messages.create(
-                            model="claude-sonnet-4-6",
+                        _raw_6e = _generate_llm_text_6e(
+                            model_role="sonnet",
+                            user_prompt=_prompt_6e,
                             max_tokens=1200,
-                            messages=[{"role": "user", "content": _prompt_6e}],
-                        )
-                        _raw_6e = _resp_6e.content[0].text.strip()
+                        ).strip()
                         if _raw_6e.startswith("```"):
                             _raw_6e = _raw_6e.split("```")[1]
                             if _raw_6e.startswith("json"):
@@ -2017,7 +2301,7 @@ Responde SOLO con JSON válido, sin markdown:
                 if not _ctr_structural:
                     logger.debug("Fase 6E: sin CTR_STRUCTURAL_ISSUE — skip")
                 else:
-                    logger.warning("Fase 6E: ANTHROPIC_API_KEY no disponible — skip")
+                    logger.warning("Fase 6E: OPENAI_API_KEY no disponible — skip")
 
         except Exception as _6e_exc:
             logger.warning("Fase 6E: error no crítico — %s", _6e_exc)
@@ -2812,6 +3096,7 @@ Responde SOLO con JSON válido, sin markdown:
             # Enriquecer con datos colectados para el correo consolidado
             _run_summary["keyword_proposals"]    = _pending_kw_proposals
             _run_summary["executed_budget"]      = _auto_executed_budget
+            _run_summary["blocked_budget_auto"]  = _blocked_budget_auto
             _run_summary["ai_decisions"]         = _ai_decisions_executed
             _run_summary["ai_keyword_decisions"] = _kw_decisions_executed
             # Ocupación del día — para contexto en el correo

@@ -7,6 +7,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Optional
+from engine.llm_client import generate_text, has_llm_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -145,13 +146,8 @@ def generate_campaign_config(prompt: str) -> dict:
     a partir de un prompt en lenguaje natural.
     Fallback a Haiku 4.5 si Sonnet falla.
     """
-    import anthropic
-
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return {"status": "error", "message": "ANTHROPIC_API_KEY no configurada"}
-
-    client = anthropic.Anthropic(api_key=api_key)
+    if not has_llm_api_key():
+        return {"status": "error", "message": "OPENAI_API_KEY no configurada"}
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     user_message = (
@@ -160,16 +156,16 @@ def generate_campaign_config(prompt: str) -> dict:
         f"Genera el JSON config completo para esta campaña."
     )
 
-    for model, label in [("claude-sonnet-4-6", "Sonnet"), ("claude-haiku-4-5-20251001", "Haiku")]:
+    for model_role, label in [("sonnet", "Sonnet"), ("haiku", "Haiku")]:
         try:
             logger.info(f"Builder: generando config con {label}...")
-            response = client.messages.create(
-                model=model,
+            raw = generate_text(
+                model_role=model_role,
+                user_prompt=user_message,
+                system_prompt=BUILDER_SYSTEM_PROMPT,
                 max_tokens=4096,
-                system=BUILDER_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}]
             )
-            raw = response.content[0].text.strip()
+            raw = raw.strip()
 
             # Limpiar posibles code fences
             if raw.startswith("```"):
@@ -185,12 +181,12 @@ def generate_campaign_config(prompt: str) -> dict:
 
         except json.JSONDecodeError as e:
             logger.warning(f"Builder: {label} retornó JSON inválido: {e}")
-            if model == "claude-haiku-4-5-20251001":
+            if model_role == "haiku":
                 return {"status": "error", "message": f"Ambos modelos fallaron. Último error JSON: {e}", "raw": raw[:500]}
             continue
         except Exception as e:
             logger.warning(f"Builder: {label} falló: {e}")
-            if model == "claude-haiku-4-5-20251001":
+            if model_role == "haiku":
                 return {"status": "error", "message": f"Ambos modelos fallaron. Último error: {e}"}
             continue
 

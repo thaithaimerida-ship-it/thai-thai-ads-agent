@@ -2,6 +2,7 @@ import os
 import json
 from datetime import datetime
 from typing import Optional
+from engine.llm_client import generate_text, has_llm_api_key
 
 def _strip_code_fences(text: str) -> str:
     """Limpia bloques Markdown si el LLM los incluye."""
@@ -124,8 +125,7 @@ def _fallback_analysis(data: dict) -> dict:
     }
 
 def _call_haiku_analysis(data: dict) -> dict:
-    """Claude Haiku 4.5 — fast fallback when Sonnet fails."""
-    import anthropic
+    """OpenAI gpt-5-mini — fast fallback for lower-cost analysis."""
     from engine.prompt import THAI_THAI_ADS_MASTER_PROMPT
 
     fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -139,16 +139,12 @@ def _call_haiku_analysis(data: dict) -> dict:
         f"Responde SOLO con JSON válido. Sin markdown, sin explicaciones."
     )
 
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+    raw = generate_text(
+        model_role="haiku",
+        user_prompt=user_message,
+        system_prompt=THAI_THAI_ADS_MASTER_PROMPT,
         max_tokens=2048,
-        system=THAI_THAI_ADS_MASTER_PROMPT,
-        messages=[{"role": "user", "content": user_message}]
     )
-
-    raw = response.content[0].text
     result = _safe_json_loads(raw)
 
     if result and "summary" in result and "totals" in data:
@@ -165,8 +161,7 @@ def _call_haiku_analysis(data: dict) -> dict:
     return result
 
 def _call_claude_analysis(data: dict) -> dict:
-    """Claude Sonnet 4.6 — primary AI brain, replaces GPT-4o-mini."""
-    import anthropic
+    """OpenAI gpt-5 — primary AI brain for unified campaign analysis."""
     from engine.prompt import THAI_THAI_ADS_MASTER_PROMPT
 
     fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -187,16 +182,12 @@ def _call_claude_analysis(data: dict) -> dict:
         f"{json.dumps(data.get('memory_context', {}), separators=(',', ':'))}"
     )
 
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
+    raw = generate_text(
+        model_role="sonnet",
+        user_prompt=user_message,
+        system_prompt=THAI_THAI_ADS_MASTER_PROMPT,
         max_tokens=8192,
-        system=THAI_THAI_ADS_MASTER_PROMPT,
-        messages=[{"role": "user", "content": user_message}]
     )
-
-    raw = response.content[0].text
     result = _safe_json_loads(raw)
 
     # Inject pre-calculated totals to prevent hallucination
@@ -220,7 +211,7 @@ def analyze_campaign_data(data: dict) -> dict:
     Tries Claude Sonnet first, falls back to Haiku, then local fallback.
     Enriches data with GA4, Sheets, landing audit, and memory before calling LLM.
     """
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not has_llm_api_key():
         return _fallback_analysis(data)
 
     # Enrich with GA4
@@ -263,22 +254,22 @@ def analyze_campaign_data(data: dict) -> dict:
             print(f"[WARN] Memory fetch failed: {e}")
             data["memory_context"] = {}
 
-    # Try Claude Sonnet first
-    if os.getenv("ANTHROPIC_API_KEY"):
+    # Try primary model first
+    if has_llm_api_key():
         try:
             result = _call_claude_analysis(data)
             if result:
                 return result
         except Exception as e:
-            print(f"[WARN] Claude Sonnet failed, trying Haiku: {e}")
+            print(f"[WARN] Primary LLM analysis failed, trying fallback model: {e}")
 
-    # Fallback to Haiku (fast + cheap)
-    if os.getenv("ANTHROPIC_API_KEY"):
+    # Fallback to smaller model
+    if has_llm_api_key():
         try:
             result = _call_haiku_analysis(data)
             if result:
                 return result
         except Exception as e:
-            print(f"[ERROR] Haiku fallback failed: {e}")
+            print(f"[ERROR] Fallback LLM analysis failed: {e}")
 
     return _fallback_analysis(data)
