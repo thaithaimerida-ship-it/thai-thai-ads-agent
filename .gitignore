@@ -39,6 +39,18 @@ test_smart_geo.py
 generar_token.py
 refresh_oauth.py
 
+# One-off scripts con fecha, outputs y backups de ops (no son parte del backend)
+/_*.py
+/_*.txt
+/_ops_backup/
+/audit_*.py
+/create_*.py
+/update_*.py
+/env
+/gbp_audit_output.json
+/GOOGLE-ADS-REPORT.md
+reports/*.json
+
 # Generated HTML previews
 resumen_dashboard_thai_thai.html
 weekly_preview.html
