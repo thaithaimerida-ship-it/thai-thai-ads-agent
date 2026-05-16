@@ -180,6 +180,70 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
         return {"status": "error", "message": str(e), "details": traceback.format_exc()}
 
 
+@router.get("/ads-report")
+async def ads_report(date_range: str = "LAST_7_DAYS"):
+    """
+    Reporte por anuncio: titulos, descripciones, aprobacion y ad_strength
+    (estado ACTUAL via fetch_ad_health) cruzados por ad_id con CTR / clics /
+    impresiones / conversiones del rango (fetch_ad_metrics).
+
+    Spine = anuncios con actividad en el rango: los que no tuvieron
+    impresiones no aparecen. date_range solo afecta las metricas; el creativo
+    y la aprobacion son el estado actual, no historico.
+    Ordenado por CTR desc, maximo 20. Solo lectura.
+    """
+    try:
+        date_range = date_range.strip().upper()
+        if date_range not in VALID_DATE_RANGES:
+            return {
+                "status": "error",
+                "message": f"date_range invalido: '{date_range}'. Validos: {sorted(VALID_DATE_RANGES)}",
+            }
+        engine = _get_engine()
+        if not engine:
+            raise Exception("Engine not available")
+        target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        client = engine["get_ads_client"]()
+
+        # No estan en el registry get_engine_modules() -> import directo
+        # (mismo patron que routes/debug_fase_6d.py para fetch_ad_health).
+        from engine.ads_client import fetch_ad_health, fetch_ad_metrics
+        health = fetch_ad_health(client, target_id)
+        metrics = fetch_ad_metrics(client, target_id, date_range)
+
+        health_by_id = {h.get("ad_id"): h for h in health}
+
+        ads = []
+        for m in metrics:
+            h = health_by_id.get(m.get("ad_id"), {})
+            ads.append({
+                "ad_id":           m.get("ad_id", ""),
+                "campaign_name":   h.get("campaign_name", ""),
+                "ad_group_name":   h.get("ad_group_name", ""),
+                "ad_strength":     h.get("ad_strength"),
+                "approval_status": h.get("approval_status"),
+                "headlines":       h.get("headlines", []),
+                "descriptions":    h.get("descriptions", []),
+                "ctr_pct":         round(float(m.get("ctr", 0)) * 100, 2),
+                "clicks":          int(m.get("clicks", 0)),
+                "impressions":     int(m.get("impressions", 0)),
+                "conversions":     round(float(m.get("conversions", 0)), 1),
+            })
+
+        ads.sort(key=lambda a: a["ctr_pct"], reverse=True)
+        ads = ads[:20]
+
+        return {
+            "status": "success",
+            "date_range": date_range,
+            "total": len(ads),
+            "ads": ads,
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "details": traceback.format_exc()}
+
+
 # Local (22612348265) y Experiencia 2026 (23730364039) miden por conversiones
 # SECUNDARIAS por diseno (reserva_completada / micros de sistema). metrics.conversions
 # (solo primarias) siempre da ~0 para ellas -> falso "Sin conversiones / Pausar".

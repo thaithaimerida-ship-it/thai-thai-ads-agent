@@ -1845,6 +1845,46 @@ def fetch_ad_health(client, customer_id: str) -> list:
         return []
 
 
+def fetch_ad_metrics(client, customer_id: str, date_range: str = "LAST_7_DAYS"):
+    """
+    Metricas por anuncio (CTR, clics, impresiones, conversiones) agregadas en
+    el rango. Patron de fetch_search_term_data: nunca lanza, [] si falla.
+
+    GAQL NOTE: segments.date va SOLO en el WHERE (DURING), NUNCA en el SELECT;
+    asi la API devuelve una fila por anuncio con metricas sumadas en el rango
+    (si se pusiera en SELECT, multiplicaria filas por dia). date_range ya viene
+    validado contra VALID_DATE_RANGES por el endpoint.
+    """
+    query = f"""
+        SELECT
+          ad_group_ad.ad.id,
+          metrics.ctr,
+          metrics.clicks,
+          metrics.impressions,
+          metrics.conversions
+        FROM ad_group_ad
+        WHERE ad_group_ad.status IN ('ENABLED', 'PAUSED')
+          AND campaign.status = 'ENABLED'
+          AND segments.date DURING {date_range}
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        out = []
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            m = row.metrics
+            out.append({
+                "ad_id":       str(row.ad_group_ad.ad.id),
+                "ctr":         m.ctr,
+                "clicks":      m.clicks,
+                "impressions": m.impressions,
+                "conversions": m.conversions,
+            })
+        return out
+    except Exception as e:
+        _ads_logger.warning("fetch_ad_metrics: %s", e)
+        return []
+
+
 def fetch_impression_share(client, customer_id: str) -> list:
     """
     Lee métricas de Impression Share por campaña activa (últimos 7 días).
