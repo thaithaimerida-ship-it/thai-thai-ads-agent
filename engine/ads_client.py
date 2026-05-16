@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta
 from google.ads.googleads.client import GoogleAdsClient
 from google.api_core.exceptions import GoogleAPIError
+from google.ads.googleads.errors import GoogleAdsException
 
 # Conversiones activas — NUNCA desactivar
 PROTECTED_CONVERSIONS = {
@@ -613,8 +614,21 @@ def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id:
         )
         
         return {"status": "success", "keyword": keyword_text}
+    except GoogleAdsException as ex:
+        # La API de Google Ads lanza GoogleAdsException, que NO es subclase de
+        # GoogleAPIError. Antes se escapaba sin loguearse y el endpoint la
+        # reportaba como "executed" -> fallos silenciosos.
+        msg = "; ".join(e.message for e in ex.failure.errors) if getattr(ex, "failure", None) else str(ex)
+        _ads_logger.error("add_negative_keyword GoogleAdsException kw=%r camp=%s: %s",
+                          keyword_text, campaign_id, msg)
+        return {"status": "error", "message": msg}
     except GoogleAPIError as e:
-        print(f"Error adding negative keyword: {e}")
+        _ads_logger.error("add_negative_keyword GoogleAPIError kw=%r camp=%s: %s",
+                          keyword_text, campaign_id, e)
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        _ads_logger.exception("add_negative_keyword error inesperado kw=%r camp=%s",
+                              keyword_text, campaign_id)
         return {"status": "error", "message": str(e)}
 
 

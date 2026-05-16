@@ -4,6 +4,7 @@ actividad del sistema.
 """
 import os
 import sqlite3
+import logging
 from typing import Optional, List, Dict
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from engine.db_sync import get_db_path
 from routes.auth_token import require_token
 
 router = APIRouter(tags=["analysis"])
+logger = logging.getLogger(__name__)
 
 # Models used by these routes
 class OptimizationAction(BaseModel):
@@ -298,9 +300,17 @@ async def execute_optimization(request: ExecuteOptimizationRequest):
             if action.type == "block_keyword" and engine and action.keyword and action.campaign_id:
                 client = engine["get_ads_client"]()
                 try:
-                    engine["add_negative_keyword"](client, target_id, action.campaign_id, action.keyword)
-                    result = {"action": action.type, "target": action.keyword, "status": "executed"}
+                    ank = engine["add_negative_keyword"](client, target_id, action.campaign_id, action.keyword)
+                    if isinstance(ank, dict) and ank.get("status") == "error":
+                        logger.error("execute_optimization: add_negative_keyword fallo kw=%r camp=%s: %s",
+                                     action.keyword, action.campaign_id, ank.get("message"))
+                        result = {"action": action.type, "target": action.keyword,
+                                  "status": "error", "message": ank.get("message", "error")}
+                    else:
+                        result = {"action": action.type, "target": action.keyword, "status": "executed"}
                 except Exception as ex:
+                    logger.exception("execute_optimization: excepcion add_negative_keyword kw=%r camp=%s",
+                                     action.keyword, action.campaign_id)
                     result = {"action": action.type, "target": action.keyword, "status": "error", "message": str(ex)}
             else:
                 result = {"action": action.type, "status": "recorded", "manual_required": True}
