@@ -120,6 +120,62 @@ VALID_DATE_RANGES = {
     "LAST_30_DAYS", "THIS_MONTH", "LAST_MONTH",
 }
 
+
+@router.get("/search-terms")
+async def search_terms(date_range: str = "LAST_7_DAYS"):
+    """
+    Lista los search terms de la cuenta para el rango indicado.
+
+    Campos por termino: query, campaign_name, clicks, impressions, cost,
+    conversions y negative_candidate (candidato a negativo: gasto > $10 MXN
+    y 0 conversiones).
+
+    Ordenado por gasto descendente, maximo 30 terminos.
+    Endpoint ligero (solo Google Ads) pensado para el monitor de Apps Script.
+    """
+    try:
+        date_range = date_range.strip().upper()
+        if date_range not in VALID_DATE_RANGES:
+            return {
+                "status": "error",
+                "message": f"date_range invalido: '{date_range}'. Validos: {sorted(VALID_DATE_RANGES)}",
+            }
+        engine = _get_engine()
+        if not engine:
+            raise Exception("Engine not available")
+        target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        client = engine["get_ads_client"]()
+        raw_terms = engine["fetch_search_term_data"](client, target_id, date_range)
+
+        formatted = []
+        for st in raw_terms:
+            cost = st.get("cost_micros", 0) / 1_000_000
+            conversions = float(st.get("conversions", 0))
+            formatted.append({
+                "query": st.get("query", ""),
+                "campaign_name": st.get("campaign_name", ""),
+                "clicks": int(st.get("clicks", 0)),
+                "impressions": int(st.get("impressions", 0)),
+                "cost": round(cost, 2),
+                "conversions": round(conversions, 1),
+                "negative_candidate": cost > 10 and conversions == 0,
+            })
+
+        formatted.sort(key=lambda t: t["cost"], reverse=True)
+        formatted = formatted[:30]
+
+        return {
+            "status": "success",
+            "date_range": date_range,
+            "total": len(formatted),
+            "negative_candidates": sum(1 for t in formatted if t["negative_candidate"]),
+            "search_terms": formatted,
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "details": traceback.format_exc()}
+
+
 # Local (22612348265) y Experiencia 2026 (23730364039) miden por conversiones
 # SECUNDARIAS por diseno (reserva_completada / micros de sistema). metrics.conversions
 # (solo primarias) siempre da ~0 para ellas -> falso "Sin conversiones / Pausar".
