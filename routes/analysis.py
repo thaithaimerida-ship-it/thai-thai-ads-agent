@@ -7,10 +7,11 @@ import sqlite3
 from typing import Optional, List, Dict
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from engine.db_sync import get_db_path
+from routes.auth_token import require_token
 
 router = APIRouter(tags=["analysis"])
 
@@ -154,6 +155,7 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
             formatted.append({
                 "query": st.get("query", ""),
                 "campaign_name": st.get("campaign_name", ""),
+                "campaign_id": str(st.get("campaign_id", "")),
                 "clicks": int(st.get("clicks", 0)),
                 "impressions": int(st.get("impressions", 0)),
                 "cost": round(cost, 2),
@@ -285,7 +287,7 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
         return {"status": "error", "message": str(e), "details": traceback.format_exc()}
 
 
-@router.post("/execute-optimization")
+@router.post("/execute-optimization", dependencies=[Depends(require_token)])
 async def execute_optimization(request: ExecuteOptimizationRequest):
     try:
         engine = _get_engine()
