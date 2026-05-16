@@ -40,6 +40,12 @@ _PAGE = """<!doctype html>
   .warn { color: #b30000; font-weight: 600; }
   .ok { color: #0a7a0a; } .err { color: #b30000; }
   #results div { padding: .25rem 0; font-size: .9rem; }
+  #banner { background: #e0f5e0; border: 2px solid #1f9d1f; color: #0a5a0a;
+            padding: 1rem 1.2rem; border-radius: 8px; margin: 1rem 0;
+            font-size: 1.05rem; line-height: 1.5; }
+  #banner.partial { background: #fff8e1; border-color: #f0c000; color: #7a5a00; }
+  tr.done { opacity: .5; }
+  tr.done td { text-decoration: line-through; }
 </style>
 </head>
 <body>
@@ -72,6 +78,7 @@ _PAGE = """<!doctype html>
   <div id="tableWrap"></div>
   <button id="addBtn" hidden>Agregar como negativos</button>
   <div id="confirm" hidden></div>
+  <div id="banner" hidden></div>
   <div id="results"></div>
 </div>
 
@@ -199,15 +206,51 @@ function submit(sel) {
     el("confirm").hidden = true;
     var r = el("results");
     if (data.status !== "success") { r.innerHTML = "<div class='err'>Error: " + esc(data.message || "") + "</div>"; return; }
-    var out = "<h3>Resultado</h3>";
-    (data.results || []).forEach(function (x) {
+    var res = data.results || [];
+    var okList = res.filter(function (x) { return x.status === "executed"; });
+    var failList = res.filter(function (x) { return x.status !== "executed"; });
+
+    // Banner prominente de exito (visible y claro, no solo filas OK)
+    var b = el("banner");
+    if (okList.length) {
+      b.className = failList.length ? "partial" : "";
+      b.innerHTML =
+        "\\u2705 <strong>" + okList.length + " palabra(s) negativa(s) agregada(s) " +
+        "exitosamente a Google Ads.</strong> Estas busquedas ya no activaran tus " +
+        "anuncios en el futuro. Los terminos seguiran apareciendo en el historial " +
+        "de los proximos 7 dias \\u2014 eso es normal." +
+        (failList.length ? "<br><span class='warn'>" + failList.length +
+          " no se pudo(eron) agregar (ver detalle abajo).</span>" : "");
+      b.hidden = false;
+      b.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      b.hidden = true;
+    }
+
+    // Detalle por termino
+    var out = "<h3>Detalle</h3>";
+    res.forEach(function (x) {
       var ok = x.status === "executed";
       out += "<div class='" + (ok ? "ok" : "err") + "'>" +
         (ok ? "OK" : "FALLO") + " - " + esc(x.target || "") +
         (x.message ? " (" + esc(x.message) + ")" : "") + "</div>";
     });
     r.innerHTML = out;
-    loadTerms();
+
+    // Marcar filas ya bloqueadas. NO se recarga la tabla: el historico no
+    // cambia al instante y recargar borraria este feedback (bug anterior).
+    var blocked = {};
+    okList.forEach(function (x) { blocked[x.target] = true; });
+    document.querySelectorAll(".pick").forEach(function (cb) {
+      var t = rows[parseInt(cb.getAttribute("data-i"), 10)];
+      if (t && blocked[t.query]) {
+        var tr = cb.closest("tr");
+        tr.className = "done";
+        cb.checked = false;
+        cb.disabled = true;
+        cb.parentNode.textContent = "\\u2713";
+      }
+    });
   }).catch(function (e) {
     el("confirm").hidden = true;
     el("results").innerHTML = "<div class='err'>Error de red: " + esc(e) + "</div>";
