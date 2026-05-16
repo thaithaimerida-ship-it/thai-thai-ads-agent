@@ -43,8 +43,6 @@ refresh_oauth.py
 /_*.py
 /_*.txt
 /_ops_backup/
-/audit_*.py
-/create_*.py
 /update_*.py
 /env
 /gbp_audit_output.json
