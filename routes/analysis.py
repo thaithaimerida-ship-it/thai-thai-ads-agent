@@ -5,6 +5,7 @@ actividad del sistema.
 import os
 import sqlite3
 import logging
+import unicodedata
 from typing import Optional, List, Dict
 from datetime import datetime
 
@@ -124,6 +125,24 @@ VALID_DATE_RANGES = {
 }
 
 
+_THAI_KEYWORDS = ("thai", "tailand", "pad", "curry")
+
+
+def _norm(s):
+    s = unicodedata.normalize("NFD", str(s or "").lower())
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+
+def _is_competitor_term(query, conversions):
+    """convInesperada: tuvo conversion (>=1) y la query NO contiene ninguna
+    palabra inequivocamente Thai. Mismo criterio que SearchTermsReport.gs
+    (pendiente: alinear el .gs para que consuma este flag y no recalcule)."""
+    if conversions < 1:
+        return False
+    q = _norm(query)
+    return not any(k in q for k in _THAI_KEYWORDS)
+
+
 @router.get("/search-terms")
 async def search_terms(date_range: str = "LAST_7_DAYS"):
     """
@@ -163,6 +182,7 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
                 "cost": round(cost, 2),
                 "conversions": round(conversions, 1),
                 "negative_candidate": cost > 10 and conversions == 0,
+                "competitor_term": _is_competitor_term(st.get("query", ""), conversions),
             })
 
         formatted.sort(key=lambda t: t["cost"], reverse=True)
@@ -173,6 +193,7 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
             "date_range": date_range,
             "total": len(formatted),
             "negative_candidates": sum(1 for t in formatted if t["negative_candidate"]),
+            "competitor_terms": sum(1 for t in formatted if t["competitor_term"]),
             "search_terms": formatted,
         }
     except Exception as e:

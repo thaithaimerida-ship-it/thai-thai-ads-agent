@@ -35,6 +35,9 @@ _PAGE = """<!doctype html>
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   tr.cand { background: #fde0e0; }
   tr.conv { background: #e0f0e0; }
+  tr.comp { background: #fef3c7; }
+  h2.sec { font-size: 1.05rem; margin: 1.4rem 0 .4rem; }
+  p.help { color: #666; font-size: .85rem; margin: 0 0 .5rem; }
   #meta { color: #666; font-size: .85rem; }
   #confirm { background: #fff8e1; border: 1px solid #f0d000; padding: .8rem; border-radius: 6px; margin: 1rem 0; }
   .warn { color: #b30000; font-weight: 600; }
@@ -76,6 +79,13 @@ _PAGE = """<!doctype html>
   </div>
 
   <div id="tableWrap"></div>
+
+  <h2 id="compTitle" class="sec" hidden>Terminos de competidores</h2>
+  <p id="compHelp" class="help" hidden>Tuvieron conversion pero la query no
+     contiene palabras de Thai Thai (thai, tailand, pad, curry) &mdash; posibles
+     busquedas de otros negocios. Revisa antes de bloquear.</p>
+  <div id="compWrap"></div>
+
   <button id="addBtn" hidden>Agregar como negativos</button>
   <div id="confirm" hidden></div>
   <div id="banner" hidden></div>
@@ -131,30 +141,56 @@ function loadTerms() {
     .then(function (data) {
       if (data.status !== "success") { el("meta").textContent = "Error: " + (data.message || data.status); return; }
       rows = data.search_terms || [];
-      el("meta").textContent = data.total + " terminos - " + data.negative_candidates + " candidatos a negativo";
+      el("meta").textContent = data.total + " terminos - " + data.negative_candidates +
+        " candidatos a negativo - " + (data.competitor_terms || 0) + " de competidores";
       renderTable();
     })
     .catch(function (e) { el("meta").textContent = "Error de red: " + e; });
 }
 
+var HEAD = "<table><thead><tr><th></th><th>Query</th><th>Campana</th>" +
+           "<th>Clics</th><th>Impr.</th><th>Costo</th><th>Conv.</th></tr></thead><tbody>";
+
+function rowHtml(t, i, cls) {
+  var disabled = t.campaign_id ? "" : "disabled title='sin campaign_id'";
+  return "<tr class='" + cls + "'>" +
+    "<td><input type='checkbox' class='pick' data-i='" + i + "' " + disabled + "></td>" +
+    "<td>" + esc(t.query) + "</td>" +
+    "<td>" + esc(t.campaign_name) + "</td>" +
+    "<td class='num'>" + t.clicks + "</td>" +
+    "<td class='num'>" + t.impressions + "</td>" +
+    "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
+    "<td class='num'>" + t.conversions + "</td></tr>";
+}
+
 function renderTable() {
-  if (!rows.length) { el("tableWrap").innerHTML = "<p>Sin search terms en este rango.</p>"; return; }
-  var h = "<table><thead><tr><th></th><th>Query</th><th>Campana</th>" +
-          "<th>Clics</th><th>Impr.</th><th>Costo</th><th>Conv.</th></tr></thead><tbody>";
+  if (!rows.length) {
+    el("tableWrap").innerHTML = "<p>Sin search terms en este rango.</p>";
+    el("compWrap").innerHTML = "";
+    el("compTitle").hidden = true; el("compHelp").hidden = true;
+    el("addBtn").hidden = true;
+    return;
+  }
+  // Indices globales en `rows` (data-i) -> selected()/submit() no cambian.
+  var mainBody = "", compBody = "", nMain = 0, nComp = 0;
   rows.forEach(function (t, i) {
-    var cls = t.negative_candidate ? "cand" : (t.conversions > 0 ? "conv" : "");
-    var disabled = t.campaign_id ? "" : "disabled title='sin campaign_id'";
-    h += "<tr class='" + cls + "'>" +
-      "<td><input type='checkbox' class='pick' data-i='" + i + "' " + disabled + "></td>" +
-      "<td>" + esc(t.query) + "</td>" +
-      "<td>" + esc(t.campaign_name) + "</td>" +
-      "<td class='num'>" + t.clicks + "</td>" +
-      "<td class='num'>" + t.impressions + "</td>" +
-      "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
-      "<td class='num'>" + t.conversions + "</td></tr>";
+    if (t.competitor_term) {
+      compBody += rowHtml(t, i, "comp"); nComp++;
+    } else {
+      var cls = t.negative_candidate ? "cand" : (t.conversions > 0 ? "conv" : "");
+      mainBody += rowHtml(t, i, cls); nMain++;
+    }
   });
-  h += "</tbody></table>";
-  el("tableWrap").innerHTML = h;
+  el("tableWrap").innerHTML = nMain
+    ? HEAD + mainBody + "</tbody></table>"
+    : "<p>Sin terminos (fuera de competidores) en este rango.</p>";
+  if (nComp) {
+    el("compWrap").innerHTML = HEAD + compBody + "</tbody></table>";
+    el("compTitle").hidden = false; el("compHelp").hidden = false;
+  } else {
+    el("compWrap").innerHTML = "";
+    el("compTitle").hidden = true; el("compHelp").hidden = true;
+  }
   el("addBtn").hidden = false;
 }
 
