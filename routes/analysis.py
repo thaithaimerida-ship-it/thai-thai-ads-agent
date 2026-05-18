@@ -127,16 +127,40 @@ VALID_DATE_RANGES = {
 
 _THAI_KEYWORDS = ("thai", "tailand", "pad", "curry")
 
+# Listas de exclusion (proteccion explicita, independiente de gasto/conv):
+#  - BRAND_TERMS: marca propia -> nunca negative_candidate (no bloquear tu marca)
+#  - COMPETITOR_THAI_TERMS: competencia thai directa -> nunca competitor_term
+#    (es un competidor tailandes, no un restaurante ajeno/no-thai)
+_BRAND_TERMS = ("thai thai", "thaithaimerida")
+_COMPETITOR_THAI_TERMS = ("casa thai",)
+
 
 def _norm(s):
     s = unicodedata.normalize("NFD", str(s or "").lower())
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
 
+def _matches_any(query, terms):
+    q = _norm(query)
+    return any(t in q for t in terms)
+
+
+def _is_negative_candidate(query, cost, conversions):
+    """Candidato a negativo: gasto > $10 y 0 conversiones. NUNCA si la query
+    hace match con BRAND_TERMS (no bloquear la propia marca)."""
+    if _matches_any(query, _BRAND_TERMS):
+        return False
+    return cost > 10 and conversions == 0
+
+
 def _is_competitor_term(query, conversions):
     """convInesperada: tuvo conversion (>=1) y la query NO contiene ninguna
     palabra inequivocamente Thai. Mismo criterio que SearchTermsReport.gs
-    (pendiente: alinear el .gs para que consuma este flag y no recalcule)."""
+    (pendiente: alinear el .gs para que consuma este flag y no recalcule).
+    NUNCA si la query hace match con COMPETITOR_THAI_TERMS (competencia
+    thai directa: es competidor tailandes, no restaurante ajeno)."""
+    if _matches_any(query, _COMPETITOR_THAI_TERMS):
+        return False
     if conversions < 1:
         return False
     q = _norm(query)
@@ -181,7 +205,7 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
                 "impressions": int(st.get("impressions", 0)),
                 "cost": round(cost, 2),
                 "conversions": round(conversions, 1),
-                "negative_candidate": cost > 10 and conversions == 0,
+                "negative_candidate": _is_negative_candidate(st.get("query", ""), cost, conversions),
                 "competitor_term": _is_competitor_term(st.get("query", ""), conversions),
             })
 
