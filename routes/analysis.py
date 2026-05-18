@@ -336,6 +336,42 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
                 "waste_detected": round(waste, 2)
             })
 
+        # ── Desglose rastreable de total_waste ───────────────────────────
+        # cnt["total_waste"] = suma de item["spend"] de critical_items[:5]
+        # + high_priority[:5], SOLO para campañas presentes en la respuesta.
+        # Aquí reconstruimos esa misma composición para que el email pueda
+        # decir de qué está hecho el número sin abrir Google Ads.
+        _present_ids = {str(c.get("id", "")) for c in campaigns}
+        _waste_items = waste_data.get("critical_items", []) + waste_data.get("high_priority", [])
+        _contributing = [
+            it for it in _waste_items
+            if str(it.get("campaign_id", "")) in _present_ids
+        ]
+        _excluded = [
+            it for it in _waste_items
+            if str(it.get("campaign_id", "")) not in _present_ids
+        ]
+        _kw = [it for it in _contributing if it.get("type") == "keyword"]
+        _camp = [it for it in _contributing if it.get("type") == "campaign"]
+        _wsum = waste_data.get("summary", {})
+        _full_count = _wsum.get("keywords_to_block", 0) + _wsum.get("campaigns_to_pause", 0)
+        _capped = _full_count > len(_waste_items)
+
+        _parts = []
+        if _kw:
+            _parts.append(f"{len(_kw)} keyword(s) con gasto ≥ $50 y 0 conv.")
+        if _camp:
+            _parts.append(f"{len(_camp)} campaña(s) con gasto > $100 y 0 conv.")
+        _desc = (
+            f"{len(_contributing)} ítem(s): " + " + ".join(_parts)
+            if _parts else "sin ítems de desperdicio detectados"
+        )
+        _desc += f" — rango {date_range}"
+        if _capped:
+            _desc += "; lista recortada a top 5 críticos + top 5 altos"
+        if _excluded:
+            _desc += f"; {len(_excluded)} ítem(s) no sumado(s) (campaña fuera del reporte)"
+
         return {
             "status": "success",
             "date_range": date_range,
@@ -345,7 +381,13 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
                 "critical": cnt.get("critical", 0),
                 "warning": cnt.get("warning", 0),
                 "excellent": cnt.get("excellent", 0),
-                "total_waste": round(cnt["total_waste"], 2)
+                "total_waste": round(cnt["total_waste"], 2),
+                "total_waste_desc": _desc,
+                "total_waste_items": len(_contributing),
+                "total_waste_keywords": len(_kw),
+                "total_waste_campaigns": len(_camp),
+                "total_waste_excluded": len(_excluded),
+                "total_waste_capped": _capped
             }
         }
     except Exception as e:
