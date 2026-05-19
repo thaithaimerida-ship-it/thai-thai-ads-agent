@@ -205,8 +205,37 @@ function selected() {
 el("addBtn").onclick = function () {
   var sel = selected();
   if (!sel.length) { alert("No seleccionaste ningun termino."); return; }
+
+  // Google Ads: keyword maximo 80 caracteres. Los que excedan se EXCLUYEN
+  // del envio a /execute-optimization; se avisa antes de confirmar.
+  var tooLong = sel.filter(function (t) { return String(t.query).length > 80; });
+  sel = sel.filter(function (t) { return String(t.query).length <= 80; });
+
+  var warnHtml = "";
+  if (tooLong.length) {
+    warnHtml = "<p class='warn'>\\u26A0\\uFE0F " + tooLong.length +
+      " termino(s) excluido(s) por ser demasiado largo(s) para Google Ads " +
+      "(max. 80 caracteres):</p><ul>";
+    tooLong.forEach(function (t) {
+      warnHtml += "<li>" + esc(t.query) + " <em>(" + String(t.query).length +
+        " car.)</em></li>";
+    });
+    warnHtml += "</ul>";
+  }
+
+  if (!sel.length) {
+    var cw = el("confirm");
+    cw.innerHTML = warnHtml +
+      "<p>No queda ningun termino valido para enviar.</p>" +
+      "<button id='cancel' class='secondary'>Cerrar</button>";
+    cw.hidden = false;
+    el("cancel").onclick = function () { cw.hidden = true; };
+    return;
+  }
+
   var brand = sel.filter(function (t) { return /thai/i.test(t.query); });
-  var html = "<strong>Vas a agregar " + sel.length + " negativo(s) BROAD:</strong><ul>";
+  var html = warnHtml +
+    "<strong>Vas a agregar " + sel.length + " negativo(s) BROAD:</strong><ul>";
   sel.forEach(function (t) {
     html += "<li>" + esc(t.query) + " &rarr; " + esc(t.campaign_name) + "</li>";
   });
