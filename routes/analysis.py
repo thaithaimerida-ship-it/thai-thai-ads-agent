@@ -127,13 +127,20 @@ VALID_DATE_RANGES = {
 
 _THAI_KEYWORDS = ("thai", "tailand", "pad", "curry")
 
-# Listas de exclusion (proteccion explicita, independiente de gasto/conv):
+# Listas de clasificacion (todas son matches por substring tras _norm):
 #  - BRAND_TERMS: nunca negative_candidate. Marca propia (no bloquear tu
-#    marca) + competidor thai que decidiste NO auto-negativizar (casa thai).
-#  - COMPETITOR_THAI_TERMS: competencia thai directa -> nunca competitor_term
-#    (es un competidor tailandes, no un restaurante ajeno/no-thai)
+#    marca) + competidor protegido que decidiste NO auto-negativizar
+#    (incluye "casa thai", competidor con "thai" en el nombre).
+#  - FORCE_COMPETITOR_TERMS: SIEMPRE competitor_term cuando hay conversiones.
+#    Sobrescribe el filtro Thai por substring: para competidores cuyo nombre
+#    contiene "thai" pero NO deben contar como conversion thai propia
+#    (p.ej. "casa thai" -> seccion ambar, no convThai).
+#  - COMPETITOR_THAI_TERMS: NUNCA competitor_term (lista de supresion para
+#    el bucket ambar). Vacia tras mover "casa thai" a FORCE el 19-may-2026.
+#    Mantenida como hook arquitectonico simetrico a FORCE.
 _BRAND_TERMS = ("thai thai", "thaithaimerida", "casa thai")
-_COMPETITOR_THAI_TERMS = ("casa thai",)
+_FORCE_COMPETITOR_TERMS = ("casa thai",)
+_COMPETITOR_THAI_TERMS = ()
 
 
 def _norm(s):
@@ -156,14 +163,19 @@ def _is_negative_candidate(query, cost, conversions):
 
 
 def _is_competitor_term(query, conversions):
-    """convInesperada: tuvo conversion (>=1) y la query NO contiene ninguna
-    palabra inequivocamente Thai. Mismo criterio que SearchTermsReport.gs
-    (pendiente: alinear el .gs para que consuma este flag y no recalcule).
-    NUNCA si la query hace match con COMPETITOR_THAI_TERMS (competencia
-    thai directa: es competidor tailandes, no restaurante ajeno)."""
-    if _matches_any(query, _COMPETITOR_THAI_TERMS):
-        return False
+    """convInesperada: tuvo conversion (>=1) y NO es Thai propia. Orden:
+    1) sin conversiones -> False.
+    2) match con FORCE_COMPETITOR_TERMS -> True (override del filtro Thai;
+       competidor con "thai" en el nombre, p.ej. "casa thai").
+    3) match con COMPETITOR_THAI_TERMS -> False (supresion ambar reservada).
+    4) default: True si la query NO contiene ninguna palabra Thai
+       (_THAI_KEYWORDS). Mismo criterio que SearchTermsReport.gs, que ya
+       consume este flag (NO recalcular regla Thai en el .gs)."""
     if conversions < 1:
+        return False
+    if _matches_any(query, _FORCE_COMPETITOR_TERMS):
+        return True
+    if _matches_any(query, _COMPETITOR_THAI_TERMS):
         return False
     q = _norm(query)
     return not any(k in q for k in _THAI_KEYWORDS)
