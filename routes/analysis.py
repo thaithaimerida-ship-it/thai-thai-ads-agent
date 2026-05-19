@@ -128,10 +128,11 @@ VALID_DATE_RANGES = {
 _THAI_KEYWORDS = ("thai", "tailand", "pad", "curry")
 
 # Listas de exclusion (proteccion explicita, independiente de gasto/conv):
-#  - BRAND_TERMS: marca propia -> nunca negative_candidate (no bloquear tu marca)
+#  - BRAND_TERMS: nunca negative_candidate. Marca propia (no bloquear tu
+#    marca) + competidor thai que decidiste NO auto-negativizar (casa thai).
 #  - COMPETITOR_THAI_TERMS: competencia thai directa -> nunca competitor_term
 #    (es un competidor tailandes, no un restaurante ajeno/no-thai)
-_BRAND_TERMS = ("thai thai", "thaithaimerida")
+_BRAND_TERMS = ("thai thai", "thaithaimerida", "casa thai")
 _COMPETITOR_THAI_TERMS = ("casa thai",)
 
 
@@ -147,7 +148,8 @@ def _matches_any(query, terms):
 
 def _is_negative_candidate(query, cost, conversions):
     """Candidato a negativo: gasto > $10 y 0 conversiones. NUNCA si la query
-    hace match con BRAND_TERMS (no bloquear la propia marca)."""
+    hace match con BRAND_TERMS (marca propia o competidor thai protegido,
+    p.ej. "casa thai")."""
     if _matches_any(query, _BRAND_TERMS):
         return False
     return cost > 10 and conversions == 0
