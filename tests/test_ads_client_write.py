@@ -123,6 +123,64 @@ def test_disable_protected_conversion_rejected():
     mock_client.get_service.assert_not_called()
 
 
+def test_add_negative_keyword_rejects_smart_campaign():
+    """Smart Campaigns NO deben aceptar negative keywords via CampaignCriterionService.
+
+    Sin este guard, la mutación se persiste como criterion pero el matching
+    algorithm la ignora silenciosamente — fallos invisibles. Ver query GAQL
+    sobre Local 22612348265: 245 negativos registrados, comportamiento incierto.
+    """
+    from engine.ads_client import add_negative_keyword
+    mock_client = MagicMock()
+    mock_row = MagicMock()
+    mock_row.campaign.advertising_channel_type.name = "SMART"
+    ga_service = MagicMock()
+    ga_service.search.return_value = [mock_row]
+    mock_client.get_service.return_value = ga_service
+
+    result = add_negative_keyword(mock_client, "4021070209", "22612348265", "sushi")
+    assert result["status"] == "rejected"
+    assert result["reason"] == "unsupported_channel_for_negative_keyword"
+    assert result["channel"] == "SMART"
+    # CRÍTICO: get_type (que devolvería CampaignCriterionOperation) nunca debe
+    # llamarse — la guardia debe abortar antes.
+    mock_client.get_type.assert_not_called()
+
+
+def test_add_negative_keyword_allows_search_campaign():
+    """SEARCH campaigns sí deben aceptar negative keywords normalmente."""
+    from engine.ads_client import add_negative_keyword
+    mock_client = MagicMock()
+
+    mock_row = MagicMock()
+    mock_row.campaign.advertising_channel_type.name = "SEARCH"
+
+    ga_service_mock = MagicMock()
+    ga_service_mock.search.return_value = [mock_row]
+    crit_service_mock = MagicMock()
+    campaign_service_mock = MagicMock()
+    campaign_service_mock.campaign_path.return_value = "customers/4021070209/campaigns/23730364039"
+
+    def get_service_side_effect(name):
+        if name == "GoogleAdsService":
+            return ga_service_mock
+        if name == "CampaignCriterionService":
+            return crit_service_mock
+        if name == "CampaignService":
+            return campaign_service_mock
+        return MagicMock()
+    mock_client.get_service.side_effect = get_service_side_effect
+    mock_client.get_type.return_value = MagicMock()
+    mock_client.enums.KeywordMatchTypeEnum.BROAD = MagicMock()
+
+    result = add_negative_keyword(mock_client, "4021070209", "23730364039", "sushi")
+    assert result["status"] == "success"
+    assert result["keyword"] == "sushi"
+    assert result["match_type"] == "BROAD"
+    assert result["channel"] == "SEARCH"
+    crit_service_mock.mutate_campaign_criteria.assert_called_once()
+
+
 def test_disable_primary_conversions_rejected():
     """click_pedir_online y click_whatsapp son Primarias del CLAUDE.md (NO TOCAR).
 

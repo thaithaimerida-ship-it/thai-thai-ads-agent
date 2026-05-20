@@ -276,6 +276,24 @@ main.py                  ← FastAPI (~535 líneas): /health, /mission-control, 
 | Reserva online | $50 MXN | $85 MXN | >$120 MXN |
 | General | $35 MXN | $60 MXN | >$100 MXN |
 
+## Negativos por tipo de campaña — restricciones API
+
+`engine.ads_client.add_negative_keyword` aplica un guard de channel-type
+ANTES de mutar para evitar mutaciones no-op silenciosas:
+
+- **SEARCH** (Experiencia 2026, Delivery Search): negative keywords via
+  `CampaignCriterionService` funcionan normalmente. Tipo BROAD por default.
+- **SMART** (Local, Delivery): la API acepta la mutación pero el matching
+  algorithm puede ignorar el criterion. `add_negative_keyword` RECHAZA
+  explícitamente con `status="rejected"` + `reason="unsupported_channel_for_negative_keyword"`.
+  Para gestionar negativos en Smart Campaigns usar `SmartCampaignSettingService`
+  (no implementado en este repo) o Google Ads UI directamente.
+
+Histórico: los 245 negativos visibles en `Thai Mérida - Local` (22612348265,
+Smart) y los 17 en `Thai Mérida - Delivery` (22839241090, Smart) fueron
+agregados ANTES de implementar este guard. Su efectividad real es incierta
+— solo Google Ads UI puede confirmar si están filtrando.
+
 ---
 
 ## Correr el backend local

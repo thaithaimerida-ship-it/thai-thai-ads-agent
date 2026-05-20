@@ -601,26 +601,87 @@ def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, date_range
         print(f"Error fetching search terms: {e}")
         return []
 
+# IDs de advertising_channel_type que NO soportan campaign_criterion KEYWORD
+# negative de forma confiable. Smart Campaigns aceptan la mutación sin error
+# pero el matching algorithm puede ignorar el criterion. Ver:
+# https://developers.google.com/google-ads/api/docs/smart-campaigns/overview
+_NEGATIVE_KEYWORD_UNSUPPORTED_CHANNELS = {"SMART"}
+
+
+def _get_campaign_channel_type(client: GoogleAdsClient, customer_id: str, campaign_id: str) -> str:
+    """Returns advertising_channel_type.name ('SMART','SEARCH','DISPLAY',...) or ''."""
+    try:
+        ga = client.get_service("GoogleAdsService")
+        rows = list(ga.search(
+            customer_id=customer_id,
+            query=f"SELECT campaign.advertising_channel_type FROM campaign WHERE campaign.id = {campaign_id}",
+        ))
+        if rows:
+            return rows[0].campaign.advertising_channel_type.name
+    except Exception as e:
+        _ads_logger.warning("_get_campaign_channel_type failed camp=%s: %s", campaign_id, e)
+    return ""
+
+
 def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id: str, keyword_text: str):
     """
-    Agrega negative keyword a una campaña
+    Agrega negative keyword a una campaña.
+
+    GUARDIA: Smart Campaigns (advertising_channel_type='SMART') aceptan la
+    mutación silenciosamente pero el matching algorithm puede ignorar el
+    criterion KEYWORD negativo. Esta función rechaza la mutación con status
+    'rejected' para evitar registrar acciones que parecen exitosas pero son
+    no-ops. Si necesitas gestionar negativos en Smart Campaigns, usa
+    SmartCampaignSettingService o configuralos via Google Ads UI.
     """
+    channel = _get_campaign_channel_type(client, customer_id, campaign_id)
+    if channel in _NEGATIVE_KEYWORD_UNSUPPORTED_CHANNELS:
+        _ads_logger.warning(
+            "add_negative_keyword RECHAZADO: camp=%s channel=%s kw=%r — "
+            "Smart Campaigns no soportan negative keywords via "
+            "CampaignCriterionService de forma confiable.",
+            campaign_id, channel, keyword_text,
+        )
+        return {
+            "status": "rejected",
+            "reason": "unsupported_channel_for_negative_keyword",
+            "channel": channel,
+            "message": (
+                f"campaign_id {campaign_id} es {channel} — Smart Campaigns no soportan "
+                "negative keywords confiablemente via CampaignCriterionService. Usar "
+                "SmartCampaignSettingService o gestionar manualmente en Google Ads UI."
+            ),
+            "keyword": keyword_text,
+        }
+
     try:
         campaign_criterion_service = client.get_service("CampaignCriterionService")
         campaign_criterion_operation = client.get_type("CampaignCriterionOperation")
-        
+
         campaign_criterion = campaign_criterion_operation.create
         campaign_criterion.campaign = client.get_service("CampaignService").campaign_path(customer_id, campaign_id)
         campaign_criterion.negative = True
         campaign_criterion.keyword.text = keyword_text
         campaign_criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.BROAD
-        
+
         campaign_criterion_service.mutate_campaign_criteria(
             customer_id=customer_id,
             operations=[campaign_criterion_operation]
         )
-        
-        return {"status": "success", "keyword": keyword_text}
+
+        # Log de éxito (antes solo se logueaba en error → mutaciones invisibles
+        # en stdout, único audit era SQLite agent_actions que se pierde con
+        # rotación de revisiones). Loguear éxito cierra el gap.
+        _ads_logger.info(
+            "add_negative_keyword SUCCESS camp=%s channel=%s kw=%r match_type=BROAD",
+            campaign_id, channel, keyword_text,
+        )
+        return {
+            "status": "success",
+            "keyword": keyword_text,
+            "match_type": "BROAD",
+            "channel": channel,
+        }
     except GoogleAdsException as ex:
         # La API de Google Ads lanza GoogleAdsException, que NO es subclase de
         # GoogleAPIError. Antes se escapaba sin loguearse y el endpoint la
