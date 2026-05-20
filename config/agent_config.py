@@ -519,11 +519,12 @@ SMART_THEME_MIN_REMAINING: int = int(_os.getenv("SMART_THEME_MIN_REMAINING", "5"
 # SMART CAMPAIGNS — EVALUACIÓN SEMÁNTICA DE TEMAS VÍA LLM
 #
 # Cuando está activo, los keyword themes que NO están en _IRRELEVANT_THEMES
-# son enviados a Claude API (Haiku) para evaluación semántica en contexto.
+# son enviados al LLM (rol "haiku" vía engine.llm_client) para evaluación
+# semántica en contexto.
 # El LLM conoce que Thai Thai es un restaurante tailandés en Mérida, Yucatán,
 # con servicios de Delivery (Gloria Food) y Reservaciones.
 #
-# Si la API de Anthropic falla, el agente continúa usando solo la lista estática.
+# Si el LLM falla, el agente continúa usando solo la lista estática.
 # Esto garantiza que una falla de red no detenga la auditoría.
 #
 # Para desactivar:

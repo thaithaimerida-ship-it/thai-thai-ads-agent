@@ -23,6 +23,8 @@ def test_model_aliases_allow_explicit_env_override(monkeypatch):
 
 
 def test_generate_text_uses_openai_client_and_returns_content(monkeypatch):
+    monkeypatch.delenv("OPENAI_MODEL_HAIKU", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL_SONNET", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     mock_client = MagicMock()
