@@ -44,8 +44,11 @@ def _calculate_success_score(cpa: float, has_conversions: bool) -> int:
 def _get_cpa_targets(campaign_name: str) -> dict:
     """Retorna CPA targets según tipo de campaña detectado por nombre."""
     name = campaign_name.lower()
-    if "delivery" in name:
-        return {"ideal": 25, "max": 45, "critical": 80}
+    # "delivery search" debe chequearse ANTES de "delivery" — más específico primero.
+    if "delivery search" in name:
+        return {"ideal": 50, "max": 70, "critical": 100}
+    elif "delivery" in name:
+        return {"ideal": 50, "max": 65, "critical": 90}
     elif "reserva" in name:
         return {"ideal": 50, "max": 85, "critical": 120}
     else:  # local / brand / default

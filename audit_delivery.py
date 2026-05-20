@@ -25,9 +25,9 @@ start_date = end_date - timedelta(days=30)
 DATE_START = start_date.strftime("%Y-%m-%d")
 DATE_END = end_date.strftime("%Y-%m-%d")
 
-CPA_IDEAL = 25
-CPA_MAX = 45
-CPA_CRITICO = 80
+CPA_IDEAL = 50
+CPA_MAX = 65
+CPA_CRITICO = 90
 
 
 def micros_to_mxn(v):
@@ -243,16 +243,16 @@ def run():
     lines.append(f"| CTR | {camp_data['ctr']*100:.2f}% | >3% |")
     lines.append(f"| CPC Promedio | ${camp_data['avg_cpc']:.2f} MXN | — |")
     lines.append(f"| Conversiones | {camp_data['conversions']:.1f} | — |")
-    lines.append(f"| CPA | ${camp_data['cpa']:.2f} MXN {cpa_status} | Ideal $25 / Máx $45 / Crítico $80 |")
+    lines.append(f"| CPA | ${camp_data['cpa']:.2f} MXN {cpa_status} | Ideal $50 / Máx $65 / Crítico $90 |")
     lines.append("")
 
     lines.append("### Top Hallazgos")
     lines.append("")
     findings = []
     if camp_data["cpa"] > CPA_CRITICO and camp_data["conversions"] > 0:
-        findings.append(f"🔴 CPA crítico: ${camp_data['cpa']:.2f} MXN (umbral crítico: $80)")
+        findings.append(f"🔴 CPA crítico: ${camp_data['cpa']:.2f} MXN (umbral crítico: $90)")
     elif camp_data["cpa"] > CPA_MAX and camp_data["conversions"] > 0:
-        findings.append(f"🟡 CPA sobre el máximo: ${camp_data['cpa']:.2f} MXN (máximo: $45)")
+        findings.append(f"🟡 CPA sobre el máximo: ${camp_data['cpa']:.2f} MXN (máximo: $65)")
     if camp_data["conversions"] == 0:
         findings.append("🔴 0 conversiones en 30 días — campaña no convierte")
     if fantasmas:

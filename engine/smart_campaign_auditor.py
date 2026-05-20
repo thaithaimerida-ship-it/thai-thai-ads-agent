@@ -53,7 +53,7 @@ Un keyword theme es IRRELEVANTE si atrae búsquedas que nunca convertirán, como
 # ── CPA targets Thai Thai (MXN) ───────────────────────────────────────────────
 # Fuente: CLAUDE.md — CPA Targets sección
 _CPA_TARGETS = {
-    "delivery": {"ideal": 25, "max": 45, "critical": 80},
+    "delivery": {"ideal": 50, "max": 65, "critical": 90},
     "local":    {"ideal": 35, "max": 60, "critical": 100},
     "default":  {"ideal": 35, "max": 60, "critical": 100},
 }

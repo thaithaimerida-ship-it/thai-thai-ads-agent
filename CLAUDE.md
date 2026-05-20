@@ -3,6 +3,22 @@
 ## Qué hace
 FastAPI (Python 3.13) — agente semi-autónomo de optimización para Google Ads + GA4 + Sheets del restaurante Thai Thai Mérida. El cerebro de decisión es Claude Haiku 4.5 (decisiones de presupuesto y keywords). Claude Sonnet 4.6 se usa para análisis e insights narrativos.
 
+> ⚠️ **ESTADO LLM AL 18-MAY-2026 — LEER ANTES DE TOCAR EL MOTOR DE DECISIÓN**
+>
+> La línea de arriba describe la arquitectura *intencionada*, **no el runtime real**. Las 3 capas están **desincronizadas**:
+>
+> | Capa | Apunta a |
+> |---|---|
+> | Código `main` (`engine/decision_engine.py`) | Claude Haiku (`claude-haiku-4-5-20251001` hardcodeado, gated en `ANTHROPIC_API_KEY`) |
+> | `requirements.txt` (main) | OpenAI (`openai>=1.99.5`, **sin** `anthropic`) |
+> | Cloud Run (rev activa `thai-thai-ads-agent-00337-4jm`) | OpenAI (`OPENAI_API_KEY` + `OPENAI_MODEL_*`, **sin** `ANTHROPIC_API_KEY`) |
+>
+> **Consecuencia:** el motor de decisión (presupuesto + keywords) **NO está ejecutando IA en producción**. `decision_engine.py` líneas 111-114 y 821-824 leen `ANTHROPIC_API_KEY`, que no existe en prod → `return []` antes de importar `anthropic`. No corre Claude **ni** OpenAI; cae al fallback sin decisiones AI.
+>
+> **Causa:** migración LLM (sprint `sprint-12may-llm-migration`, Claude→OpenAI) aplicada a medias — infra+deps movidas a OpenAI pero el reescritura de código quedó parqueada fuera de `main`.
+>
+> 🛑 **NO TOCAR NADA** (requirements.txt, env vars Cloud Run, decision_engine.py) hasta la próxima sesión, donde se decidirá la **dirección**: completar la migración a OpenAI **o** revertir a Claude Haiku. Cualquier fix debe alinear las 3 capas a la vez; tocar una sola empeora la desincronización. Detalle completo en memoria: `project_thai_ads_pendientes_24abr2026.md`.
+
 ## Principio de negocio
 Este proyecto no busca recortar gasto por defecto. Busca detectar:
 - Desperdicio real
@@ -255,7 +271,8 @@ main.py                  ← FastAPI (~535 líneas): /health, /mission-control, 
 ## CPA targets
 | Objetivo | Ideal | Máximo | Crítico |
 |---|---|---|---|
-| Delivery (Gloria Food) | $25 MXN | $45 MXN | >$80 MXN |
+| Delivery (Gloria Food) | $50 MXN | $65 MXN | >$90 MXN |
+| Delivery Search | $50 MXN | $70 MXN | >$100 MXN |
 | Reserva online | $50 MXN | $85 MXN | >$120 MXN |
 | General | $35 MXN | $60 MXN | >$100 MXN |
 

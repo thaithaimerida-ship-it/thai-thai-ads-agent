@@ -4,9 +4,15 @@ from engine.analyzer import _get_cpa_targets, _calculate_success_score_v2
 
 def test_delivery_cpa_targets():
     targets = _get_cpa_targets("Thai Mérida - Delivery")
-    assert targets["ideal"] == 25
-    assert targets["max"] == 45
-    assert targets["critical"] == 80
+    assert targets["ideal"] == 50
+    assert targets["max"] == 65
+    assert targets["critical"] == 90
+
+def test_delivery_search_cpa_targets():
+    targets = _get_cpa_targets("Thai Mérida - Delivery Search")
+    assert targets["ideal"] == 50
+    assert targets["max"] == 70
+    assert targets["critical"] == 100
 
 def test_reservaciones_cpa_targets():
     targets = _get_cpa_targets("Thai Mérida - Reservaciones")

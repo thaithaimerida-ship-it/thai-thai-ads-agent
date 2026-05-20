@@ -55,9 +55,9 @@ KEYWORD_AUTO_BLOCK_MAX_PER_CYCLE = 1
 
 CAMPAIGN_TYPE_CONFIG = {
     "delivery": {
-        "cpa_ideal":          25.0,   # CPA ideal — campaña sana
-        "cpa_max":            45.0,   # CPA máximo tolerable
-        "cpa_critical":       80.0,   # CPA crítico — escalar urgente
+        "cpa_ideal":          50.0,   # CPA ideal — campaña sana
+        "cpa_max":            65.0,   # CPA máximo tolerable
+        "cpa_critical":       90.0,   # CPA crítico — escalar urgente
         "min_spend_to_block": 70.0,   # Gasto mínimo para bloqueo automático
         # AG1: delivery tiene volumen alto y ROI esperado rápido — actuar antes
         "ag1_min_spend":           100.0,

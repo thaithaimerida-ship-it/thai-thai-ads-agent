@@ -5,8 +5,8 @@ Pruebas unitarias para detect_budget_opportunities().
 No realizan llamadas a la API de Google Ads — todo con datos sinteticos.
 
 Casos cubiertos:
-  1. BA1 detectado: Delivery CPA $100 > $80 critico, 3 conv, $300 gasto -> detectar
-  2. BA1 NO detectado: CPA $70 < $80 critico -> NO detectar
+  1. BA1 detectado: Delivery CPA $100 > $90 critico, 3 conv, $300 gasto -> detectar
+  2. BA1 NO detectado: CPA $70 < $90 critico -> NO detectar
   3. BA1 NO detectado: 1 conversion < min_conversions=2 -> NO detectar
   4. BA1 NO detectado: gasto $150 < min_spend_window=200 (delivery) -> NO detectar
   5. BA1 NO detectado: campana nueva 10 dias < 14 dias (delivery) -> NO detectar
@@ -68,14 +68,14 @@ def _camp(
 
 def test_ba1_delivery_detectado():
     """
-    Delivery: CPA $100 > $80 critico, 3 conversiones, $300 gasto >= $200 min.
+    Delivery: CPA $120 > $90 critico, 3 conversiones, $360 gasto >= $200 min.
     Debe detectar BA1 con presupuesto sugerido calculado.
-    CPA = $300 / 3 = $100
+    CPA = $360 / 3 = $120
     """
     result = detect_budget_opportunities([
         _camp(
             name="Thai Merida - Delivery",
-            cost_mxn=300.0,
+            cost_mxn=360.0,
             conversions=3.0,
             days_active=20,
             daily_budget_mxn=150.0,
@@ -86,20 +86,20 @@ def test_ba1_delivery_detectado():
     assert len(ba1) == 1, f"Se esperaba 1 BA1, se obtuvieron {len(ba1)}"
     b = ba1[0]
     assert b["campaign_type"] == "delivery"
-    assert b["cpa_real"] == 100.0
-    assert b["cpa_critical"] == 80.0
+    assert b["cpa_real"] == 120.0
+    assert b["cpa_critical"] == 90.0
     assert b["daily_budget_mxn"] == 150.0
     assert b["suggested_daily_budget"] is not None
     assert b["suggested_daily_budget"] > 0
-    # Piso: 30% de 150 = 45. Formula: 150 * (45 / 100) = 67.5
-    assert b["suggested_daily_budget"] == 67.5
-    assert b["reduction_pct"] == 55.0
-    print(f"PASS CASO 1 - BA1 delivery: CPA $100 > $80 -> detectado, sugerido ${b['suggested_daily_budget']}/dia")
+    # Piso: 30% de 150 = 45. Formula: 150 * (65 / 120) = 81.25
+    assert b["suggested_daily_budget"] == 81.25
+    assert b["reduction_pct"] == 45.8
+    print(f"PASS CASO 1 - BA1 delivery: CPA $120 > $90 -> detectado, sugerido ${b['suggested_daily_budget']}/dia")
 
 
 def test_ba1_cpa_bajo_umbral():
     """
-    Delivery: CPA $70 < $80 critico. NO debe detectar BA1.
+    Delivery: CPA $70 < $90 critico. NO debe detectar BA1.
     CPA = $210 / 3 = $70
     """
     result = detect_budget_opportunities([
@@ -108,7 +108,7 @@ def test_ba1_cpa_bajo_umbral():
 
     ba1 = [r for r in result if r["signal"] == "BA1"]
     assert len(ba1) == 0, f"Se esperaba 0 BA1 (CPA bajo umbral), se obtuvieron {len(ba1)}"
-    print("PASS CASO 2 - BA1: CPA $70 < $80 critico -> no detectado")
+    print("PASS CASO 2 - BA1: CPA $70 < $90 critico -> no detectado")
 
 
 def test_ba1_insuficientes_conversiones():
@@ -127,15 +127,15 @@ def test_ba1_insuficientes_conversiones():
 
 def test_ba1_gasto_insuficiente():
     """
-    Delivery: CPA $100 > $80 critico, 3 conv, pero gasto $150 < min_spend_window=200.
+    Delivery: CPA $100 > $90 critico, 3 conv, pero gasto $150 < min_spend_window=200.
     NO debe detectar BA1 (evidencia de gasto insuficiente).
     CPA = $150 / 3 = $50... en realidad eso es menor que 80, asi que ajustamos:
     CPA = $250 / 2 = $125... pero gasto es $100 < $200
     Usamos cost_mxn=$100 con conversiones=1 -> 1 conv falla min_conv=2
-    Mejor: cost_mxn=100 con conversiones=2 -> CPA=$50 < $80 critico -> falla CPA check
+    Mejor: cost_mxn=100 con conversiones=2 -> CPA=$50 < $90 critico -> falla CPA check
     Para testear solo la guarda de gasto: necesitamos CPA > 80 Y gasto < 200.
     cost_mxn=150, conversions=1.5 -> falla min_conv (1.5 < 2)
-    cost_mxn=150, conversions=2 -> CPA=$75 < $80 critico -> falla CPA check
+    cost_mxn=150, conversions=2 -> CPA=$75 < $90 critico -> falla CPA check
     Usar delivery con cost=190, conv=2 -> CPA=$95>$80, gasto $190 < $200 min_spend
     """
     result = detect_budget_opportunities([
@@ -154,7 +154,7 @@ def test_ba1_gasto_insuficiente():
 
 def test_ba1_campana_nueva():
     """
-    Delivery: CPA $100 > $80 critico, pero solo 10 dias activa (< 14 min).
+    Delivery: CPA $100 > $90 critico, pero solo 10 dias activa (< 14 min).
     NO detectar. Proteccion de campana nueva activa.
     """
     result = detect_budget_opportunities([

@@ -38,7 +38,7 @@ Cada propuesta incluye: qué hacer, por qué, qué resultado esperar, qué pasa 
 - **Objetivo:** Pedidos a domicilio via tienda propia GloriaFood (thaithaimerida.com/order)
 - **Geo:** Radio 8km desde centro de Mérida (lat: 20.9674, lng: -89.5926)
 - **Presupuesto:** $100 MXN/día
-- **CPA Target ideal:** < $25 MXN | Máximo aceptable: $45 MXN | Crítico: > $80 MXN
+- **CPA Target ideal:** < $50 MXN | Máximo aceptable: $65 MXN | Crítico: > $90 MXN
 - **Señal de éxito:** Pedidos completados en GloriaFood (webhook), llamadas para pedido
 - **Nota:** NO usa Rappi/Uber. Es tienda propia sin comisiones. CTR históricamente menor que Local.
 

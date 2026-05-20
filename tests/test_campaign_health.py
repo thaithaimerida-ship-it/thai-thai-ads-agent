@@ -66,19 +66,19 @@ def _camp(
 
 def test_ch1_delivery_cpa_critico():
     """
-    Delivery: CPA $92 > $80 critico, 3 conversiones. Debe detectar CH1.
+    Delivery: CPA $100 > $90 critico, 3 conversiones. Debe detectar CH1.
     """
-    # CPA = cost / conv = $276 / 3 = $92
+    # CPA = cost / conv = $300 / 3 = $100
     result = detect_campaign_issues([
-        _camp(name="Thai Merida - Delivery", cost_mxn=276.0, conversions=3.0, days_active=20)
+        _camp(name="Thai Merida - Delivery", cost_mxn=300.0, conversions=3.0, days_active=20)
     ])
 
     ch1 = [r for r in result if r["signal"] == "CH1"]
     assert len(ch1) == 1, f"Se esperaba 1 CH1, se obtuvieron {len(ch1)}"
     assert ch1[0]["campaign_type"] == "delivery"
-    assert ch1[0]["cpa_real"] == 92.0
-    assert ch1[0]["cpa_critical"] == 80.0
-    print(f"PASS CASO 1 - CH1 delivery: CPA $92 > $80 -> detectado")
+    assert ch1[0]["cpa_real"] == 100.0
+    assert ch1[0]["cpa_critical"] == 90.0
+    print(f"PASS CASO 1 - CH1 delivery: CPA $100 > $90 -> detectado")
 
 
 def test_ch1_reservaciones_bajo_umbral():
