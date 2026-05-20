@@ -281,6 +281,63 @@ class TestAntiTampering:
         assert c2.args[3] == 150_000_000
 
 
+class TestDataEndpointEnrichment:
+    """Tests del GET /presupuestos/data con enrichment de current_budget_mxn.
+
+    Mitigación intermedia mientras G_drift queda desactivado por TODO drift-guard.
+    El operador ve drift al aprobar en /presupuestos UI.
+    """
+
+    def test_includes_current_budget_when_engine_available(
+        self, client, isolated_db, customer_id_env, monkeypatch,
+    ):
+        decision_id = _insert_scale(
+            isolated_db, campaign_id="22612348265", new_budget_mxn=150.0,
+        )
+        # Mock get_engine_modules para devolver current=$100 para esa campaña.
+        engine_stub = {
+            "get_ads_client": MagicMock(return_value=MagicMock()),
+            "fetch_campaign_data": MagicMock(return_value=[
+                {"id": 22612348265, "daily_budget_mxn": 100.0},
+                {"id": 99999, "daily_budget_mxn": 999.0},  # ruido: no relacionada
+            ]),
+        }
+        monkeypatch.setattr("main.get_engine_modules", lambda: engine_stub)
+
+        r = client.get("/presupuestos/data")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["count"] == 1
+        rec = body["recommendations"][0]
+        assert rec["id"] == decision_id
+        assert rec["new_budget_mxn"] == 150.0
+        assert rec["current_budget_mxn"] == 100.0
+        # fetch_campaign_data debió haberse llamado solo una vez
+        assert engine_stub["fetch_campaign_data"].call_count == 1
+
+    def test_returns_null_current_when_engine_fails(
+        self, client, isolated_db, customer_id_env, monkeypatch,
+    ):
+        """Si get_engine_modules / get_ads_client / fetch lanza excepción,
+        current queda null pero el endpoint sigue devolviendo success y la
+        rec se muestra (UI renderiza 'n/d')."""
+        _insert_scale(isolated_db, campaign_id="22612348265", new_budget_mxn=150.0)
+        monkeypatch.setattr(
+            "main.get_engine_modules",
+            MagicMock(side_effect=RuntimeError("google.analytics not installed")),
+        )
+
+        r = client.get("/presupuestos/data")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["count"] == 1
+        rec = body["recommendations"][0]
+        assert rec["new_budget_mxn"] == 150.0
+        assert rec["current_budget_mxn"] is None
+
+
 class TestBatchMixedOutcomes:
     def test_partial_when_one_succeeds_and_one_blocked(
         self, client, admin_token, customer_id_env, isolated_db, mocked_ads,

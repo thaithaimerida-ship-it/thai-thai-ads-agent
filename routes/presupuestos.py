@@ -58,6 +58,9 @@ _PAGE = """<!doctype html>
   .action-reduce { color: #b35900; font-weight: 600; }
   .urgency-critical { background: #fde0e0; }
   .urgency-urgent   { background: #fff3c0; }
+  td.drift-medium  { background: #fff3c0; font-weight: 600; }
+  td.drift-large   { background: #fde0e0; font-weight: 600; }
+  .muted { color: #999; }
   #meta { color: #666; font-size: .85rem; }
   #empty { padding: 2rem; text-align: center; color: #888; background: #fff; border-radius: 6px; }
   #banner { background: #e0f5e0; border: 2px solid #1f9d1f; color: #0a5a0a;
@@ -152,7 +155,8 @@ function render() {
     return;
   }
   var html = "<table><thead><tr>" +
-    "<th></th><th>Campana</th><th>Accion</th><th class='num'>Nuevo $MXN/dia</th>" +
+    "<th></th><th>Campana</th><th>Accion</th>" +
+    "<th class='num'>Actual $/dia</th><th class='num'>Nuevo $/dia</th>" +
     "<th>Urgencia</th><th>Razon</th><th>Creada</th></tr></thead><tbody>";
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
@@ -160,10 +164,19 @@ function render() {
     var actionLabel = r.action_type === "scale" ? "scale ↑" : "reduce ↓";
     var rowClass = r.urgency === "critical" ? "urgency-critical" :
                    r.urgency === "urgent"   ? "urgency-urgent" : "";
+    var currentCell;
+    if (r.current_budget_mxn == null) {
+      currentCell = "<td class='num'><span class='muted'>n/d</span></td>";
+    } else {
+      var drift = Math.abs(r.new_budget_mxn - r.current_budget_mxn) / r.current_budget_mxn;
+      var driftCls = drift > 0.5 ? "drift-large" : drift > 0.2 ? "drift-medium" : "";
+      currentCell = "<td class='num " + driftCls + "'>$" + Number(r.current_budget_mxn).toFixed(2) + "</td>";
+    }
     html += "<tr class='" + rowClass + "' data-id='" + r.id + "'>" +
       "<td><input type='checkbox' disabled title='Disponible en Fase 5b'></td>" +
       "<td>" + escapeHtml(r.campaign_name) + " <small>(" + escapeHtml(r.campaign_id) + ")</small></td>" +
       "<td class='" + actionClass + "'>" + actionLabel + "</td>" +
+      currentCell +
       "<td class='num'>$" + Number(r.new_budget_mxn).toFixed(2) + "</td>" +
       "<td>" + escapeHtml(r.urgency) + "</td>" +
       "<td class='reason' title='" + escapeHtml(r.reason) + "'>" + escapeHtml(r.reason) + "</td>" +
@@ -206,6 +219,14 @@ async def presupuestos_data() -> dict[str, Any]:
 
     Filas con evidence_json corrupto (falta new_budget_mxn o reason) se omiten
     silenciosamente — exponerlas a la UI sería peligroso (apply con valor null).
+
+    Enriquece cada recomendación con `current_budget_mxn` (presupuesto actual
+    real consultado a Google Ads) para que el operador vea drift al aprobar.
+    Si Google Ads no responde, el campo es null y la UI muestra "n/d" — no
+    bloquea apply (los guardrails de POST /apply-budget-changes siguen activos:
+    verify_budget_still_actionable re-fetchea estado fresco antes de mutar).
+    Mitigación intermedia mientras G_drift del POST queda desactivado por el
+    TODO drift-guard (ai_recommendations.py no persiste budget_at_proposal_mxn).
     """
     db_path = get_db_path()
     try:
@@ -233,14 +254,23 @@ async def presupuestos_data() -> dict[str, Any]:
     except Exception as exc:
         return {"status": "error", "message": str(exc), "recommendations": []}
 
-    recommendations = []
-    latest_at = None
+    # Pre-filtra recs válidas para minimizar fetch a Google Ads.
+    candidates = []
     for r in rows:
         evidence = _safe_json(r["evidence_json"])
         new_budget_mxn = evidence.get("new_budget_mxn") if isinstance(evidence, dict) else None
         reason = evidence.get("reason") if isinstance(evidence, dict) else None
         if new_budget_mxn is None or reason is None:
             continue
+        candidates.append((r, new_budget_mxn, reason))
+
+    # Fetch current budgets en una sola llamada para todos los campaign_ids.
+    # Si falla, devuelve {} y current queda null en la UI ("n/d") — no bloquea.
+    current_budgets = _fetch_current_budgets({c[0]["campaign_id"] for c in candidates})
+
+    recommendations = []
+    latest_at = None
+    for r, new_budget_mxn, reason in candidates:
         recommendations.append({
             "id": r["id"],
             "action_type": r["action_type"],
@@ -248,6 +278,7 @@ async def presupuestos_data() -> dict[str, Any]:
             "campaign_name": r["campaign_name"],
             "urgency": r["urgency"],
             "new_budget_mxn": new_budget_mxn,
+            "current_budget_mxn": current_budgets.get(r["campaign_id"]),
             "reason": reason,
             "created_at": r["created_at"],
         })
@@ -260,6 +291,36 @@ async def presupuestos_data() -> dict[str, Any]:
         "latest_at": latest_at,
         "count": len(recommendations),
     }
+
+
+def _fetch_current_budgets(campaign_ids: set) -> dict:
+    """Devuelve {campaign_id: daily_budget_mxn} para los IDs dados.
+
+    Si get_engine_modules / get_ads_client / fetch_campaign_data falla, devuelve
+    {} silenciosamente. NO es bloqueante para mostrar la UI — el operador puede
+    aplicar igual y verify_budget_still_actionable re-validará en POST con
+    fetch fresco a Google Ads.
+    """
+    if not campaign_ids:
+        return {}
+    try:
+        from main import get_engine_modules
+        engine = get_engine_modules()
+        if not engine:
+            return {}
+        customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        if not customer_id:
+            return {}
+        client = engine["get_ads_client"]()
+        # YESTERDAY es el rango más barato; solo nos interesa daily_budget_mxn.
+        raw = engine["fetch_campaign_data"](client, customer_id, "YESTERDAY") or []
+        return {
+            str(c.get("id")): c.get("daily_budget_mxn")
+            for c in raw
+            if str(c.get("id")) in campaign_ids and c.get("daily_budget_mxn") is not None
+        }
+    except Exception:
+        return {}
 
 
 def _safe_json(raw):
