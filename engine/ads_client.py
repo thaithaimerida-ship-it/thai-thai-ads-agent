@@ -850,8 +850,18 @@ def remove_smart_campaign_theme(client, customer_id: str, criterion_resource_nam
         return {"status": "error", "message": str(e)}
 
 
-def update_campaign_budget(client, customer_id: str, budget_resource_name: str, budget_micros: int) -> dict:
-    """Actualiza el presupuesto diario de una campaña. budget_micros = MXN x 1,000,000"""
+def update_campaign_budget(
+    client,
+    customer_id: str,
+    budget_resource_name: str,
+    budget_micros: int,
+    validate_only: bool = False,
+) -> dict:
+    """Actualiza el presupuesto diario de una campaña. budget_micros = MXN x 1,000,000.
+
+    Si validate_only=True, valida la operación contra la API SIN aplicar el cambio
+    (paso obligatorio del ritual ads-mutation-dry-run antes de la mutación real).
+    """
     try:
         budget_service = client.get_service("CampaignBudgetService")
         budget_operation = client.get_type("CampaignBudgetOperation")
@@ -864,11 +874,16 @@ def update_campaign_budget(client, customer_id: str, budget_resource_name: str, 
 
         response = budget_service.mutate_campaign_budgets(
             customer_id=customer_id,
-            operations=[budget_operation]
+            operations=[budget_operation],
+            validate_only=validate_only,
         )
-        return {"status": "success", "resource_name": response.results[0].resource_name}
+        return {
+            "status": "success",
+            "validate_only": validate_only,
+            "resource_name": response.results[0].resource_name,
+        }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "validate_only": validate_only, "message": str(e)}
 
 
 # ── TASK 5 ──────────────────────────────────────────────────────────────────

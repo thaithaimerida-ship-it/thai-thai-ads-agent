@@ -85,6 +85,33 @@ def test_update_campaign_budget_calls_mutate():
     mock_service.mutate_campaign_budgets.assert_called_once()
 
 
+def test_update_campaign_budget_validate_only_true_propagates():
+    """validate_only=True debe pasarse al service como kwarg y reflejarse en el return.
+
+    Este es el modo dry-run del ritual ads-mutation-dry-run: la API valida la
+    operación pero NO la aplica. Lo usan routes/presupuestos y el subagente
+    budget-mutation-reviewer audita que esté presente antes del apply real.
+    """
+    mock_client = MagicMock()
+    mock_service = MagicMock()
+    mock_client.get_service.return_value = mock_service
+    mock_client.get_type.return_value = MagicMock()
+    mock_service.mutate_campaign_budgets.return_value = MagicMock(
+        results=[MagicMock(resource_name="customers/123/campaignBudgets/789")]
+    )
+
+    from engine.ads_client import update_campaign_budget
+    result = update_campaign_budget(
+        mock_client, "4021070209", "customers/4021070209/campaignBudgets/123",
+        50_000_000, validate_only=True,
+    )
+
+    assert result["status"] == "success"
+    assert result["validate_only"] is True
+    kwargs = mock_service.mutate_campaign_budgets.call_args.kwargs
+    assert kwargs["validate_only"] is True
+
+
 # ── TASK 6 ──────────────────────────────────────────────────────────────────
 
 def test_disable_protected_conversion_rejected():
