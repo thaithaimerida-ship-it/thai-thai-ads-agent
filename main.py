@@ -275,6 +275,8 @@ from routes.negativos_ui import router as negativos_ui_router
 app.include_router(negativos_ui_router)
 from routes.presupuestos import router as presupuestos_router
 app.include_router(presupuestos_router)
+from routes.ai_recommendations import router as ai_recommendations_router
+app.include_router(ai_recommendations_router)
 
 # Strategy functions delegated to agents/strategist.py
 from agents.strategist import Strategist as _Strategist
