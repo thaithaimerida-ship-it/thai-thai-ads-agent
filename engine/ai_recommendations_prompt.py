@@ -47,9 +47,11 @@ REGLAS DURAS:
 - NO incluyas categorías mixtas en una sola entrada. Cada recomendación es de un solo action_type.
 
 CONTEXTO DEL NEGOCIO:
-- CPA target delivery: $25 ideal, $45 max, >$80 crítico.
-- CPA target reserva: $50 ideal, $85 max, >$120 crítico.
+- CPA target campañas Delivery (campaign_name contiene "Delivery" sin "Search"): $50 ideal, $65 max, >$90 crítico.
+- CPA target campañas Delivery Search (campaign_name contiene "Delivery Search"): $50 ideal, $70 max, >$100 crítico.
+- CPA target campañas de reservas (Experiencia): $50 ideal, $85 max, >$120 crítico.
 - Conversiones primarias: click_pedir_online (delivery) y click_whatsapp (contacto). NO proponer pausar campañas que las generen.
+- Nota Delivery: click_pedir_online es el PROXY de conversión para campañas Delivery porque Gloria Food (proveedor del pedido) NO dispara eventos server-side de pedido completado en Google Ads. click_pedir_online cuenta como primaria por ser lo más cercano a un pedido confirmado que el agente puede medir desde la API.
 - Métrica correcta: Local y Experiencia → all_conversions; Delivery → conversions (porque click_pedir_online es primaria).
 - Smart Bidding en Experiencia 2026: período de aprendizaje activo, evitar mutaciones de budget en esa campaña por al menos 48h después de cualquier cambio.
 
