@@ -10,8 +10,15 @@ from google.ads.googleads.errors import GoogleAdsException
 PROTECTED_CONVERSIONS = {
     "reserva_completada_directa",
     "Pedido GloriaFood Online",
+    "click_pedir_online",
+    "click_whatsapp",
 }
-PROTECTED_SUBSTRINGS = ["reserva_completada_directa", "gloriafood online"]
+PROTECTED_SUBSTRINGS = [
+    "reserva_completada_directa",
+    "gloriafood online",
+    "click_pedir_online",
+    "click_whatsapp",
+]
 
 
 def get_date_range(days: int = 30):
@@ -1201,7 +1208,23 @@ def fetch_conversion_actions(client, customer_id: str) -> list:
 
 
 def disable_conversion_action(client, customer_id: str, conversion_action_id: str, conversion_name: str) -> dict:
-    """Desactiva una conversion. RECHAZA si el nombre esta en PROTECTED_CONVERSIONS."""
+    """Desactiva una conversion via API. RECHAZA si esta protegida.
+
+    Conversiones protegidas (no se pueden desactivar por este path):
+    - "reserva_completada_directa": Primaria del flujo de reservas web.
+    - "Pedido GloriaFood Online":   Primaria del webhook de delivery.
+    - "click_pedir_online":         Primaria del CTA "Pedir online" (CLAUDE.md: NO TOCAR).
+    - "click_whatsapp":             Primaria del CTA WhatsApp (CLAUDE.md: NO TOCAR).
+
+    El check es case-sensitive contra PROTECTED_CONVERSIONS (match exacto) y
+    case-insensitive contra PROTECTED_SUBSTRINGS (cubre variantes de display
+    name como "Click Pedir Online"). Defensa-en-profundidad.
+
+    Returns:
+        {"status": "rejected", "reason": str}                  si esta protegida.
+        {"status": "success",  "conversion_action_id": str}    si se desactivo.
+        {"status": "error",    "message": str}                 si la API fallo.
+    """
     if conversion_name in PROTECTED_CONVERSIONS or any(s in conversion_name.lower() for s in PROTECTED_SUBSTRINGS):
         return {"status": "rejected", "reason": f"'{conversion_name}' esta protegida y no puede desactivarse"}
     try:

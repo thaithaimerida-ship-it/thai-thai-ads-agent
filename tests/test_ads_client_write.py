@@ -118,8 +118,25 @@ def test_disable_protected_conversion_rejected():
     from engine.ads_client import disable_conversion_action
 
     mock_client = MagicMock()
-    result = disable_conversion_action(mock_client, "4021070209", "999", "reserva_completada")
+    result = disable_conversion_action(mock_client, "4021070209", "999", "reserva_completada_directa")
     assert result["status"] == "rejected"
+    mock_client.get_service.assert_not_called()
+
+
+def test_disable_primary_conversions_rejected():
+    """click_pedir_online y click_whatsapp son Primarias del CLAUDE.md (NO TOCAR).
+
+    Sin estos asserts, una regresión silenciosa en PROTECTED_CONVERSIONS dejaría
+    al motor LLM y a cualquier endpoint con permiso desactivar conversiones de
+    dinero real. Cubre los 2 nombres snake_case con los que estas conversiones
+    viven en Google Ads (el check substring case-insensitive no cubre variantes
+    con espacios — se documentó la limitación en disable_conversion_action).
+    """
+    from engine.ads_client import disable_conversion_action
+    mock_client = MagicMock()
+    for name in ("click_pedir_online", "click_whatsapp"):
+        result = disable_conversion_action(mock_client, "4021070209", "999", name)
+        assert result["status"] == "rejected", f"'{name}' should be protected"
     mock_client.get_service.assert_not_called()
 
 
