@@ -273,6 +273,8 @@ from routes.gloriafood_webhook import router as gloriafood_router
 app.include_router(gloriafood_router)
 from routes.negativos_ui import router as negativos_ui_router
 app.include_router(negativos_ui_router)
+from routes.presupuestos import router as presupuestos_router
+app.include_router(presupuestos_router)
 
 # Strategy functions delegated to agents/strategist.py
 from agents.strategist import Strategist as _Strategist
