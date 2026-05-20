@@ -450,6 +450,18 @@ BUDGET_CHANGE_MIN_DAILY_MXN = 20.0
 # Protege contra doble corte cuando el operador ya hizo el cambio manualmente.
 BUDGET_CHANGE_DRIFT_TOLERANCE_PCT = 0.10
 
+# ============================================================================
+# DEDUP DE RECOMENDACIONES AI (engine/ai_recommendations.py)
+#
+# Evita re-proponer la misma (action_type, campaign_id [, key]) si la propuesta
+# anterior aún está activa o se ejecutó/rechazó/pospuso recientemente.
+# Lógica completa en engine.memory.MemorySystem.check_decision_dedup.
+# ============================================================================
+DEDUP_PENDING_DAYS = int(_os.getenv("DEDUP_PENDING_DAYS", "7"))
+DEDUP_EXECUTED_HOURS = int(_os.getenv("DEDUP_EXECUTED_HOURS", "72"))
+DEDUP_REJECTED_DAYS = int(_os.getenv("DEDUP_REJECTED_DAYS", "14"))
+DEDUP_POSTPONED_DAYS = int(_os.getenv("DEDUP_POSTPONED_DAYS", "3"))
+
 # URL base para los links de aprobación en el correo
 # En Cloud Run: https://thai-thai-ads-agent-624172071613.us-central1.run.app
 # En local: http://localhost:8080

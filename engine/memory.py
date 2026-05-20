@@ -204,6 +204,67 @@ class MemorySystem:
                 (decision_id,)
             )
 
+    def check_decision_dedup(
+        self,
+        action_type: str,
+        campaign_id: str,
+        key: Optional[str] = None,
+    ) -> tuple:
+        """Decide si una recomendación nueva debe insertarse o suprimirse.
+
+        El "key" es la dimensión extra que distingue dos decisiones del mismo
+        (action_type, campaign_id):
+          - scale/reduce  → key=None  (solo una propuesta de budget activa por campaña)
+          - negative      → key=keyword
+          - quality_alert → key=alert_type
+
+        Returns:
+            (should_insert: bool, existing_id: int | None, reason: str)
+              - (True,  None,     "no_prior")        → insertar, sin precedente
+              - (True,  prior_id, "prior_expired")   → insertar, precedente caducó
+              - (False, prior_id, "<estado>_<edad>") → suprimir, hay propuesta activa/reciente
+        """
+        from config.agent_config import (
+            DEDUP_PENDING_DAYS,
+            DEDUP_EXECUTED_HOURS,
+            DEDUP_REJECTED_DAYS,
+            DEDUP_POSTPONED_DAYS,
+        )
+        if action_type == "negative" and key is not None:
+            where_key = " AND keyword = ?"
+            params = (action_type, campaign_id, key)
+        elif action_type == "quality_alert" and key is not None:
+            # No hay columna nativa para alert_type — vive en evidence_json.
+            # LIKE es suficiente para V1; V2 podría agregar columna alert_type.
+            where_key = " AND evidence_json LIKE ?"
+            params = (action_type, campaign_id, f'%"alert_type": "{key}"%')
+        else:
+            where_key = ""
+            params = (action_type, campaign_id)
+        sql = f"""
+            SELECT id, executed, approved_at, rejected_at, postponed_at,
+                   (julianday('now') - julianday(created_at)) AS age_days
+              FROM autonomous_decisions
+             WHERE action_type = ? AND campaign_id = ?{where_key}
+             ORDER BY created_at DESC
+             LIMIT 1
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(sql, params).fetchone()
+        if not row:
+            return (True, None, "no_prior")
+        id_, executed, approved_at, rejected_at, postponed_at, age_days = row
+        age_hours = age_days * 24.0
+        if rejected_at and age_days < DEDUP_REJECTED_DAYS:
+            return (False, id_, f"rejected_{age_days:.1f}d_ago")
+        if postponed_at and age_days < DEDUP_POSTPONED_DAYS:
+            return (False, id_, f"postponed_{age_days:.1f}d_ago")
+        if executed == 1 and age_hours < DEDUP_EXECUTED_HOURS:
+            return (False, id_, f"executed_{age_hours:.0f}h_ago_learning_phase")
+        if executed == 0 and not (rejected_at or postponed_at) and age_days < DEDUP_PENDING_DAYS:
+            return (False, id_, f"pending_{age_days:.1f}d_ago")
+        return (True, id_, "prior_expired")
+
     # ------------------------------------------------------------------ Fase 2
 
     def sweep_expired_proposals(self) -> int:
