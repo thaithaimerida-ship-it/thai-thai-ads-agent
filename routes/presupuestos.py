@@ -12,15 +12,25 @@ Solo muestra recomendaciones de las categorías `scale` y `reduce` (decisión #5
 del operador: `negative` → /negativos, `quality_alert` → email).
 """
 import json
+import os
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 from engine.db_sync import get_db_path
+from routes.auth_token import require_token
 
 router = APIRouter(tags=["presupuestos"])
+
+
+class ApplyBudgetChangesRequest(BaseModel):
+    """Body del POST /apply-budget-changes. SOLO decision_ids — el new_budget_mxn
+    vive en autonomous_decisions y el handler lo lee de ahí (anti-tampering)."""
+
+    decision_ids: list[int] = Field(min_length=1, max_length=20)
 
 
 _PAGE = """<!doctype html>
@@ -259,3 +269,241 @@ def _safe_json(raw):
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return {}
+
+
+@router.post("/apply-budget-changes", dependencies=[Depends(require_token)])
+async def apply_budget_changes(request: ApplyBudgetChangesRequest) -> dict:
+    """Aplica recomendaciones AI de scale/reduce a Google Ads.
+
+    Auth: header X-API-Token (require_token).
+    Input: {decision_ids: [int]}. SOLO IDs — el new_budget_mxn se lee de DB
+    (anti-tampering: cliente NUNCA dicta el valor del cambio).
+
+    Por cada decision_id:
+      1. SELECT fila completa de autonomous_decisions.
+      2. Invariantes de estado: action_type ∈ {scale,reduce}, decision='proposed',
+         executed=0, no rejected_at, no postponed_at.
+      3. Lee new_budget_mxn de evidence_json (omite si corrupto).
+      4. fetch_campaign_budget_info → obtiene budget_resource_name y current.
+      5. verify_budget_still_actionable → guardrails G_campaign/G_shared/G_drift/
+         G_min/G_max_cut (delegado a la función existente del repo).
+      6. update_campaign_budget(validate_only=True) → dry-run.
+      7. update_campaign_budget(validate_only=False) → apply real.
+      8. UPDATE executed=1, approved_at=now + log_agent_action.
+
+    Cualquier falla en cualquier paso de un decision_id va a failed[] o
+    blocked_by_guardrail[]; los demás del batch siguen procesándose.
+
+    TODO drift-guard: el generador (Fase 1-3) no guarda budget_at_proposal_mxn
+    en evidence_json — usamos current como fallback, lo que efectivamente
+    desactiva G_drift. Issue separado para que ai_recommendations.py capture
+    y persista el budget actual al generar la propuesta.
+    """
+    from engine.ads_client import (
+        fetch_campaign_budget_info,
+        get_ads_client,
+        log_agent_action,
+        update_campaign_budget,
+        verify_budget_still_actionable,
+    )
+
+    customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+    if not customer_id:
+        raise HTTPException(
+            status_code=500,
+            detail="GOOGLE_ADS_TARGET_CUSTOMER_ID no configurado en el entorno",
+        )
+
+    try:
+        client = get_ads_client()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo instanciar Google Ads client: {exc}",
+        )
+
+    applied: list[dict] = []
+    failed: list[dict] = []
+    blocked_by_guardrail: list[dict] = []
+    db_path = get_db_path()
+
+    for decision_id in request.decision_ids:
+        # ── Paso 1: SELECT fila ───────────────────────────────────────────
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM autonomous_decisions WHERE id = ?",
+                (decision_id,),
+            ).fetchone()
+
+        if not row:
+            failed.append({"decision_id": decision_id, "reason": "not_found"})
+            continue
+
+        # ── Paso 2: Invariantes de estado ─────────────────────────────────
+        if row["action_type"] not in ("scale", "reduce"):
+            failed.append({
+                "decision_id": decision_id,
+                "reason": "wrong_action_type",
+                "detail": row["action_type"],
+            })
+            continue
+        if row["executed"] == 1:
+            failed.append({"decision_id": decision_id, "reason": "already_executed"})
+            continue
+        if row["rejected_at"] is not None:
+            failed.append({"decision_id": decision_id, "reason": "rejected"})
+            continue
+        if row["postponed_at"] is not None:
+            failed.append({"decision_id": decision_id, "reason": "postponed"})
+            continue
+        if row["decision"] != "proposed":
+            failed.append({
+                "decision_id": decision_id,
+                "reason": "wrong_decision_state",
+                "detail": row["decision"],
+            })
+            continue
+
+        # ── Paso 3: Extraer new_budget_mxn de evidence (DB es source-of-truth)
+        evidence = _safe_json(row["evidence_json"])
+        new_budget_mxn = evidence.get("new_budget_mxn") if isinstance(evidence, dict) else None
+        if not isinstance(new_budget_mxn, (int, float)) or new_budget_mxn <= 0:
+            failed.append({
+                "decision_id": decision_id,
+                "reason": "invalid_evidence",
+                "detail": "missing or invalid new_budget_mxn in evidence_json",
+            })
+            continue
+
+        # ── Paso 4: Fetch budget actual ───────────────────────────────────
+        budget_info = fetch_campaign_budget_info(client, customer_id, row["campaign_id"])
+        if "error" in budget_info:
+            failed.append({
+                "decision_id": decision_id,
+                "reason": "budget_fetch_failed",
+                "detail": budget_info["error"],
+            })
+            continue
+        current_budget_mxn = budget_info["current_daily_budget_mxn"]
+        budget_resource_name = budget_info["budget_resource_name"]
+
+        # ── Paso 5: Guardrails (delegado a verify_budget_still_actionable) ─
+        # FIXME drift-guard: ver TODO en docstring del endpoint.
+        budget_at_proposal = evidence.get("budget_at_proposal_mxn", current_budget_mxn)
+        guard_result = verify_budget_still_actionable(
+            client,
+            customer_id,
+            row["campaign_id"],
+            budget_at_proposal,
+            new_budget_mxn,
+        )
+        if not guard_result.get("ok"):
+            blocked_by_guardrail.append({
+                "decision_id": decision_id,
+                "guardrail": guard_result.get("guard", ""),
+                "reason": guard_result.get("reason", ""),
+                "current_budget_mxn": guard_result.get("current_budget_mxn"),
+                "suggested_budget_mxn": new_budget_mxn,
+            })
+            log_agent_action(
+                action_type=f"apply_budget_{row['action_type']}",
+                target=row["campaign_name"] or row["campaign_id"],
+                details_before={"current_budget_mxn": current_budget_mxn},
+                details_after={"new_budget_mxn": new_budget_mxn},
+                status="blocked",
+                google_ads_response=guard_result,
+                db_path=db_path,
+            )
+            continue
+
+        # ── Paso 6: Dry-run (validate_only=True) ──────────────────────────
+        budget_micros = int(new_budget_mxn * 1_000_000)
+        dry_result = update_campaign_budget(
+            client, customer_id, budget_resource_name, budget_micros,
+            validate_only=True,
+        )
+        if dry_result.get("status") != "success":
+            failed.append({
+                "decision_id": decision_id,
+                "reason": "dry_run_failed",
+                "detail": dry_result.get("message", ""),
+            })
+            log_agent_action(
+                action_type=f"apply_budget_{row['action_type']}",
+                target=row["campaign_name"] or row["campaign_id"],
+                details_before={"current_budget_mxn": current_budget_mxn},
+                details_after={"new_budget_mxn": new_budget_mxn},
+                status="dry_run_failed",
+                google_ads_response=dry_result,
+                db_path=db_path,
+            )
+            continue
+
+        # ── Paso 7: Apply real (validate_only=False) ──────────────────────
+        real_result = update_campaign_budget(
+            client, customer_id, budget_resource_name, budget_micros,
+            validate_only=False,
+        )
+        if real_result.get("status") != "success":
+            failed.append({
+                "decision_id": decision_id,
+                "reason": "apply_failed",
+                "detail": real_result.get("message", ""),
+            })
+            log_agent_action(
+                action_type=f"apply_budget_{row['action_type']}",
+                target=row["campaign_name"] or row["campaign_id"],
+                details_before={"current_budget_mxn": current_budget_mxn},
+                details_after={"new_budget_mxn": new_budget_mxn},
+                status="apply_failed",
+                google_ads_response=real_result,
+                db_path=db_path,
+            )
+            continue
+
+        # ── Paso 8: Marcar executed + log success ─────────────────────────
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE autonomous_decisions "
+                "SET executed = 1, approved_at = datetime('now') WHERE id = ?",
+                (decision_id,),
+            )
+
+        applied.append({
+            "decision_id": decision_id,
+            "campaign_id": row["campaign_id"],
+            "campaign_name": row["campaign_name"],
+            "action_type": row["action_type"],
+            "old_budget_mxn": current_budget_mxn,
+            "new_budget_mxn": new_budget_mxn,
+        })
+        log_agent_action(
+            action_type=f"apply_budget_{row['action_type']}",
+            target=row["campaign_name"] or row["campaign_id"],
+            details_before={"current_budget_mxn": current_budget_mxn},
+            details_after={"new_budget_mxn": new_budget_mxn},
+            status="success",
+            google_ads_response=real_result,
+            db_path=db_path,
+        )
+
+    if not failed and not blocked_by_guardrail:
+        status = "success"
+    elif applied:
+        status = "partial"
+    else:
+        status = "error"
+
+    return {
+        "status": status,
+        "applied": applied,
+        "failed": failed,
+        "blocked_by_guardrail": blocked_by_guardrail,
+        "summary": {
+            "requested": len(request.decision_ids),
+            "applied": len(applied),
+            "failed": len(failed),
+            "blocked": len(blocked_by_guardrail),
+        },
+    }
