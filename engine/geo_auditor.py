@@ -5,8 +5,8 @@ Módulo oficial del MVP. Dos capas de auditoría:
 
 Capa 1 — detect_geo_issues (por location_id):
   GEO1 — campaña tiene al menos una ubicación NO permitida por location_id.
-  GEO0 — campaña no tiene ninguna restricción geográfica explícita por location_id.
-         Incluye campañas con solo PROXIMITY (has_proximity=True).
+  GEO0 — campaña no tiene ninguna restricción geográfica explícita (ni location_id ni PROXIMITY).
+         Campañas con solo PROXIMITY son OK en Capa 1; Capa 2 valida radio vs política.
 
   Si una campaña tiene Mérida + otra ubicación no permitida → GEO1 (no GEO0).
 

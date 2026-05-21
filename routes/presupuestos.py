@@ -89,8 +89,8 @@ _PAGE = """<!doctype html>
 
   <div id="tableWrap"></div>
 
-  <button id="applyBtn" hidden disabled title="Endpoint POST disponible en Fase 5b">
-    Aplicar seleccionadas (pendiente Fase 5b)
+  <button id="applyBtn" hidden disabled title="Selecciona al menos una recomendacion">
+    Aplicar seleccionadas
   </button>
   <div id="banner" hidden></div>
 </div>
@@ -126,6 +126,123 @@ el("logout").addEventListener("click", function() {
   localStorage.removeItem(TOKEN_KEY); showGate();
 });
 el("load").addEventListener("click", load);
+el("applyBtn").addEventListener("click", applySelected);
+el("tableWrap").addEventListener("change", function(ev) {
+  if (ev.target && ev.target.classList.contains("pick")) updateApplyState();
+});
+
+function selectedIds() {
+  var checks = document.querySelectorAll("#tableWrap input.pick:checked");
+  var ids = [];
+  for (var i = 0; i < checks.length; i++) {
+    var n = parseInt(checks[i].getAttribute("data-id"), 10);
+    if (!isNaN(n)) ids.push(n);
+  }
+  return ids;
+}
+
+function updateApplyState() {
+  var btn = el("applyBtn");
+  if (btn.hidden) return;
+  var ids = selectedIds();
+  var token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    btn.disabled = true;
+    btn.title = "Falta token: usa 'borrar token' y pega tu token para habilitar apply";
+    btn.textContent = "Aplicar seleccionadas (sin token)";
+    return;
+  }
+  if (ids.length === 0) {
+    btn.disabled = true;
+    btn.title = "Selecciona al menos una recomendacion";
+    btn.textContent = "Aplicar seleccionadas";
+    return;
+  }
+  if (ids.length > 20) {
+    btn.disabled = true;
+    btn.title = "Maximo 20 por lote";
+    btn.textContent = "Aplicar " + ids.length + " (max 20)";
+    return;
+  }
+  btn.disabled = false;
+  btn.title = "";
+  btn.textContent = "Aplicar " + ids.length + " seleccionada" + (ids.length === 1 ? "" : "s");
+}
+
+function showBanner(kind, html) {
+  var b = el("banner");
+  b.className = kind === "ok" ? "" : kind;
+  b.innerHTML = html;
+  b.hidden = false;
+}
+
+function applySelected() {
+  var btn = el("applyBtn");
+  var ids = selectedIds();
+  var token = localStorage.getItem(TOKEN_KEY);
+  if (!token || ids.length === 0 || ids.length > 20) { updateApplyState(); return; }
+
+  btn.disabled = true;
+  btn.textContent = "Aplicando...";
+  el("banner").hidden = true;
+
+  fetch("/apply-budget-changes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Token": token },
+    body: JSON.stringify({ decision_ids: ids }),
+  })
+    .then(function(r) {
+      return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; });
+    })
+    .then(function(res) {
+      if (!res.ok) {
+        var msg = (res.data && (res.data.detail || res.data.message)) || ("HTTP " + res.status);
+        showBanner("err", "Error: " + escapeHtml(msg));
+        updateApplyState();
+        return;
+      }
+      renderResult(res.data);
+      load();
+    })
+    .catch(function(e) {
+      showBanner("err", "Error de red: " + escapeHtml(e.message));
+      updateApplyState();
+    });
+}
+
+function renderResult(d) {
+  var s = d.summary || {};
+  var kind = d.status === "success" ? "ok" :
+             d.status === "partial" ? "warn" : "err";
+  var parts = ["<strong>" + escapeHtml(d.status || "?") + "</strong>" +
+               " &mdash; solicitadas: " + (s.requested || 0) +
+               ", aplicadas: " + (s.applied || 0) +
+               ", fallidas: " + (s.failed || 0) +
+               ", bloqueadas: " + (s.blocked || 0)];
+  if (d.applied && d.applied.length) {
+    var lines = d.applied.map(function(a) {
+      return "✓ " + escapeHtml(a.campaign_name || a.campaign_id) +
+             ": $" + Number(a.old_budget_mxn).toFixed(2) +
+             " → $" + Number(a.new_budget_mxn).toFixed(2);
+    });
+    parts.push("<ul><li>" + lines.join("</li><li>") + "</li></ul>");
+  }
+  if (d.failed && d.failed.length) {
+    var fl = d.failed.map(function(f) {
+      return "id " + f.decision_id + ": " + escapeHtml(f.reason || "") +
+             (f.detail ? " (" + escapeHtml(f.detail) + ")" : "");
+    });
+    parts.push("<div>Fallaron:<ul><li>" + fl.join("</li><li>") + "</li></ul></div>");
+  }
+  if (d.blocked_by_guardrail && d.blocked_by_guardrail.length) {
+    var bl = d.blocked_by_guardrail.map(function(b) {
+      return "id " + b.decision_id + ": " + escapeHtml(b.guardrail || "") +
+             " — " + escapeHtml(b.reason || "");
+    });
+    parts.push("<div>Bloqueadas:<ul><li>" + bl.join("</li><li>") + "</li></ul></div>");
+  }
+  showBanner(kind, parts.join(""));
+}
 
 function load() {
   el("meta").textContent = "Cargando...";
@@ -173,7 +290,7 @@ function render() {
       currentCell = "<td class='num " + driftCls + "'>$" + Number(r.current_budget_mxn).toFixed(2) + "</td>";
     }
     html += "<tr class='" + rowClass + "' data-id='" + r.id + "'>" +
-      "<td><input type='checkbox' disabled title='Disponible en Fase 5b'></td>" +
+      "<td><input type='checkbox' class='pick' data-id='" + r.id + "'></td>" +
       "<td>" + escapeHtml(r.campaign_name) + " <small>(" + escapeHtml(r.campaign_id) + ")</small></td>" +
       "<td class='" + actionClass + "'>" + actionLabel + "</td>" +
       currentCell +
@@ -186,6 +303,7 @@ function render() {
   html += "</tbody></table>";
   wrap.innerHTML = html;
   el("applyBtn").hidden = false;
+  updateApplyState();
 }
 
 init();

@@ -153,13 +153,16 @@ def test_smart_no_location_geo0_geo_issue():
     assert i["final_operational_state"] == "geo_issue"
 
 
-def test_smart_proximity_only_geo0():
-    """SMART con solo PROXIMITY → GEO0, has_proximity=True."""
+def test_smart_proximity_only_is_correct_unverified():
+    """SMART con solo PROXIMITY → correct (OK), no GEO0. Capa 1 no evalua radio;
+    Capa 2 (detect_geo_issues_by_policy) valida PROXIMITY vs politica de objetivo."""
     result = detect_geo_issues(_entry(channel_type="SMART", location_ids=[], has_proximity=True), ALLOWED)
-    i = result["issues"][0]
-    assert i["signal"]       == "GEO0"
-    assert i["has_proximity"] is True
-    assert "PROXIMITY" in i["reason"]
+    assert result["issues"] == []
+    c = result["correct"][0]
+    assert c["signal"]                  == "OK"
+    assert c["has_proximity"]           is True
+    assert c["final_operational_state"] == "unverified"
+    assert "PROXIMITY" in c["reason"]
 
 
 def test_smart_geo1_has_smart_note():
