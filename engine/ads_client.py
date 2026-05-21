@@ -1890,7 +1890,7 @@ def fetch_ad_health(client, customer_id: str) -> list:
     Lee Ad Strength, estado y política de anuncios de todas las campañas activas.
     Para Smart Campaigns sin RSA, ad_strength = None. Nunca lanza excepción.
     """
-    _STRENGTH_MAP = {0: None, 1: "POOR", 2: "AVERAGE", 3: "GOOD", 4: "EXCELLENT", 5: "NO_ADS"}
+    _STRENGTH_MAP = {0: None, 1: None, 2: "PENDING", 3: "NO_ADS", 4: "POOR", 5: "AVERAGE", 6: "GOOD", 7: "EXCELLENT"}
 
     query = """
         SELECT
