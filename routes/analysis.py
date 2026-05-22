@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from engine.db_sync import get_db_path
 from routes.auth_token import require_token
 from engine.risk_classifier import get_campaign_thresholds
+from engine.search_term_classifier import classify_search_term
 
 router = APIRouter(tags=["analysis"])
 logger = logging.getLogger(__name__)
@@ -187,12 +188,12 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
     """
     Lista los search terms de la cuenta para el rango indicado.
 
-    Campos por termino: query, campaign_name, clicks, impressions, cost,
-    conversions y negative_candidate (candidato a negativo: gasto > $10 MXN
-    y 0 conversiones).
-
-    Ordenado por gasto descendente, maximo 30 terminos.
-    Endpoint ligero (solo Google Ads) pensado para el monitor de Apps Script.
+    Fase 1: cada termino se clasifica por CONTENIDO (engine.search_term_classifier)
+    en rojo|amarillo|verde|blanco con confidence, false_positive_risk, reason,
+    suggested_negative, suggested_match_type y auto_apply (SIEMPRE False).
+    El gasto NO clasifica; solo acota el pool a top-100 y ordena dentro de grupo.
+    Incluye shim retrocompatible (negative_candidate/competitor_term) para el
+    monitor pre-Fase 1. Endpoint read-only (solo Google Ads).
     """
     try:
         date_range = date_range.strip().upper()
@@ -208,31 +209,44 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
         client = engine["get_ads_client"]()
         raw_terms = engine["fetch_search_term_data"](client, target_id, date_range)
 
+        # Pool top-100 por gasto. Fase 1: el gasto solo acota el pool (no clasifica).
+        # NOTA Fase 1: top-100 NO resuelve irrelevantes de gasto muy bajo;
+        # la acumulacion historica 7/30/90d queda para Fase 2.
+        raw_top = sorted(raw_terms, key=lambda st: st.get("cost_micros", 0), reverse=True)[:100]
+
+        _GROUP_ORDER = {"rojo": 0, "amarillo": 1, "verde": 2, "blanco": 3}
         formatted = []
-        for st in raw_terms:
+        for st in raw_top:
             cost = st.get("cost_micros", 0) / 1_000_000
             conversions = float(st.get("conversions", 0))
-            formatted.append({
-                "query": st.get("query", ""),
+            term = classify_search_term(st.get("query", ""), cost, conversions)
+            term.update({
                 "campaign_name": st.get("campaign_name", ""),
                 "campaign_id": str(st.get("campaign_id", "")),
                 "clicks": int(st.get("clicks", 0)),
                 "impressions": int(st.get("impressions", 0)),
                 "cost": round(cost, 2),
                 "conversions": round(conversions, 1),
-                "negative_candidate": _is_negative_candidate(st.get("query", ""), cost, conversions),
-                "competitor_term": _is_competitor_term(st.get("query", ""), conversions),
+                # Shim retrocompatible para el monitor pre-Fase 1:
+                "negative_candidate": term["classification"] == "rojo",
+                "competitor_term": term["classification"] == "amarillo",
             })
+            formatted.append(term)
 
-        formatted.sort(key=lambda t: t["cost"], reverse=True)
-        formatted = formatted[:30]
+        # Orden final: rojos -> amarillos -> verdes/blancos; dentro de grupo, gasto desc.
+        formatted.sort(key=lambda t: (_GROUP_ORDER.get(t["classification"], 9), -t["cost"]))
+
+        counts = {k: sum(1 for t in formatted if t["classification"] == k)
+                  for k in ("rojo", "amarillo", "verde", "blanco")}
 
         return {
             "status": "success",
             "date_range": date_range,
             "total": len(formatted),
-            "negative_candidates": sum(1 for t in formatted if t["negative_candidate"]),
-            "competitor_terms": sum(1 for t in formatted if t["competitor_term"]),
+            "counts": counts,
+            # Shim retrocompatible:
+            "negative_candidates": counts["rojo"],
+            "competitor_terms": counts["amarillo"],
             "search_terms": formatted,
         }
     except Exception as e:

@@ -1,0 +1,26 @@
+[
+  {
+    "canonical": "hacienda teya",
+    "aliases": ["hacienda teya", "restaurante hacienda teya"],
+    "category": "restaurante_ajeno",
+    "confidence": "alta",
+    "suggested_match_type": "EXACT",
+    "auto_apply": false
+  },
+  {
+    "canonical": "querreke",
+    "aliases": ["querreke"],
+    "category": "restaurante_ajeno",
+    "confidence": "alta",
+    "suggested_match_type": "EXACT",
+    "auto_apply": false
+  },
+  {
+    "canonical": "los motuleños y mas",
+    "aliases": ["los motuleños", "los motuleños y mas", "los motuleños y más"],
+    "category": "restaurante_ajeno",
+    "confidence": "alta",
+    "suggested_match_type": "EXACT",
+    "auto_apply": false
+  }
+]
