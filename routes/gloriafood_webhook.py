@@ -245,6 +245,43 @@ def _send_google_ads_conversion(parsed_order: dict):
         return False
 
 
+def _send_meta_capi_purchase(parsed_order: dict):
+    """
+    Envía un evento Purchase a Meta Conversions API (server-side).
+    Dedup con el pixel del browser via event_id = gloriafood_order_id.
+
+    Import LAZY a propósito: meta_capi lee META_PIXEL_ID / META_CAPI_ACCESS_TOKEN
+    a nivel módulo, así que un fallo de config queda contenido en este paso y NO
+    tumba el webhook entero. Nunca lanza — devuelve True/False como _send_google_ads_conversion.
+    """
+    order_id = parsed_order.get("gloriafood_order_id", "?")
+    try:
+        import meta_capi
+
+        # client_name viene combinado "first last"; lo separamos para fn/ln
+        name_parts = (parsed_order.get("client_name") or "").split()
+        first_name = name_parts[0] if name_parts else None
+        last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else None
+
+        order = {
+            "order_id": parsed_order["gloriafood_order_id"],
+            "value": parsed_order["total_price_mxn"],
+            "currency": "MXN",
+            "email": parsed_order.get("client_email") or None,
+            "phone": parsed_order.get("client_phone") or None,
+            "first_name": first_name,
+            "last_name": last_name,
+            "country": "MX",
+        }
+        result = meta_capi.send_purchase(order)
+        logger.info("[META %s] Purchase enviado: events_received=%s",
+                    order_id, result.get("events_received"))
+        return True
+    except Exception as e:
+        logger.error("[META %s] Error Meta CAPI: %s", order_id, e)
+        return False
+
+
 @router.post("/webhook/gloriafood")
 async def receive_gloriafood_order(request: Request):
     """
@@ -301,11 +338,15 @@ async def receive_gloriafood_order(request: Request):
         # 2. Enviar conversión a Google Ads
         ads_ok = _send_google_ads_conversion(parsed)
 
+        # 3. Enviar Purchase a Meta Conversions API (server-side, dedup por order_id)
+        meta_ok = _send_meta_capi_purchase(parsed)
+
         results.append({
             "order_id": parsed["gloriafood_order_id"],
             "total": parsed["total_price_mxn"],
             "db_saved": db_ok,
             "ads_conversion_sent": ads_ok,
+            "meta_capi_sent": meta_ok,
         })
 
         logger.info(

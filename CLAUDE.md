@@ -186,6 +186,8 @@ gcloud run services update thai-thai-ads-agent \
 | `BUDGET_CHANGE_ENABLED` | `true` |
 | `CALLMEBOT_PHONE` | `5219999317457` |
 | `CALLMEBOT_APIKEY` | `8710152` |
+| `META_PIXEL_ID` | ID del pixel de Meta (Conversions API) — usado por `meta_capi.py` |
+| `META_CAPI_ACCESS_TOKEN` | Token de acceso Meta Conversions API — usado por `meta_capi.py` |
 
 ### Renovar refresh token Google Ads
 Si aparece `invalid_grant` en logs:
