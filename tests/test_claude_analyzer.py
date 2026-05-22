@@ -1,14 +1,7 @@
 import sys
 sys.path.insert(0, ".")
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from engine.analyzer import _call_claude_analysis, analyze_campaign_data
-
-def _make_mock_response(json_str):
-    mock_response = MagicMock()
-    mock_content = MagicMock()
-    mock_content.text = json_str
-    mock_response.content = [mock_content]
-    return mock_response
 
 def test_claude_analysis_returns_dict():
     json_str = '{"summary": {"spend": 100.0, "conversions": 10, "cpa": 10.0, "cpa_real": 12.0, "ctr": 1.5, "conversion_rate": 0.5, "success_index": 80, "success_label": "Bueno", "estimated_waste": 0.0, "alerts_count": 0, "recommended_actions_count": 1}, "executive_summary": {"headline": "Test", "bullets": [], "recommended_focus_today": "Test"}, "business_data": {}, "landing_page": {}, "campaigns": [], "proposals": [], "market_opportunities": [], "alerts": []}'
