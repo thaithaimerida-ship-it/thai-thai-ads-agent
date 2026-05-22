@@ -106,6 +106,32 @@ async def _run_audit_task(session_id: str, run_type: str = "daily") -> None:
         keywords = engine["fetch_keyword_data"](client, target_id)
         search_terms = engine["fetch_search_term_data"](client, target_id)
 
+        # ── Fase 2: snapshot historico de search terms (lista COMPLETA, no top-100) ──
+        # Solo persiste/agrega; NO reclasifica ni aplica negativos (auto_apply=False).
+        # Guarded: un fallo de snapshot NUNCA rompe la auditoria.
+        try:
+            from engine.search_term_classifier import classify_search_term as _classify_st
+            from engine.search_term_history import snapshot_terms as _snapshot_st
+            _st_classified = []
+            for _st in (search_terms or []):
+                _cost = _st.get("cost_micros", 0) / 1_000_000
+                _conv = float(_st.get("conversions", 0) or 0)
+                _term = _classify_st(_st.get("query", ""), _cost, _conv)
+                _term.update({
+                    "query_raw": _st.get("query", ""),
+                    "campaign_id": str(_st.get("campaign_id", "")),
+                    "campaign_name": _st.get("campaign_name", ""),
+                    "cost": round(_cost, 2),
+                    "conversions": round(_conv, 1),
+                    "clicks": int(_st.get("clicks", 0) or 0),
+                    "impressions": int(_st.get("impressions", 0) or 0),
+                })
+                _st_classified.append(_term)
+            _snap_res = _snapshot_st(_st_classified)
+            logger.info("Fase2 snapshot search terms: %s", _snap_res)
+        except Exception as _snap_exc:
+            logger.warning("Fase2 snapshot search terms fallo (no bloquea auditoria): %s", _snap_exc)
+
         # Totales 24h para Sección 1 del correo consolidado
         _ads_24h = {
             "spend_mxn":   round(sum(c.get("cost_micros", 0) / 1_000_000 for c in campaigns), 2),

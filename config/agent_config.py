@@ -117,6 +117,19 @@ CAMPAIGN_ID_TYPE_MAP: dict = {
     # "22839241090": "delivery",
 }
 
+
+# ============================================================================
+# FASE 2: HISTORIAL / ACUMULACIÓN DE SEARCH TERMS
+# Umbrales conservadores. Fase 2 NO reclasifica (la clasificacion por contenido
+# es Fase 1); solo re-prioriza rojos recurrentes/acumulados de bajo gasto.
+# ============================================================================
+SEARCH_TERM_HISTORY_RETENTION_DAYS = 120
+SEARCH_TERM_ACCUM_MIN_DISTINCT_DAYS_30D = 3      # >=3 dias en 30d -> acumulacion
+SEARCH_TERM_ACCUM_MIN_DISTINCT_WEEKS_90D = 2     # >=2 semanas en 90d -> recurrente
+SEARCH_TERM_ACCUM_MIN_COST_30D = 15.0            # MXN acumulados en 30d (rojos alta confianza)
+SEARCH_TERM_ACCUMULATED_MAX_ROWS = 10            # tope de filas accumulated_reds (anti-saturacion)
+
+
 # ============================================================================
 # FASE SMALL MODE: CLASIFICACIÓN FUNCIONAL DINÁMICA
 # Base estructural para cuentas pequeñas. En Fase 1 NO cambia la ejecución real;

@@ -15,7 +15,8 @@ from pydantic import BaseModel
 from engine.db_sync import get_db_path
 from routes.auth_token import require_token
 from engine.risk_classifier import get_campaign_thresholds
-from engine.search_term_classifier import classify_search_term
+from engine.search_term_classifier import classify_search_term, _normalize
+from engine.search_term_history import aggregate_windows, accumulated_reds
 
 router = APIRouter(tags=["analysis"])
 logger = logging.getLogger(__name__)
@@ -236,6 +237,19 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
         # Orden final: rojos -> amarillos -> verdes/blancos; dentro de grupo, gasto desc.
         formatted.sort(key=lambda t: (_GROUP_ORDER.get(t["classification"], 9), -t["cost"]))
 
+        # Fase 2: enriquecer con ventanas historicas + acumulados (aditivo, retrocompat).
+        # Solo LEE el historial local (read-only respecto a Google Ads).
+        _norms = [_normalize(t["query"]) for t in formatted]
+        _agg = aggregate_windows(_norms)
+        for t in formatted:
+            a = _agg.get(_normalize(t["query"]), {})
+            t["cost_7d"] = a.get("cost_7d", 0.0)
+            t["cost_30d"] = a.get("cost_30d", 0.0)
+            t["cost_90d"] = a.get("cost_90d", 0.0)
+            t["distinct_days_30d"] = a.get("distinct_days_30d", 0)
+            t["distinct_weeks_90d"] = a.get("distinct_weeks_90d", 0)
+            t["recurrent"] = a.get("distinct_weeks_90d", 0) >= 2
+
         counts = {k: sum(1 for t in formatted if t["classification"] == k)
                   for k in ("rojo", "amarillo", "verde", "blanco")}
 
@@ -248,6 +262,8 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
             "negative_candidates": counts["rojo"],
             "competitor_terms": counts["amarillo"],
             "search_terms": formatted,
+            # Fase 2: rojos recurrentes/acumulados (aditivo, tope 10). auto_apply=False.
+            "accumulated_reds": accumulated_reds(today_top100_norms=_norms),
         }
     except Exception as e:
         import traceback
