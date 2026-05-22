@@ -270,6 +270,66 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
         return {"status": "error", "message": str(e), "details": traceback.format_exc()}
 
 
+@router.post("/snapshot-search-terms", dependencies=[Depends(require_token)])
+async def snapshot_search_terms() -> dict:
+    """Snapshot diario READ-ONLY de search terms para el historial Fase 2.1.
+
+    Lee YESTERDAY de Google Ads, clasifica con Fase 1 y persiste via snapshot_terms,
+    estampando snapshot_date = ayer (America/Merida) -> evita doble conteo (un dia
+    completo por corrida, NUNCA ventana multi-dia). Protegido con X-API-Token.
+
+    NO ejecuta run_autonomous_audit, NO toca presupuestos, NO aplica negativos,
+    NO manda correo, NO ejecuta BA1/BA2 ni recomendaciones. Solo LEE Google Ads
+    (fetch_search_term_data) y escribe su propio SQLite/GCS via snapshot_terms.
+    """
+    from datetime import timedelta
+    from engine.search_term_history import snapshot_terms
+    try:
+        from zoneinfo import ZoneInfo
+        _yesterday = (datetime.now(ZoneInfo("America/Merida")) - timedelta(days=1)).strftime("%Y-%m-%d")
+    except Exception:
+        _yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    try:
+        engine = _get_engine()
+        if not engine:
+            return {"status": "error", "message": "Engine not available", "snapshot_date": _yesterday}
+        customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        client = engine["get_ads_client"]()
+        raw_terms = engine["fetch_search_term_data"](client, customer_id, "YESTERDAY")
+
+        classified = []
+        for st in (raw_terms or []):
+            cost = st.get("cost_micros", 0) / 1_000_000
+            conv = float(st.get("conversions", 0) or 0)
+            term = classify_search_term(st.get("query", ""), cost, conv)
+            term.update({
+                "query_raw": st.get("query", ""),
+                "campaign_id": str(st.get("campaign_id", "")),
+                "campaign_name": st.get("campaign_name", ""),
+                "cost": round(cost, 2),
+                "conversions": round(conv, 1),
+                "clicks": int(st.get("clicks", 0) or 0),
+                "impressions": int(st.get("impressions", 0) or 0),
+            })
+            classified.append(term)
+
+        res = snapshot_terms(classified, snapshot_date=_yesterday)
+        return {
+            "status": "skipped" if res.get("skipped_reason") else "success",
+            "date_range": "YESTERDAY",
+            "snapshot_date": _yesterday,
+            "inserted": res.get("inserted", 0),
+            "ignored": res.get("ignored", 0),
+            "pruned": res.get("pruned", 0),
+            "gcs_synced": res.get("gcs_synced", False),
+            "skipped_reason": res.get("skipped_reason"),
+        }
+    except Exception as e:
+        logger.error("snapshot-search-terms fallo: %s", e)
+        return {"status": "error", "message": str(e), "snapshot_date": _yesterday}
+
+
 @router.get("/ads-report")
 async def ads_report(date_range: str = "LAST_7_DAYS"):
     """
