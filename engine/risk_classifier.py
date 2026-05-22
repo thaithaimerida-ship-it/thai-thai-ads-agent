@@ -71,11 +71,12 @@ def get_campaign_type(campaign_name: str, campaign_id: str = None) -> str:
        — permite override sin depender del nombre, útil si el nombre cambia.
     2. Match por nombre (case-insensitive, substrings).
 
-    Tipos soportados: 'delivery', 'reservaciones', 'local', 'default'
+    Tipos soportados: 'delivery', 'delivery_search', 'reservaciones', 'local', 'default'
 
     Nomenclatura actual de campañas:
       - "Thai Mérida - Local"        → local
       - "Thai Mérida - Delivery"     → delivery
+      - "Thai Mérida - Delivery Search"→ delivery_search
       - "Thai Mérida - Reservaciones"→ reservaciones
       - "Thai Mérida" (pre-rename)   → local (fallback — es la campaña base del restaurante)
       - "Restaurant Thai On Line"    → delivery (pre-rename legacy)
@@ -86,6 +87,9 @@ def get_campaign_type(campaign_name: str, campaign_id: str = None) -> str:
 
     # 2. Match por nombre
     name = (campaign_name or "").lower()
+
+    if "delivery search" in name:
+        return "delivery_search"
 
     if "delivery" in name or "pad thai" in name or "on line" in name:
         return "delivery"

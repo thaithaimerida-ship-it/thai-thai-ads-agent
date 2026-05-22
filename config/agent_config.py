@@ -64,6 +64,16 @@ CAMPAIGN_TYPE_CONFIG = {
         "ag1_min_clicks":          20,
         "ag1_min_days_protection": 14,
     },
+    "delivery_search": {
+        "cpa_ideal":          50.0,
+        "cpa_max":            70.0,   # tolerancia > delivery directo: search tiene CPC mas alto
+        "cpa_critical":      100.0,
+        "min_spend_to_block": 70.0,
+        # AG1: mismo perfil que delivery (volumen alto, ROI rapido)
+        "ag1_min_spend":           100.0,
+        "ag1_min_clicks":          20,
+        "ag1_min_days_protection": 14,
+    },
     "reservaciones": {
         "cpa_ideal":          50.0,
         "cpa_max":            85.0,

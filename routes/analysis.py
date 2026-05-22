@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from engine.db_sync import get_db_path
 from routes.auth_token import require_token
+from engine.risk_classifier import get_campaign_thresholds
 
 router = APIRouter(tags=["analysis"])
 logger = logging.getLogger(__name__)
@@ -354,19 +355,25 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
                 effective_conversions = conversions
             effective_cpa = spend / effective_conversions if effective_conversions > 0 else 0
 
-            if effective_conversions == 0 and spend > 100:
+            cfg = get_campaign_thresholds(c.get("name", ""), camp_id)
+            cpa_ideal    = cfg["cpa_ideal"]
+            cpa_max      = cfg["cpa_max"]
+            cpa_critical = cfg["cpa_critical"]
+            min_spend    = cfg["min_spend_to_block"]
+
+            if effective_conversions == 0 and spend > min_spend:
                 semaphore = "critical"
-                alerts = ["Sin conversiones con alto gasto"]
+                alerts = [f"Sin conversiones con gasto ${spend:.2f} (umbral ${min_spend:.0f})"]
                 actions = ["Pausar campaña", "Revisar targeting"]
-            elif effective_cpa > 25:
+            elif effective_cpa > cpa_critical:
                 semaphore = "critical"
-                alerts = [f"CPA ${effective_cpa:.2f} muy sobre target $15"]
+                alerts = [f"CPA ${effective_cpa:.2f} sobre crítico ${cpa_critical:.0f} (ideal ${cpa_ideal:.0f})"]
                 actions = ["Reducir bids", "Revisar keywords"]
-            elif effective_cpa > 20:
+            elif effective_cpa > cpa_max:
                 semaphore = "warning"
-                alerts = [f"CPA ${effective_cpa:.2f} sobre target $15"]
+                alerts = [f"CPA ${effective_cpa:.2f} sobre máximo ${cpa_max:.0f} (ideal ${cpa_ideal:.0f})"]
                 actions = ["Optimizar bids"]
-            elif effective_cpa > 0 and effective_cpa <= 15:
+            elif 0 < effective_cpa <= cpa_ideal:
                 semaphore = "excellent"
                 alerts = []
                 actions = ["Escalar presupuesto"]
