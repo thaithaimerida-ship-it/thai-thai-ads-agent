@@ -77,6 +77,15 @@ AMBIGUOUS_PATTERNS = (
 )
 
 # Ambiguos de FP alto: jamás se sugiere negativo en Fase 1 (p.ej. curry es Thai real).
+GENERIC_RESTAURANT_PATTERNS = (
+    "restaurants near me", "restaurant near me", "restaurante cerca",
+    "restaurantes cerca", "comida cerca",
+)
+
+SUSPECTED_EXTERNAL_ENTITY_PATTERNS = (
+    "el texano",
+)
+
 _HIGH_FP_AMBIGUOUS = ("curry",)
 
 
@@ -120,6 +129,21 @@ def _match_entity(norm: str):
     return None
 
 
+def _phase1_multi_axis_defaults() -> dict:
+    return {
+        "semantic_class": "neutral",
+        "business_intent": "unknown",
+        "entity_status": "unknown",
+        "conversion_quality": "unknown",
+        "recommended_action": "observe",
+        "negative_allowed": False,
+    }
+
+
+def _is_suspected_external_entity(norm: str) -> bool:
+    return _first_match(norm, SUSPECTED_EXTERNAL_ENTITY_PATTERNS) is not None
+
+
 def classify_search_term(query: str, cost: float = 0.0, conversions: float = 0.0) -> dict:
     """Clasifica un search term. Devuelve el objeto JSON de Fase 1.
 
@@ -136,12 +160,15 @@ def classify_search_term(query: str, cost: float = 0.0, conversions: float = 0.0
         "suggested_negative": None,
         "suggested_match_type": None,
         "auto_apply": False,
+        **_phase1_multi_axis_defaults(),
     }
 
     # 1) Marca propia (lo ÚNICO que se protege automáticamente)
     if _first_match(norm, BRAND_PROTECT):
         result.update(classification="blanco", confidence="alta", false_positive_risk="bajo",
-                      reason="marca propia protegida (Thai Thai)")
+                      reason="marca propia protegida (Thai Thai)",
+                      semantic_class="brand_protected", business_intent="own_brand",
+                      entity_status="own_brand", recommended_action="protect")
         return result
 
     # 2) Patrones rojos de alta confianza (ANTES que intención Thai)
@@ -150,7 +177,10 @@ def classify_search_term(query: str, cost: float = 0.0, conversions: float = 0.0
         pat, category = m
         result.update(classification="rojo", confidence="alta", false_positive_risk="bajo",
                       reason=f"patron irrelevante de alta confianza ('{pat}', categoria {category})",
-                      suggested_negative=pat, suggested_match_type="PHRASE")
+                      suggested_negative=pat, suggested_match_type="PHRASE",
+                      semantic_class="red_safe", business_intent="out_of_scope",
+                      entity_status="pattern_red_clear",
+                      recommended_action="candidate_negative")
         return result
 
     # 3) Entidades curadas (restaurantes/marcas ajenas)
@@ -160,17 +190,24 @@ def classify_search_term(query: str, cost: float = 0.0, conversions: float = 0.0
                       false_positive_risk="bajo",
                       reason=f"entidad ajena curada ('{e['canonical']}', categoria {e.get('category', '')})",
                       suggested_negative=e["canonical"],
-                      suggested_match_type=e.get("suggested_match_type", "EXACT"))
+                      suggested_match_type=e.get("suggested_match_type", "EXACT"),
+                      semantic_class="red_safe", business_intent="external_business",
+                      entity_status="curated",
+                      recommended_action="candidate_negative")
         return result
 
     # 4) Intención Thai útil (nunca rojo)
     if _first_match(norm, GREEN_PATTERNS):
         if float(conversions or 0) >= 1:
             result.update(classification="verde", confidence="alta", false_positive_risk="bajo",
-                          reason="intencion Thai clara con conversion")
+                          reason="intencion Thai clara con conversion",
+                          semantic_class="thai_intent", business_intent="thai_food",
+                          entity_status="none", recommended_action="protect")
         else:
             result.update(classification="blanco", confidence="alta", false_positive_risk="bajo",
-                          reason="intencion Thai clara sin conversion (relevante, monitoreado)")
+                          reason="intencion Thai clara sin conversion (relevante, monitoreado)",
+                          semantic_class="thai_intent", business_intent="thai_food",
+                          entity_status="none", recommended_action="protect")
         return result
 
     # 5) Ambiguos (revisar, no negativizar)
@@ -179,6 +216,21 @@ def classify_search_term(query: str, cost: float = 0.0, conversions: float = 0.0
         fp = "alto" if a in _HIGH_FP_AMBIGUOUS else "medio"
         result.update(classification="amarillo", confidence="media", false_positive_risk=fp,
                       reason=f"termino ambiguo ('{a}') — revisar, no negativizar en Fase 1")
+        result.update(semantic_class="ambiguous_useful",
+                      business_intent="generic_restaurant",
+                      entity_status="none", recommended_action="observe")
+        return result
+
+    if _first_match(norm, GENERIC_RESTAURANT_PATTERNS):
+        result.update(semantic_class="ambiguous_useful", business_intent="generic_restaurant",
+                      entity_status="none", recommended_action="observe")
+        return result
+
+    if _is_suspected_external_entity(norm):
+        result.update(semantic_class="external_entity_review",
+                      business_intent="external_business",
+                      entity_status="suspected_external",
+                      recommended_action="review")
         return result
 
     # 6) Resto -> blanco / monitoreado
