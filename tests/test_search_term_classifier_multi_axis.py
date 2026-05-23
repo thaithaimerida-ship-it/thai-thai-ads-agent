@@ -14,6 +14,7 @@ EXPECTED_MULTI_AXIS_FIELDS = {
     "entity_status",
     "conversion_quality",
     "recommended_action",
+    "base_negative_eligible",
     "negative_allowed",
     "suggested_match_type",
     "classification",
@@ -48,7 +49,7 @@ EXPECTED_MULTI_AXIS_FIELDS = {
             {
                 "semantic_class": "red_safe",
                 "business_intent": "out_of_scope",
-                "entity_status": "pattern_red_clear",
+                "entity_status": "clear_red_pattern",
                 "recommended_action": "candidate_negative",
                 "classification": "rojo",
             },
@@ -58,7 +59,7 @@ EXPECTED_MULTI_AXIS_FIELDS = {
             {
                 "semantic_class": "red_safe",
                 "business_intent": "out_of_scope",
-                "entity_status": "pattern_red_clear",
+                "entity_status": "clear_red_pattern",
                 "recommended_action": "candidate_negative",
                 "classification": "rojo",
             },
@@ -68,7 +69,7 @@ EXPECTED_MULTI_AXIS_FIELDS = {
             {
                 "semantic_class": "red_safe",
                 "business_intent": "out_of_scope",
-                "entity_status": "pattern_red_clear",
+                "entity_status": "clear_red_pattern",
                 "recommended_action": "candidate_negative",
                 "classification": "rojo",
             },
@@ -78,7 +79,7 @@ EXPECTED_MULTI_AXIS_FIELDS = {
             {
                 "semantic_class": "red_safe",
                 "business_intent": "out_of_scope",
-                "entity_status": "pattern_red_clear",
+                "entity_status": "clear_red_pattern",
                 "recommended_action": "candidate_negative",
                 "classification": "rojo",
             },

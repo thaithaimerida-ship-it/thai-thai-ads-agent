@@ -187,6 +187,14 @@ def _is_competitor_term(query, conversions):
     return not any(k in q for k in _THAI_KEYWORDS)
 
 
+def _compute_negative_allowed(term: dict) -> bool:
+    return (
+        term.get("base_negative_eligible") is True
+        and term.get("already_negative") is False
+        and bool(term.get("campaign_id"))
+    )
+
+
 @router.get("/search-terms")
 async def search_terms(date_range: str = "LAST_7_DAYS"):
     """
@@ -269,17 +277,27 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
             t["recurrent"] = a.get("distinct_weeks_90d", 0) >= 2
 
         # #2/#3: marcar terminos ya bloqueados como negativos (read-only, nivel campana).
+        _negative_lookup_reliable = True
         try:
             _negs_by_campaign = fetch_negative_keywords(client, target_id)
         except Exception:
             _negs_by_campaign = {}
+            _negative_lookup_reliable = False
         for t in formatted:
+            if not _negative_lookup_reliable:
+                t["already_negative"] = None
+                t["blocked_by"] = None
+                t["negative_smart_uncertain"] = False
+                t["negative_allowed"] = False
+                continue
+
             _camp = _negs_by_campaign.get(str(t.get("campaign_id", "")), {})
             _blocking = find_blocking_negative(t["query"], _camp.get("negatives", []))
             t["already_negative"] = _blocking is not None
             t["blocked_by"] = ({"text": _blocking["text"], "match_type": _blocking["match_type"]}
                                if _blocking else None)
             t["negative_smart_uncertain"] = bool(_blocking) and _camp.get("channel_type") == "SMART"
+            t["negative_allowed"] = _compute_negative_allowed(t)
 
         counts = {k: sum(1 for t in formatted if t["classification"] == k)
                   for k in ("rojo", "amarillo", "verde", "blanco")}

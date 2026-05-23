@@ -181,8 +181,24 @@ def _phase1_multi_axis_defaults() -> dict:
         "entity_status": "unknown",
         "conversion_quality": "unknown",
         "recommended_action": "observe",
+        "base_negative_eligible": False,
         "negative_allowed": False,
     }
+
+
+def _compute_base_negative_eligible(term: dict) -> bool:
+    return (
+        term.get("semantic_class") == "red_safe"
+        and term.get("entity_status") in {"curated", "clear_red_pattern"}
+        and term.get("conversion_quality") in {"none", "weak_local_action"}
+        and term.get("suggested_match_type") in {"EXACT", "PHRASE"}
+    )
+
+
+def _finalize_base_negative_eligibility(term: dict) -> dict:
+    term["base_negative_eligible"] = _compute_base_negative_eligible(term)
+    term["negative_allowed"] = False
+    return term
 
 
 def _is_suspected_external_entity(norm: str) -> bool:
@@ -300,7 +316,7 @@ def classify_search_term(
                       reason="marca propia protegida (Thai Thai)",
                       semantic_class="brand_protected", business_intent="own_brand",
                       entity_status="own_brand", recommended_action="protect")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     # 2) Patrones rojos de alta confianza (ANTES que intención Thai)
     m = _first_match(norm, RED_PATTERNS)
@@ -310,9 +326,9 @@ def classify_search_term(
                       reason=f"patron irrelevante de alta confianza ('{pat}', categoria {category})",
                       suggested_negative=pat, suggested_match_type="PHRASE",
                       semantic_class="red_safe", business_intent="out_of_scope",
-                      entity_status="pattern_red_clear",
+                      entity_status="clear_red_pattern",
                       recommended_action="candidate_negative")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     # 3) Entidades curadas (restaurantes/marcas ajenas)
     e = _match_entity(norm)
@@ -325,7 +341,7 @@ def classify_search_term(
                       semantic_class="red_safe", business_intent="external_business",
                       entity_status="curated",
                       recommended_action="candidate_negative")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     # 4) Intención Thai útil (nunca rojo)
     if _first_match(norm, GREEN_PATTERNS):
@@ -339,7 +355,7 @@ def classify_search_term(
                           reason="intencion Thai clara sin conversion (relevante, monitoreado)",
                           semantic_class="thai_intent", business_intent="thai_food",
                           entity_status="none", recommended_action="protect")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     # 5) Ambiguos (revisar, no negativizar)
     a = _first_match(norm, AMBIGUOUS_PATTERNS)
@@ -350,34 +366,34 @@ def classify_search_term(
         result.update(semantic_class="ambiguous_useful",
                       business_intent="generic_restaurant",
                       entity_status="none", recommended_action="observe")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     if _has_other_cuisine(norm):
         result.update(semantic_class="ambiguous_useful",
                       business_intent="other_cuisine",
                       entity_status="none", recommended_action="review")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     if _first_match(norm, GENERIC_RESTAURANT_PATTERNS):
         result.update(semantic_class="ambiguous_useful", business_intent="generic_restaurant",
                       entity_status="none", recommended_action="observe")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     if _is_suspected_external_entity(norm):
         result.update(semantic_class="external_entity_review",
                       business_intent="external_business",
                       entity_status="suspected_external",
                       recommended_action="review")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     if _has_clear_external_entity_name(norm):
         result.update(semantic_class="external_entity_review",
                       business_intent="possible_external_restaurant",
                       entity_status="suspected_external",
                       recommended_action="review")
-        return result
+        return _finalize_base_negative_eligibility(result)
 
     # 6) Resto -> blanco / monitoreado
     result.update(classification="blanco", confidence="baja", false_positive_risk="bajo",
                   reason="neutro sin patron — monitoreado")
-    return result
+    return _finalize_base_negative_eligibility(result)
