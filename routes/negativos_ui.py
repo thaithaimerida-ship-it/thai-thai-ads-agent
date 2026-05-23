@@ -80,10 +80,9 @@ _PAGE = """<!doctype html>
 
   <div id="tableWrap"></div>
 
-  <h2 id="compTitle" class="sec" hidden>Terminos de competidores</h2>
-  <p id="compHelp" class="help" hidden>Tuvieron conversion pero la query no
-     contiene palabras de Thai Thai (thai, tailand, pad, curry) &mdash; posibles
-     busquedas de otros negocios. Revisa antes de bloquear.</p>
+  <h2 id="compTitle" class="sec" hidden>Ambiguos &mdash; revisar</h2>
+  <p id="compHelp" class="help" hidden>Terminos ambiguos (comida asiatica, curry,
+     noodles, etc.) &mdash; pueden o no ser intencion Thai. Revisa antes de bloquear.</p>
   <div id="compWrap"></div>
 
   <button id="addBtn" hidden>Agregar como negativos</button>
@@ -186,10 +185,14 @@ function renderTable() {
   // Indices globales en `rows` (data-i) -> selected()/submit() no cambian.
   var mainBody = "", compBody = "", nMain = 0, nComp = 0;
   rows.forEach(function (t, i) {
-    if (t.competitor_term) {
+    // Fase 1: color/seccion por classification. Conversiones NO gana sobre classification.
+    // Fallback defensivo a los flags del shim SOLO si no viene classification.
+    var cl = t.classification ||
+      (t.negative_candidate ? "rojo" : (t.competitor_term ? "amarillo" : (Number(t.conversions) > 0 ? "verde" : "blanco")));
+    if (cl === "amarillo") {
       compBody += rowHtml(t, i, "comp"); nComp++;
     } else {
-      var cls = t.negative_candidate ? "cand" : (t.conversions > 0 ? "conv" : "");
+      var cls = cl === "rojo" ? "cand" : (cl === "verde" ? "conv" : "");  // blanco -> sin color
       mainBody += rowHtml(t, i, cls); nMain++;
     }
   });

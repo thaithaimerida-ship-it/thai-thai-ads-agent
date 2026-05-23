@@ -22,5 +22,21 @@
     "confidence": "alta",
     "suggested_match_type": "EXACT",
     "auto_apply": false
-  }
+  },
+  { "canonical": "la casa de los lotos merida",
+    "aliases": ["la casa de los lotos merida"],
+    "category": "restaurante_ajeno", "confidence": "alta",
+    "suggested_match_type": "EXACT", "auto_apply": false },
+  { "canonical": "tacos wayane merida",
+    "aliases": ["tacos wayane merida"],
+    "category": "restaurante_ajeno", "confidence": "alta",
+    "suggested_match_type": "EXACT", "auto_apply": false },
+  { "canonical": "la picanha",
+    "aliases": ["la picanha"],
+    "category": "restaurante_ajeno", "confidence": "alta",
+    "suggested_match_type": "EXACT", "auto_apply": false },
+  { "canonical": "tábom healthy food av yucatán mérida",
+    "aliases": ["tábom healthy food av yucatán mérida", "tabom healthy food av yucatan merida", "táboom healthy food av yucatán mérida", "taboom healthy food av yucatan merida"],
+    "category": "restaurante_ajeno", "confidence": "alta",
+    "suggested_match_type": "EXACT", "auto_apply": false }
 ]
