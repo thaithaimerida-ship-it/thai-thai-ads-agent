@@ -23,6 +23,9 @@ from engine.search_term_classifier import classify_search_term
         "carlota caucel bistro cafe fotos",
         "restaurant el trapiche",
         "yuyas bar",
+        "restaurante celestun merida",
+        "hacienda dzitya",
+        "oriental city plaza las americas",
     ],
 )
 def test_specific_uncurated_businesses_are_external_entity_review(query):
@@ -70,6 +73,7 @@ def test_other_cuisine_is_ambiguous_useful_not_external_entity(query):
         ("restaurantes en merida", "amarillo"),
         ("food near me", "blanco"),
         ("cocina economica cerca de mi", "blanco"),
+        ("cocina economica mas cercana cerca de mi", "blanco"),
         ("plaza restaurantes merida", "blanco"),
     ],
 )

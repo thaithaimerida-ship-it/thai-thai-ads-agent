@@ -80,7 +80,8 @@ AMBIGUOUS_PATTERNS = (
 GENERIC_RESTAURANT_PATTERNS = (
     "restaurants near me", "restaurant near me", "restaurante cerca",
     "restaurantes cerca", "comida cerca", "food near me",
-    "cocina economica cerca", "plaza restaurantes",
+    "cocina economica cerca", "cocina economica mas cercana",
+    "plaza restaurantes",
 )
 
 SUSPECTED_EXTERNAL_ENTITY_PATTERNS = (
