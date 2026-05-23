@@ -79,12 +79,40 @@ AMBIGUOUS_PATTERNS = (
 # Ambiguos de FP alto: jamás se sugiere negativo en Fase 1 (p.ej. curry es Thai real).
 GENERIC_RESTAURANT_PATTERNS = (
     "restaurants near me", "restaurant near me", "restaurante cerca",
-    "restaurantes cerca", "comida cerca",
+    "restaurantes cerca", "comida cerca", "food near me",
+    "cocina economica cerca", "plaza restaurantes",
 )
 
 SUSPECTED_EXTERNAL_ENTITY_PATTERNS = (
     "el texano",
 )
+
+OTHER_CUISINE_PATTERNS = (
+    "chinese", "coreano", "coreana", "japones", "japonesa",
+    "japanese", "sushi", "ramen", "pizzeria", "pizza",
+)
+
+EXTERNAL_BUSINESS_TOKENS = {
+    "restaurante", "restaurant", "bar", "bistro", "cafe", "cafeteria",
+    "churrascaria", "taqueria", "tacos", "comedor", "pizzeria",
+    "grill", "cantina",
+}
+
+EXTERNAL_BUSINESS_AUX_TOKENS = {
+    "barra", "rancho", "cocina", "hacienda", "plaza", "food", "fotos",
+}
+
+EXTERNAL_ENTITY_GENERIC_TOKENS = {
+    "restaurante", "restaurantes", "restaurant", "restaurants", "bar",
+    "bistro", "cafe", "cafeteria", "churrascaria", "taqueria", "tacos",
+    "comedor", "pizzeria", "grill", "cantina", "barra", "rancho",
+    "cocina", "hacienda", "plaza", "food", "fotos", "cerca", "mi",
+    "ubicacion", "actual", "mejor", "mejores", "barato", "barata",
+    "economico", "economica", "comida", "cena", "domicilio", "delivery",
+    "para", "comer", "en", "merida", "yucatan", "near", "close", "to",
+    "in", "de", "del", "los", "las", "el", "la", "y", "mx", "av",
+    "avenida", "calle", "col", "centro", "zona",
+}
 
 _HIGH_FP_AMBIGUOUS = ("curry",)
 
@@ -158,6 +186,33 @@ def _phase1_multi_axis_defaults() -> dict:
 
 def _is_suspected_external_entity(norm: str) -> bool:
     return _first_match(norm, SUSPECTED_EXTERNAL_ENTITY_PATTERNS) is not None
+
+
+def _tokens(norm: str) -> list[str]:
+    return re.findall(r"\b[a-z0-9]+\b", norm)
+
+
+def _has_other_cuisine(norm: str) -> bool:
+    return _first_match(norm, OTHER_CUISINE_PATTERNS) is not None
+
+
+def _has_clear_external_entity_name(norm: str) -> bool:
+    tokens = _tokens(norm)
+    token_set = set(tokens)
+    has_business_token = bool(token_set & EXTERNAL_BUSINESS_TOKENS)
+    has_aux_token = bool(token_set & EXTERNAL_BUSINESS_AUX_TOKENS)
+    if not has_business_token and not has_aux_token:
+        return False
+
+    distinctive = [
+        t for t in tokens
+        if t not in EXTERNAL_ENTITY_GENERIC_TOKENS and not t.isdigit()
+    ]
+
+    if has_business_token:
+        return len(distinctive) >= 1
+
+    return len(distinctive) >= 1
 
 
 def _positive_metric(value) -> bool:
@@ -296,6 +351,12 @@ def classify_search_term(
                       entity_status="none", recommended_action="observe")
         return result
 
+    if _has_other_cuisine(norm):
+        result.update(semantic_class="ambiguous_useful",
+                      business_intent="other_cuisine",
+                      entity_status="none", recommended_action="review")
+        return result
+
     if _first_match(norm, GENERIC_RESTAURANT_PATTERNS):
         result.update(semantic_class="ambiguous_useful", business_intent="generic_restaurant",
                       entity_status="none", recommended_action="observe")
@@ -304,6 +365,13 @@ def classify_search_term(
     if _is_suspected_external_entity(norm):
         result.update(semantic_class="external_entity_review",
                       business_intent="external_business",
+                      entity_status="suspected_external",
+                      recommended_action="review")
+        return result
+
+    if _has_clear_external_entity_name(norm):
+        result.update(semantic_class="external_entity_review",
+                      business_intent="possible_external_restaurant",
                       entity_status="suspected_external",
                       recommended_action="review")
         return result
