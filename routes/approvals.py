@@ -501,6 +501,51 @@ async def approve_proposal(d: str, action: str):
     # ── TIPO: block_keyword (Fase 2) ─────────────────────────────────────────
     if action_type == "block_keyword":
         if action == "approve":
+            try:
+                import json as _json
+                evidence = _json.loads(decision.get("evidence_json") or "{}")
+            except Exception:
+                evidence = {}
+
+            match_type = str(
+                evidence.get("match_type") or evidence.get("suggested_match_type") or ""
+            ).strip().upper()
+            if match_type == "":
+                logger.warning(
+                    "/approve: block_keyword rechazado por match_type ausente kw=%r camp=%s decision_id=%d",
+                    keyword, campaign_id, decision["id"],
+                )
+                return _html(
+                    "Match type ausente",
+                    f"<p>No se puede bloquear <strong>\"{keyword}\"</strong> porque la propuesta "
+                    f"no incluye un match type explicito.</p>"
+                    f"<p>Por seguridad, los enlaces antiguos fallan cerrado para evitar negativos BROAD.</p>",
+                    "#e67e22",
+                )
+            if match_type == "BROAD":
+                logger.warning(
+                    "/approve: block_keyword rechazado por BROAD kw=%r camp=%s decision_id=%d",
+                    keyword, campaign_id, decision["id"],
+                )
+                return _html(
+                    "BROAD no permitido",
+                    f"<p>No se puede bloquear <strong>\"{keyword}\"</strong> con match type "
+                    f"<strong>BROAD</strong>.</p>"
+                    f"<p>Solo se permiten negativos <strong>EXACT</strong> o <strong>PHRASE</strong>.</p>",
+                    "#e67e22",
+                )
+            if match_type not in ("EXACT", "PHRASE"):
+                logger.warning(
+                    "/approve: block_keyword rechazado por match_type invalido=%r kw=%r camp=%s decision_id=%d",
+                    match_type, keyword, campaign_id, decision["id"],
+                )
+                return _html(
+                    "Match type invalido",
+                    f"<p>No se puede bloquear <strong>\"{keyword}\"</strong> con match type "
+                    f"<strong>{match_type}</strong>.</p>"
+                    f"<p>Solo se permiten negativos <strong>EXACT</strong> o <strong>PHRASE</strong>.</p>",
+                    "#e67e22",
+                )
             # Check 5a: ¿la keyword está protegida (marca/estratégica)?
             try:
                 from engine.risk_classifier import is_keyword_protected
@@ -556,7 +601,7 @@ async def approve_proposal(d: str, action: str):
             try:
                 target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
                 client    = engine["get_ads_client"]()
-                engine["add_negative_keyword"](client, target_id, campaign_id, keyword)
+                engine["add_negative_keyword"](client, target_id, campaign_id, keyword, match_type=match_type)
                 memory.mark_autonomous_decision_approved(decision["id"])
                 logger.info(
                     "/approve: keyword '%s' bloqueada en campaña %s (decision_id=%d)",

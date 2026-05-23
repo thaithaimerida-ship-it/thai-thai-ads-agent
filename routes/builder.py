@@ -3,9 +3,11 @@ Routes del Builder — Crea campañas desde lenguaje natural.
 POST /build-campaign → genera config
 POST /deploy-campaign → ejecuta el deploy aprobado
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+
+from routes.auth_token import require_token
 
 router = APIRouter(tags=["builder"])
 
@@ -24,7 +26,7 @@ _pending_configs = {}
 
 
 @router.post("/build-campaign")
-async def build_campaign(request: BuildRequest):
+async def build_campaign(request: BuildRequest, x_api_token: str = Header(default="")):
     """
     Genera un config de campaña completo desde un prompt en lenguaje natural.
 
@@ -34,6 +36,9 @@ async def build_campaign(request: BuildRequest):
 
     Retorna el config para revisión. Si auto_deploy=True, despliega directamente.
     """
+    if request.auto_deploy:
+        require_token(x_api_token)
+
     from agents.builder import Builder
 
     builder = Builder()
@@ -70,7 +75,7 @@ async def build_campaign(request: BuildRequest):
     return response
 
 
-@router.post("/deploy-campaign")
+@router.post("/deploy-campaign", dependencies=[Depends(require_token)])
 async def deploy_campaign_endpoint(request: DeployRequest):
     """
     Despliega un config de campaña previamente generado.
@@ -106,7 +111,7 @@ async def get_pending_configs():
     }
 
 
-@router.post("/deploy-pending/{config_id}")
+@router.post("/deploy-pending/{config_id}", dependencies=[Depends(require_token)])
 async def deploy_pending(config_id: str):
     """Despliega un config pendiente por su ID."""
     config = _pending_configs.get(config_id)

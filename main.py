@@ -29,10 +29,11 @@ load_dotenv()
 
 from engine.db_sync import get_db_path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from routes.auth_token import require_token
 
 # ============================================================================
 # IMPORTACIONES LAZY - Solo cuando se necesiten
@@ -632,7 +633,7 @@ async def run_autonomous_audit():
     )
 
 
-@app.post("/run-quick-wins")
+@app.post("/run-quick-wins", dependencies=[Depends(require_token)])
 async def run_quick_wins():
     """Quick Wins estructurales auditoría 14-abr-2026. Idempotente. Solo campañas Search."""
     from engine.ads_client import (

@@ -3,7 +3,9 @@ Routes de Campañas — /restructure-campaigns, /create-reservations-campaign, /
 """
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from routes.auth_token import require_token
 
 router = APIRouter(tags=["campaigns"])
 
@@ -15,7 +17,7 @@ def _get_client():
     return get_ads_client()
 
 
-@router.post("/restructure-campaigns")
+@router.post("/restructure-campaigns", dependencies=[Depends(require_token)])
 async def restructure_campaigns():
     """
     Reestructura las 2 campañas existentes:
@@ -67,7 +69,7 @@ async def restructure_campaigns():
     return {"status": "success", "results": results}
 
 
-@router.post("/create-reservations-campaign")
+@router.post("/create-reservations-campaign", dependencies=[Depends(require_token)])
 async def create_reservations_campaign():
     """
     Crea campaña Search 'Thai Mérida - Reservaciones' en estado PAUSED.
@@ -131,7 +133,7 @@ async def create_reservations_campaign():
     }
 
 
-@router.post("/update-ad-schedule")
+@router.post("/update-ad-schedule", dependencies=[Depends(require_token)])
 async def update_ad_schedule_all():
     """Aplica programación horaria basada en heatmap a las 3 campañas."""
     try:

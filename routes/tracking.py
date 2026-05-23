@@ -5,10 +5,11 @@ import os
 import sqlite3
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from engine.db_sync import get_db_path
+from routes.auth_token import require_token
 
 router = APIRouter(tags=["tracking"])
 
@@ -24,7 +25,7 @@ def _get_engine():
     return get_engine_modules()
 
 
-@router.post("/fix-tracking")
+@router.post("/fix-tracking", dependencies=[Depends(require_token)])
 async def fix_tracking():
     """
     Paso 1: Activa auto-tagging en la cuenta Google Ads.
@@ -56,7 +57,7 @@ async def fix_tracking():
     }
 
 
-@router.post("/fix-tracking/confirm")
+@router.post("/fix-tracking/confirm", dependencies=[Depends(require_token)])
 async def fix_tracking_confirm(request: FixTrackingConfirmRequest):
     """Desactiva las conversiones aprobadas. Las protegidas son rechazadas automáticamente."""
     modules = _get_engine()
