@@ -230,3 +230,101 @@ def test_create_rsa_requires_min_descriptions():
                         headlines=["A", "B", "C"], descriptions=["D1"])
     assert result["status"] == "error"
     assert "mínimo" in result["message"]
+
+
+# ── MICRO-FASE match_type ─────────────────────────────────────────────────────
+# Justificación (regla de testing del proyecto): add_negative_keyword toca la
+# Google Ads API y aplica negativos a campañas reales. El match type determina
+# cuánto bloquea cada negativo (EXACT < PHRASE < BROAD), así que un mapeo
+# incorrecto puede sobre-bloquear tráfico válido. Tests obligatorios.
+
+def _make_search_client(match_sentinels):
+    """Construye un mock client de campaña SEARCH (acepta negativos).
+
+    match_sentinels: dict {"EXACT": obj, "PHRASE": obj, "BROAD": obj} para poder
+    afirmar EXACTAMENTE qué miembro del enum se asignó al criterion.
+    """
+    mock_client = MagicMock()
+
+    mock_row = MagicMock()
+    mock_row.campaign.advertising_channel_type.name = "SEARCH"
+    ga_service_mock = MagicMock()
+    ga_service_mock.search.return_value = [mock_row]
+    crit_service_mock = MagicMock()
+    campaign_service_mock = MagicMock()
+    campaign_service_mock.campaign_path.return_value = "customers/4021070209/campaigns/23730364039"
+
+    def get_service_side_effect(name):
+        if name == "GoogleAdsService":
+            return ga_service_mock
+        if name == "CampaignCriterionService":
+            return crit_service_mock
+        if name == "CampaignService":
+            return campaign_service_mock
+        return MagicMock()
+
+    mock_client.get_service.side_effect = get_service_side_effect
+    mock_client.get_type.return_value = MagicMock()
+    for name, sentinel in match_sentinels.items():
+        setattr(mock_client.enums.KeywordMatchTypeEnum, name, sentinel)
+    return mock_client, crit_service_mock
+
+
+def test_add_negative_keyword_exact_aplica_exact():
+    """match_type='EXACT' → el criterion recibe el enum EXACT y el return lo refleja."""
+    from engine.ads_client import add_negative_keyword
+    exact = object()
+    mock_client, crit = _make_search_client({"EXACT": exact})
+    op = mock_client.get_type.return_value
+
+    result = add_negative_keyword(mock_client, "4021070209", "23730364039",
+                                  "querreke", match_type="EXACT")
+
+    assert result["status"] == "success"
+    assert result["match_type"] == "EXACT"
+    assert op.create.keyword.match_type is exact
+    crit.mutate_campaign_criteria.assert_called_once()
+
+
+def test_add_negative_keyword_phrase_aplica_phrase():
+    """match_type='PHRASE' → el criterion recibe el enum PHRASE."""
+    from engine.ads_client import add_negative_keyword
+    phrase = object()
+    mock_client, crit = _make_search_client({"PHRASE": phrase})
+    op = mock_client.get_type.return_value
+
+    result = add_negative_keyword(mock_client, "4021070209", "23730364039",
+                                  "muay thai", match_type="PHRASE")
+
+    assert result["status"] == "success"
+    assert result["match_type"] == "PHRASE"
+    assert op.create.keyword.match_type is phrase
+    crit.mutate_campaign_criteria.assert_called_once()
+
+
+def test_add_negative_keyword_match_type_invalido_rechazado():
+    """Un match_type fuera de {EXACT,PHRASE,BROAD} se rechaza SIN mutar."""
+    from engine.ads_client import add_negative_keyword
+    mock_client, crit = _make_search_client({})
+
+    result = add_negative_keyword(mock_client, "4021070209", "23730364039",
+                                  "sushi", match_type="FUZZY")
+
+    assert result["status"] == "rejected"
+    assert result["reason"] == "invalid_match_type"
+    crit.mutate_campaign_criteria.assert_not_called()
+
+
+def test_add_negative_keyword_default_sigue_broad_retrocompat():
+    """Sin match_type (llamadores legacy con 4 args) → default BROAD, sin cambios."""
+    from engine.ads_client import add_negative_keyword
+    broad = object()
+    mock_client, crit = _make_search_client({"BROAD": broad})
+    op = mock_client.get_type.return_value
+
+    result = add_negative_keyword(mock_client, "4021070209", "23730364039", "ramen")
+
+    assert result["status"] == "success"
+    assert result["match_type"] == "BROAD"
+    assert op.create.keyword.match_type is broad
+    crit.mutate_campaign_criteria.assert_called_once()

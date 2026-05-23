@@ -31,6 +31,7 @@ class OptimizationAction(BaseModel):
     campaign_name: Optional[str] = None
     spend: Optional[float] = None
     reason: Optional[str] = None
+    match_type: Optional[str] = None  # EXACT|PHRASE desde /negativos (suggested_match_type)
 
 class ExecuteOptimizationRequest(BaseModel):
     actions: List[OptimizationAction]
@@ -575,20 +576,43 @@ async def execute_optimization(request: ExecuteOptimizationRequest):
 
         for action in request.actions:
             if action.type == "block_keyword" and engine and action.keyword and action.campaign_id:
-                client = engine["get_ads_client"]()
-                try:
-                    ank = engine["add_negative_keyword"](client, target_id, action.campaign_id, action.keyword)
-                    if isinstance(ank, dict) and ank.get("status") == "error":
-                        logger.error("execute_optimization: add_negative_keyword fallo kw=%r camp=%s: %s",
-                                     action.keyword, action.campaign_id, ank.get("message"))
-                        result = {"action": action.type, "target": action.keyword,
-                                  "status": "error", "message": ank.get("message", "error")}
-                    else:
-                        result = {"action": action.type, "target": action.keyword, "status": "executed"}
-                except Exception as ex:
-                    logger.exception("execute_optimization: excepcion add_negative_keyword kw=%r camp=%s",
-                                     action.keyword, action.campaign_id)
-                    result = {"action": action.type, "target": action.keyword, "status": "error", "message": str(ex)}
+                # ── Fail-closed match_type (micro-fase) ──────────────────────
+                # La mini-app /negativos envia suggested_match_type del clasificador
+                # (EXACT en entidades curadas, PHRASE en patrones rojos). Aqui:
+                #  - ausente   -> NO se aplica (no caer nunca en el default BROAD).
+                #  - BROAD      -> rechazado desde /negativos por ahora.
+                #  - != EXACT/PHRASE -> rechazado.
+                mt = (action.match_type or "").strip().upper()
+                if mt == "":
+                    result = {"action": action.type, "target": action.keyword,
+                              "status": "rejected",
+                              "message": "match_type ausente: no se aplica negativo (fail-closed)."}
+                elif mt == "BROAD":
+                    result = {"action": action.type, "target": action.keyword,
+                              "status": "rejected",
+                              "message": "BROAD no permitido desde /negativos."}
+                elif mt not in ("EXACT", "PHRASE"):
+                    result = {"action": action.type, "target": action.keyword,
+                              "status": "rejected",
+                              "message": f"match_type invalido: {action.match_type!r} (permitidos EXACT, PHRASE)."}
+                else:
+                    client = engine["get_ads_client"]()
+                    try:
+                        ank = engine["add_negative_keyword"](
+                            client, target_id, action.campaign_id, action.keyword, match_type=mt)
+                        if isinstance(ank, dict) and ank.get("status") in ("error", "rejected"):
+                            logger.error("execute_optimization: add_negative_keyword %s kw=%r camp=%s mt=%s: %s",
+                                         ank.get("status"), action.keyword, action.campaign_id, mt, ank.get("message"))
+                            result = {"action": action.type, "target": action.keyword,
+                                      "status": ank.get("status"), "message": ank.get("message", "error")}
+                        else:
+                            result = {"action": action.type, "target": action.keyword,
+                                      "status": "executed",
+                                      "match_type": ank.get("match_type", mt) if isinstance(ank, dict) else mt}
+                    except Exception as ex:
+                        logger.exception("execute_optimization: excepcion add_negative_keyword kw=%r camp=%s",
+                                         action.keyword, action.campaign_id)
+                        result = {"action": action.type, "target": action.keyword, "status": "error", "message": str(ex)}
             else:
                 result = {"action": action.type, "status": "recorded", "manual_required": True}
 

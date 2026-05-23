@@ -49,10 +49,13 @@ _PAGE = """<!doctype html>
   #banner.partial { background: #fff8e1; border-color: #f0c000; color: #7a5a00; }
   tr.done { opacity: .5; }
   tr.done td { text-decoration: line-through; }
+  .mt { display: inline-block; font-size: .7rem; font-weight: 700;
+        padding: .05rem .35rem; border-radius: 4px; background: #eef;
+        color: #225; border: 1px solid #ccd; vertical-align: middle; }
 </style>
 </head>
 <body>
-<h1>Search Terms &rarr; Negativos (BROAD, nivel campana)</h1>
+<h1>Search Terms &rarr; Negativos (match type por termino: EXACT / PHRASE)</h1>
 
 <div id="gate" hidden>
   <p>Pega tu token de acceso:</p>
@@ -127,6 +130,14 @@ function esc(s) {
   });
 }
 
+// Match type aplicable que envia el clasificador (suggested_match_type).
+// Solo EXACT/PHRASE son negativizables desde /negativos; BROAD/None => null
+// (no seleccionable). El servidor /execute-optimization fail-closea igual.
+function applyMt(t) {
+  var m = String(t.suggested_match_type || "").toUpperCase();
+  return (m === "EXACT" || m === "PHRASE") ? m : null;
+}
+
 el("load").onclick = loadTerms;
 
 function loadTerms() {
@@ -163,10 +174,18 @@ function rowHtml(t, i, cls) {
       "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
       "<td class='num'>" + t.conversions + "</td></tr>";
   }
-  var disabled = t.campaign_id ? "" : "disabled title='sin campaign_id'";
+  var amt = applyMt(t);
+  var disabled, badge;
+  if (!t.campaign_id) {
+    disabled = "disabled title='sin campaign_id'"; badge = "";
+  } else if (!amt) {
+    disabled = "disabled title='sin match type sugerido — no negativizable'"; badge = "";
+  } else {
+    disabled = ""; badge = " <span class='mt'>" + amt + "</span>";
+  }
   return "<tr class='" + cls + "'>" +
     "<td><input type='checkbox' class='pick' data-i='" + i + "' " + disabled + "></td>" +
-    "<td>" + esc(t.query) + "</td>" +
+    "<td>" + esc(t.query) + badge + "</td>" +
     "<td>" + esc(t.campaign_name) + "</td>" +
     "<td class='num'>" + t.clicks + "</td>" +
     "<td class='num'>" + t.impressions + "</td>" +
@@ -250,9 +269,10 @@ el("addBtn").onclick = function () {
 
   var brand = sel.filter(function (t) { return /thai/i.test(t.query); });
   var html = warnHtml +
-    "<strong>Vas a agregar " + sel.length + " negativo(s) BROAD:</strong><ul>";
+    "<strong>Vas a agregar " + sel.length + " negativo(s):</strong><ul>";
   sel.forEach(function (t) {
-    html += "<li>" + esc(t.query) + " &rarr; " + esc(t.campaign_name) + "</li>";
+    html += "<li>" + esc(t.query) + " &rarr; " + esc(t.campaign_name) +
+            " <span class='mt'>" + (applyMt(t) || "?") + "</span></li>";
   });
   html += "</ul>";
   if (brand.length) {
@@ -272,7 +292,8 @@ function submit(sel) {
   el("go").disabled = true;
   var actions = sel.map(function (t) {
     return { type: "block_keyword", keyword: t.query, campaign_id: String(t.campaign_id),
-             campaign_name: t.campaign_name, reason: "manual UI negativos" };
+             campaign_name: t.campaign_name, match_type: applyMt(t),
+             reason: "manual UI negativos" };
   });
   fetch("/execute-optimization", {
     method: "POST",

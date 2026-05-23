@@ -660,9 +660,20 @@ def _get_campaign_channel_type(client: GoogleAdsClient, customer_id: str, campai
     return ""
 
 
-def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id: str, keyword_text: str):
+_NEGATIVE_MATCH_TYPES = ("EXACT", "PHRASE", "BROAD")
+
+
+def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id: str,
+                         keyword_text: str, match_type: str = "BROAD"):
     """
-    Agrega negative keyword a una campaña.
+    Agrega negative keyword a una campaña con el match type indicado.
+
+    match_type ∈ {EXACT, PHRASE, BROAD}. Default 'BROAD' por retrocompatibilidad
+    con los llamadores legacy (builder/executor/auditor/campaigns/approvals) que
+    pasan 4 args. La frontera /execute-optimization (mini-app /negativos) valida
+    aparte y NUNCA deja llegar BROAD ni un match_type ausente hasta aquí.
+    Se mapea por NOMBRE del enum (getattr) para evitar el gotcha de v23 donde
+    EXACT=2 / PHRASE=3 / BROAD=4 (orden contraintuitivo).
 
     GUARDIA: Smart Campaigns (advertising_channel_type='SMART') aceptan la
     mutación silenciosamente pero el matching algorithm puede ignorar el
@@ -671,6 +682,23 @@ def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id:
     no-ops. Si necesitas gestionar negativos en Smart Campaigns, usa
     SmartCampaignSettingService o configuralos via Google Ads UI.
     """
+    mt = str(match_type or "").strip().upper()
+    if mt not in _NEGATIVE_MATCH_TYPES:
+        _ads_logger.warning(
+            "add_negative_keyword RECHAZADO: match_type invalido=%r camp=%s kw=%r",
+            match_type, campaign_id, keyword_text,
+        )
+        return {
+            "status": "rejected",
+            "reason": "invalid_match_type",
+            "message": (
+                f"match_type invalido: {match_type!r}. "
+                f"Permitidos: {', '.join(_NEGATIVE_MATCH_TYPES)}."
+            ),
+            "keyword": keyword_text,
+            "match_type": match_type,
+        }
+
     channel = _get_campaign_channel_type(client, customer_id, campaign_id)
     if channel in _NEGATIVE_KEYWORD_UNSUPPORTED_CHANNELS:
         _ads_logger.warning(
@@ -699,7 +727,7 @@ def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id:
         campaign_criterion.campaign = client.get_service("CampaignService").campaign_path(customer_id, campaign_id)
         campaign_criterion.negative = True
         campaign_criterion.keyword.text = keyword_text
-        campaign_criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.BROAD
+        campaign_criterion.keyword.match_type = getattr(client.enums.KeywordMatchTypeEnum, mt)
 
         campaign_criterion_service.mutate_campaign_criteria(
             customer_id=customer_id,
@@ -710,13 +738,13 @@ def add_negative_keyword(client: GoogleAdsClient, customer_id: str, campaign_id:
         # en stdout, único audit era SQLite agent_actions que se pierde con
         # rotación de revisiones). Loguear éxito cierra el gap.
         _ads_logger.info(
-            "add_negative_keyword SUCCESS camp=%s channel=%s kw=%r match_type=BROAD",
-            campaign_id, channel, keyword_text,
+            "add_negative_keyword SUCCESS camp=%s channel=%s kw=%r match_type=%s",
+            campaign_id, channel, keyword_text, mt,
         )
         return {
             "status": "success",
             "keyword": keyword_text,
-            "match_type": "BROAD",
+            "match_type": mt,
             "channel": channel,
         }
     except GoogleAdsException as ex:
