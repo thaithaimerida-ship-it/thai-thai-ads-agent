@@ -15,9 +15,9 @@ from pydantic import BaseModel
 from engine.db_sync import get_db_path
 from routes.auth_token import require_token
 from engine.risk_classifier import get_campaign_thresholds
-from engine.search_term_classifier import classify_search_term, _normalize
+from engine.search_term_classifier import classify_conversion_quality, classify_search_term, _normalize
 from engine.search_term_history import aggregate_windows, accumulated_reds
-from engine.ads_client import fetch_negative_keywords
+from engine.ads_client import fetch_negative_keywords, fetch_search_term_conversion_breakdown
 from engine.negative_matcher import find_blocking_negative
 
 router = APIRouter(tags=["analysis"])
@@ -212,6 +212,7 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
         target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
         client = engine["get_ads_client"]()
         raw_terms = engine["fetch_search_term_data"](client, target_id, date_range)
+        conversion_breakdown = fetch_search_term_conversion_breakdown(client, target_id, date_range)
 
         # Pool top-100 por gasto. Fase 1: el gasto solo acota el pool (no clasifica).
         # NOTA Fase 1: top-100 NO resuelve irrelevantes de gasto muy bajo;
@@ -223,7 +224,20 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
         for st in raw_top:
             cost = st.get("cost_micros", 0) / 1_000_000
             conversions = float(st.get("conversions", 0))
-            term = classify_search_term(st.get("query", ""), cost, conversions)
+            all_conversions = float(st.get("all_conversions", conversions) or 0)
+            breakdown_key = (_normalize(st.get("query", "")), str(st.get("campaign_id", "")))
+            breakdown = (conversion_breakdown or {}).get(breakdown_key) if conversion_breakdown is not None else None
+            conversion_quality = classify_conversion_quality(
+                breakdown.get("actions") if breakdown else None,
+                conversions=breakdown.get("conversions", conversions) if breakdown else conversions,
+                all_conversions=breakdown.get("all_conversions", all_conversions) if breakdown else all_conversions,
+            )
+            term = classify_search_term(
+                st.get("query", ""),
+                cost,
+                conversions,
+                conversion_quality=conversion_quality,
+            )
             term.update({
                 "campaign_name": st.get("campaign_name", ""),
                 "campaign_id": str(st.get("campaign_id", "")),
@@ -231,6 +245,7 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
                 "impressions": int(st.get("impressions", 0)),
                 "cost": round(cost, 2),
                 "conversions": round(conversions, 1),
+                "all_conversions": round(all_conversions, 1),
                 # Shim retrocompatible para el monitor pre-Fase 1:
                 "negative_candidate": term["classification"] == "rojo",
                 "competitor_term": term["classification"] == "amarillo",

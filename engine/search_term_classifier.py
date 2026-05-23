@@ -88,6 +88,22 @@ SUSPECTED_EXTERNAL_ENTITY_PATTERNS = (
 
 _HIGH_FP_AMBIGUOUS = ("curry",)
 
+MONEY_ACTION_NAMES = {
+    _normalize("reserva_completada_directa"),
+    _normalize("Pedido GloriaFood Online"),
+    _normalize("click_pedir_online"),
+    _normalize("click_whatsapp"),
+}
+
+WEAK_LOCAL_ACTION_NAMES = {
+    _normalize("Local actions - Directions"),
+    _normalize("Store visits"),
+    _normalize("Local actions - Website visits"),
+    _normalize("Local actions - Phone calls"),
+    _normalize("Local actions - Menu views"),
+    _normalize("Local actions - Other engagements"),
+}
+
 
 def _wb(norm: str, pattern: str) -> bool:
     """Match por límite de palabra del patrón (ya normalizado) en la query normalizada."""
@@ -144,7 +160,65 @@ def _is_suspected_external_entity(norm: str) -> bool:
     return _first_match(norm, SUSPECTED_EXTERNAL_ENTITY_PATTERNS) is not None
 
 
-def classify_search_term(query: str, cost: float = 0.0, conversions: float = 0.0) -> dict:
+def _positive_metric(value) -> bool:
+    try:
+        return float(value or 0) > 0
+    except Exception:
+        return False
+
+
+def _action_has_positive_count(action: dict) -> bool:
+    return (
+        _positive_metric(action.get("all_conversions"))
+        or _positive_metric(action.get("conversions"))
+    )
+
+
+def classify_conversion_quality(
+    actions,
+    conversions: float = 0.0,
+    all_conversions: float = 0.0,
+) -> str:
+    if not _positive_metric(conversions) and not _positive_metric(all_conversions):
+        return "none"
+
+    if actions is None:
+        return "unknown"
+
+    positive_actions = [a for a in actions if _action_has_positive_count(a)]
+    if not positive_actions:
+        return "unknown"
+
+    has_money = False
+    has_weak = False
+    has_unknown = False
+
+    for action in positive_actions:
+        name = _normalize(action.get("name") or action.get("conversion_action_name") or "")
+        if not name:
+            has_unknown = True
+        elif name in MONEY_ACTION_NAMES:
+            has_money = True
+        elif name in WEAK_LOCAL_ACTION_NAMES:
+            has_weak = True
+        else:
+            has_unknown = True
+
+    if has_money:
+        return "money_action"
+    if has_unknown:
+        return "unknown"
+    if has_weak:
+        return "weak_local_action"
+    return "unknown"
+
+
+def classify_search_term(
+    query: str,
+    cost: float = 0.0,
+    conversions: float = 0.0,
+    conversion_quality: str = "unknown",
+) -> dict:
     """Clasifica un search term. Devuelve el objeto JSON de Fase 1.
 
     cost/conversions son señales SECUNDARIAS: cost nunca clasifica; conversions
@@ -162,6 +236,7 @@ def classify_search_term(query: str, cost: float = 0.0, conversions: float = 0.0
         "auto_apply": False,
         **_phase1_multi_axis_defaults(),
     }
+    result["conversion_quality"] = conversion_quality
 
     # 1) Marca propia (lo ÚNICO que se protege automáticamente)
     if _first_match(norm, BRAND_PROTECT):

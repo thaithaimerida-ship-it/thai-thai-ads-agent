@@ -1,6 +1,8 @@
 import os
 import sqlite3
 import json
+import re
+import unicodedata
 from datetime import datetime, timedelta
 from google.ads.googleads.client import GoogleAdsClient
 from google.api_core.exceptions import GoogleAPIError
@@ -614,6 +616,7 @@ def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, date_range
           campaign.name,
           metrics.cost_micros,
           metrics.conversions,
+          metrics.all_conversions,
           metrics.clicks,
           metrics.impressions
         FROM search_term_view
@@ -630,6 +633,7 @@ def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, date_range
                 "campaign_name": row.campaign.name,
                 "cost_micros": row.metrics.cost_micros,
                 "conversions": row.metrics.conversions,
+                "all_conversions": row.metrics.all_conversions,
                 "clicks": row.metrics.clicks,
                 "impressions": row.metrics.impressions
             })
@@ -637,6 +641,69 @@ def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, date_range
     except GoogleAPIError as e:
         print(f"Error fetching search terms: {e}")
         return []
+
+
+def _search_term_breakdown_key(query: str, campaign_id: str) -> tuple[str, str]:
+    norm = unicodedata.normalize("NFD", str(query or "").lower())
+    norm = "".join(c for c in norm if unicodedata.category(c) != "Mn")
+    norm = re.sub(r"\s+", " ", norm).strip()
+    return norm, str(campaign_id or "")
+
+
+def fetch_search_term_conversion_breakdown(
+    client: GoogleAdsClient,
+    customer_id: str,
+    date_range: str = "YESTERDAY",
+):
+    """
+    Read-only breakdown by conversion action for search terms.
+
+    Returns None if Google Ads rejects the segmented query so callers can
+    degrade conservatively instead of treating aggregate conversions as money.
+    """
+    ga_service = client.get_service("GoogleAdsService")
+    query = f"""
+        SELECT
+          search_term_view.search_term,
+          campaign.id,
+          campaign.name,
+          segments.conversion_action_name,
+          segments.conversion_action,
+          metrics.all_conversions,
+          metrics.conversions
+        FROM search_term_view
+        WHERE segments.date DURING {date_range}
+    """
+
+    try:
+        response = ga_service.search(customer_id=customer_id, query=query)
+        out = {}
+        for row in response:
+            query_text = row.search_term_view.search_term
+            campaign_id = str(row.campaign.id)
+            key = _search_term_breakdown_key(query_text, campaign_id)
+            entry = out.setdefault(key, {
+                "query": query_text,
+                "campaign_id": campaign_id,
+                "campaign_name": row.campaign.name,
+                "actions": [],
+                "conversions": 0.0,
+                "all_conversions": 0.0,
+            })
+            conversions = float(row.metrics.conversions or 0)
+            all_conversions = float(row.metrics.all_conversions or 0)
+            entry["actions"].append({
+                "name": row.segments.conversion_action_name,
+                "resource_name": row.segments.conversion_action,
+                "conversions": conversions,
+                "all_conversions": all_conversions,
+            })
+            entry["conversions"] += conversions
+            entry["all_conversions"] += all_conversions
+        return out
+    except Exception as e:
+        print(f"Error fetching search term conversion breakdown: {e}")
+        return None
 
 # IDs de advertising_channel_type que NO soportan campaign_criterion KEYWORD
 # negative de forma confiable. Smart Campaigns aceptan la mutación sin error
