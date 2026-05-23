@@ -36,6 +36,10 @@ _PAGE = """<!doctype html>
   tr.cand { background: #fde0e0; }
   tr.conv { background: #e0f0e0; }
   tr.comp { background: #fef3c7; }
+  tr.blocked { background: #fff1f1; }
+  tr.review { background: #fff7d6; }
+  tr.protected { background: #e9f7ee; }
+  tr.ready { background: #e8f8e8; }
   h2.sec { font-size: 1.05rem; margin: 1.4rem 0 .4rem; }
   p.help { color: #666; font-size: .85rem; margin: 0 0 .5rem; }
   #meta { color: #666; font-size: .85rem; }
@@ -52,6 +56,10 @@ _PAGE = """<!doctype html>
   .mt { display: inline-block; font-size: .7rem; font-weight: 700;
         padding: .05rem .35rem; border-radius: 4px; background: #eef;
         color: #225; border: 1px solid #ccd; vertical-align: middle; }
+  .badge { display: inline-block; font-size: .7rem; font-weight: 700;
+        padding: .05rem .35rem; border-radius: 4px; background: #f5f5f5;
+        color: #333; border: 1px solid #ddd; vertical-align: middle; }
+  .reason { color: #666; font-size: .8rem; }
 </style>
 </head>
 <body>
@@ -82,11 +90,6 @@ _PAGE = """<!doctype html>
   </div>
 
   <div id="tableWrap"></div>
-
-  <h2 id="compTitle" class="sec" hidden>Ambiguos &mdash; revisar</h2>
-  <p id="compHelp" class="help" hidden>Terminos ambiguos (comida asiatica, curry,
-     noodles, etc.) &mdash; pueden o no ser intencion Thai. Revisa antes de bloquear.</p>
-  <div id="compWrap"></div>
 
   <button id="addBtn" hidden>Agregar como negativos</button>
   <div id="confirm" hidden></div>
@@ -138,6 +141,39 @@ function applyMt(t) {
   return (m === "EXACT" || m === "PHRASE") ? m : null;
 }
 
+function canPick(t) {
+  return t.negative_allowed === true &&
+    !!applyMt(t) &&
+    t.already_negative === false &&
+    !!t.campaign_id;
+}
+
+function blockReason(t) {
+  if (t.already_negative === true) return "Ya negativo";
+  if (t.negative_allowed === true && !applyMt(t)) return "Match type no permitido";
+  if (t.negative_allowed === true && !t.campaign_id) return "Falta campaign_id";
+  if (t.negative_allowed === true && t.already_negative !== false) return "Estado de negativo no confiable";
+  if (t.conversion_quality === "unknown") return "Conversion no identificada";
+  if (t.conversion_quality === "money_action") return "Tuvo accion de dinero";
+  if (!t.campaign_id) return "Falta campaign_id";
+  if (!applyMt(t) && t.semantic_class === "red_safe") return "Match type no permitido";
+  if (t.base_negative_eligible !== true && t.semantic_class === "red_safe") return "No cumple elegibilidad base";
+  if (t.semantic_class === "external_entity_review") return "Entidad ajena no curada: revisar";
+  if (t.semantic_class === "ambiguous_useful") return "Puede traer clientes";
+  if (t.semantic_class === "brand_protected" || t.semantic_class === "thai_intent") return "Protegido";
+  return "Monitoreo";
+}
+
+function sectionFor(t) {
+  if (t.already_negative === true) return "already";
+  if (canPick(t)) return "ready";
+  if (t.semantic_class === "red_safe") return "blocked";
+  if (t.semantic_class === "external_entity_review") return "review";
+  if (t.semantic_class === "ambiguous_useful") return "ambiguous";
+  if (t.semantic_class === "brand_protected" || t.semantic_class === "thai_intent") return "protected";
+  return "monitoring";
+}
+
 el("load").onclick = loadTerms;
 
 function loadTerms() {
@@ -159,9 +195,9 @@ function loadTerms() {
 }
 
 var HEAD = "<table><thead><tr><th></th><th>Query</th><th>Campana</th>" +
-           "<th>Clics</th><th>Impr.</th><th>Costo</th><th>Conv.</th></tr></thead><tbody>";
+           "<th>Clics</th><th>Impr.</th><th>Costo</th><th>Conv.</th><th>Estado</th></tr></thead><tbody>";
 
-function rowHtml(t, i, cls) {
+function legacyRowHtml(t, i, cls) {
   if (t.already_negative) {
     var note = t.negative_smart_uncertain ? " (Smart: efectividad incierta)" : "";
     var bb = t.blocked_by ? (esc(t.blocked_by.text) + " " + esc(t.blocked_by.match_type)) : "";
@@ -184,7 +220,7 @@ function rowHtml(t, i, cls) {
     disabled = ""; badge = " <span class='mt'>" + amt + "</span>";
   }
   return "<tr class='" + cls + "'>" +
-    "<td><input type='checkbox' class='pick' data-i='" + i + "' " + disabled + "></td>" +
+    "<td></td>" +
     "<td>" + esc(t.query) + badge + "</td>" +
     "<td>" + esc(t.campaign_name) + "</td>" +
     "<td class='num'>" + t.clicks + "</td>" +
@@ -193,38 +229,71 @@ function rowHtml(t, i, cls) {
     "<td class='num'>" + t.conversions + "</td></tr>";
 }
 
+function sectionHtml(title, help, items, cls) {
+  if (!items.length) return "";
+  var body = "";
+  items.forEach(function (entry) {
+    body += rowHtml(entry.term, entry.index, cls);
+  });
+  return "<h2 class='sec'>" + esc(title) + " (" + items.length + ")</h2>" +
+    "<p class='help'>" + esc(help) + "</p>" +
+    HEAD + body + "</tbody></table>";
+}
+
+function rowHtml(t, i, cls) {
+  var amt = applyMt(t);
+  var badge = amt ? " <span class='mt'>" + amt + "</span>" : "";
+  var state = "<span class='badge'>" + esc(t.semantic_class || "sin clase") + "</span> " +
+              "<span class='badge'>" + esc(t.conversion_quality || "sin conversion") + "</span><br>" +
+              "<span class='reason'>" + esc(blockReason(t)) + "</span>";
+  if (t.already_negative) {
+    var note = t.negative_smart_uncertain ? " (Smart: efectividad incierta)" : "";
+    var bb = t.blocked_by ? (esc(t.blocked_by.text) + " " + esc(t.blocked_by.match_type)) : "";
+    return "<tr class='" + cls + " done' title='ya negativo: " + bb + note + "'>" +
+      "<td></td>" +
+      "<td>" + esc(t.query) + badge + " <small>Ya negativo" + note + "</small></td>" +
+      "<td>" + esc(t.campaign_name) + "</td>" +
+      "<td class='num'>" + t.clicks + "</td>" +
+      "<td class='num'>" + t.impressions + "</td>" +
+      "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
+      "<td class='num'>" + t.conversions + "</td>" +
+      "<td>" + state + "</td></tr>";
+  }
+  var pick = canPick(t)
+    ? "<input type='checkbox' class='pick' data-i='" + i + "'>"
+    : "";
+  return "<tr class='" + cls + "'>" +
+    "<td>" + pick + "</td>" +
+    "<td>" + esc(t.query) + badge + "</td>" +
+    "<td>" + esc(t.campaign_name) + "</td>" +
+    "<td class='num'>" + t.clicks + "</td>" +
+    "<td class='num'>" + t.impressions + "</td>" +
+    "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
+    "<td class='num'>" + t.conversions + "</td>" +
+    "<td>" + state + "</td></tr>";
+}
+
 function renderTable() {
   if (!rows.length) {
     el("tableWrap").innerHTML = "<p>Sin search terms en este rango.</p>";
-    el("compWrap").innerHTML = "";
-    el("compTitle").hidden = true; el("compHelp").hidden = true;
     el("addBtn").hidden = true;
     return;
   }
-  // Indices globales en `rows` (data-i) -> selected()/submit() no cambian.
-  var mainBody = "", compBody = "", nMain = 0, nComp = 0;
+  var sections = {
+    ready: [], blocked: [], review: [], ambiguous: [],
+    protected: [], monitoring: [], already: []
+  };
   rows.forEach(function (t, i) {
-    // Fase 1: color/seccion por classification. Conversiones NO gana sobre classification.
-    // Fallback defensivo a los flags del shim SOLO si no viene classification.
-    var cl = t.classification ||
-      (t.negative_candidate ? "rojo" : (t.competitor_term ? "amarillo" : (Number(t.conversions) > 0 ? "verde" : "blanco")));
-    if (cl === "amarillo") {
-      compBody += rowHtml(t, i, "comp"); nComp++;
-    } else {
-      var cls = cl === "rojo" ? "cand" : (cl === "verde" ? "conv" : "");  // blanco -> sin color
-      mainBody += rowHtml(t, i, cls); nMain++;
-    }
+    sections[sectionFor(t)].push({ term: t, index: i });
   });
-  el("tableWrap").innerHTML = nMain
-    ? HEAD + mainBody + "</tbody></table>"
-    : "<p>Sin terminos (fuera de competidores) en este rango.</p>";
-  if (nComp) {
-    el("compWrap").innerHTML = HEAD + compBody + "</tbody></table>";
-    el("compTitle").hidden = false; el("compHelp").hidden = false;
-  } else {
-    el("compWrap").innerHTML = "";
-    el("compTitle").hidden = true; el("compHelp").hidden = true;
-  }
+  el("tableWrap").innerHTML =
+    sectionHtml("Listos para aplicar", "Unica seccion seleccionable. Requiere negative_allowed=true, EXACT/PHRASE, campaign_id y already_negative=false.", sections.ready, "ready") +
+    sectionHtml("Rojo bloqueado", "Terminos rojos que no pasan alguna guarda de seguridad.", sections.blocked, "blocked") +
+    sectionHtml("Ya negativos", "Terminos que ya tienen un negativo bloqueandolos.", sections.already, "done") +
+    sectionHtml("Revisar entidad ajena", "Posibles restaurantes, negocios o lugares externos no curados. Sin checkbox.", sections.review, "review") +
+    sectionHtml("Ambiguos / pueden traer clientes", "Genericos u otras cocinas que pueden representar demanda util. Sin checkbox.", sections.ambiguous, "comp") +
+    sectionHtml("Protegidos", "Marca propia o intencion Thai clara. Sin checkbox.", sections.protected, "protected") +
+    sectionHtml("Monitoreo", "Terminos neutrales. Sin checkbox.", sections.monitoring, "");
   el("addBtn").hidden = false;
 }
 
