@@ -17,6 +17,8 @@ from routes.auth_token import require_token
 from engine.risk_classifier import get_campaign_thresholds
 from engine.search_term_classifier import classify_search_term, _normalize
 from engine.search_term_history import aggregate_windows, accumulated_reds
+from engine.ads_client import fetch_negative_keywords
+from engine.negative_matcher import find_blocking_negative
 
 router = APIRouter(tags=["analysis"])
 logger = logging.getLogger(__name__)
@@ -249,6 +251,19 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
             t["distinct_days_30d"] = a.get("distinct_days_30d", 0)
             t["distinct_weeks_90d"] = a.get("distinct_weeks_90d", 0)
             t["recurrent"] = a.get("distinct_weeks_90d", 0) >= 2
+
+        # #2/#3: marcar terminos ya bloqueados como negativos (read-only, nivel campana).
+        try:
+            _negs_by_campaign = fetch_negative_keywords(client, target_id)
+        except Exception:
+            _negs_by_campaign = {}
+        for t in formatted:
+            _camp = _negs_by_campaign.get(str(t.get("campaign_id", "")), {})
+            _blocking = find_blocking_negative(t["query"], _camp.get("negatives", []))
+            t["already_negative"] = _blocking is not None
+            t["blocked_by"] = ({"text": _blocking["text"], "match_type": _blocking["match_type"]}
+                               if _blocking else None)
+            t["negative_smart_uncertain"] = bool(_blocking) and _camp.get("channel_type") == "SMART"
 
         counts = {k: sum(1 for t in formatted if t["classification"] == k)
                   for k in ("rojo", "amarillo", "verde", "blanco")}

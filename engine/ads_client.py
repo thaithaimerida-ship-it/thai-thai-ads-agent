@@ -564,6 +564,43 @@ def fetch_search_ad_groups(client: GoogleAdsClient, customer_id: str) -> list:
         return []
 
 
+def fetch_negative_keywords(client: GoogleAdsClient, customer_id: str) -> dict:
+    """Lee los negative keywords a NIVEL CAMPANA (campaign_criterion) de la cuenta.
+
+    READ-ONLY: solo una query GAQL, no muta nada. NO cubre listas compartidas
+    (shared sets) — Thai Thai no usa listas compartidas conocidas.
+
+    Returns:
+        {campaign_id_str: {"campaign_name": str, "channel_type": str,
+         "negatives": [{"text", "match_type", "resource_name"}, ...]}}
+    """
+    customer_id = str(customer_id).replace("-", "")
+    ga_service = client.get_service("GoogleAdsService")
+    query = """
+        SELECT campaign.id, campaign.name, campaign.advertising_channel_type,
+               campaign_criterion.keyword.text,
+               campaign_criterion.keyword.match_type,
+               campaign_criterion.resource_name
+        FROM campaign_criterion
+        WHERE campaign_criterion.negative = TRUE
+          AND campaign_criterion.type = 'KEYWORD'
+    """
+    out: dict = {}
+    for row in ga_service.search(customer_id=customer_id, query=query):
+        cid = str(row.campaign.id)
+        entry = out.setdefault(cid, {
+            "campaign_name": row.campaign.name,
+            "channel_type": row.campaign.advertising_channel_type.name,
+            "negatives": [],
+        })
+        entry["negatives"].append({
+            "text": row.campaign_criterion.keyword.text,
+            "match_type": row.campaign_criterion.keyword.match_type.name,
+            "resource_name": row.campaign_criterion.resource_name,
+        })
+    return out
+
+
 def fetch_search_term_data(client: GoogleAdsClient, customer_id: str, date_range: str = "YESTERDAY"):
     """
     Obtiene datos de search terms para el rango de fechas indicado.

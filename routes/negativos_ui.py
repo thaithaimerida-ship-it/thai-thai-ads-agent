@@ -152,6 +152,18 @@ var HEAD = "<table><thead><tr><th></th><th>Query</th><th>Campana</th>" +
            "<th>Clics</th><th>Impr.</th><th>Costo</th><th>Conv.</th></tr></thead><tbody>";
 
 function rowHtml(t, i, cls) {
+  if (t.already_negative) {
+    var note = t.negative_smart_uncertain ? " (Smart: efectividad incierta)" : "";
+    var bb = t.blocked_by ? (esc(t.blocked_by.text) + " " + esc(t.blocked_by.match_type)) : "";
+    return "<tr class='" + cls + " done' title='ya negativo: " + bb + note + "'>" +
+      "<td>✅</td>" +
+      "<td>" + esc(t.query) + " <small>✅ ya negativo" + note + "</small></td>" +
+      "<td>" + esc(t.campaign_name) + "</td>" +
+      "<td class='num'>" + t.clicks + "</td>" +
+      "<td class='num'>" + t.impressions + "</td>" +
+      "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
+      "<td class='num'>" + t.conversions + "</td></tr>";
+  }
   var disabled = t.campaign_id ? "" : "disabled title='sin campaign_id'";
   return "<tr class='" + cls + "'>" +
     "<td><input type='checkbox' class='pick' data-i='" + i + "' " + disabled + "></td>" +
