@@ -64,6 +64,9 @@ _PAGE = """<!doctype html>
   .review-actions button { background: #7a5a00; padding: .35rem .45rem; font-size: .78rem; }
   .review-actions button.secondary { background: #555; }
   .review-actions button.neutral { background: #777; }
+  .review-batch { display: flex; gap: .45rem; flex-wrap: wrap; margin: .55rem 0 .7rem; }
+  .review-batch button { background: #7a5a00; font-size: .85rem; }
+  .review-pick { width: 1rem; height: 1rem; }
   #reviewProposal { background: #fff; border: 1px solid #d9c36a; padding: .9rem;
         border-radius: 6px; margin: 1rem 0; }
   #reviewProposal textarea { width: 100%; min-height: 13rem; box-sizing: border-box;
@@ -274,7 +277,7 @@ function legacyRowHtml(t, i, cls) {
     "<td class='num'>" + t.conversions + "</td></tr>";
 }
 
-function sectionHtml(title, help, items, cls) {
+function sectionHtml(title, help, items, cls, extraHtml) {
   if (!items.length) return "";
   var body = "";
   items.forEach(function (entry) {
@@ -282,6 +285,7 @@ function sectionHtml(title, help, items, cls) {
   });
   return "<h2 class='sec'>" + esc(title) + " (" + items.length + ")</h2>" +
     "<p class='help'>" + esc(help) + "</p>" +
+    (extraHtml || "") +
     HEAD + body + "</tbody></table>";
 }
 
@@ -306,7 +310,7 @@ function rowHtml(t, i, cls) {
   }
   if (t.semantic_class === "external_entity_review") {
     return "<tr class='" + cls + "'>" +
-      "<td></td>" +
+      "<td>" + reviewPick(i) + "</td>" +
       "<td>" + esc(t.query) + badge + "</td>" +
       "<td>" + esc(t.campaign_name) + "</td>" +
       "<td class='num'>" + t.clicks + "</td>" +
@@ -327,6 +331,10 @@ function rowHtml(t, i, cls) {
     "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
     "<td class='num'>" + t.conversions + "</td>" +
     "<td>" + state + "</td></tr>";
+}
+
+function reviewPick(i) {
+  return "<input type='checkbox' class='review-pick' data-review-i='" + i + "'>";
 }
 
 function reviewActions(t, i) {
@@ -370,6 +378,13 @@ function usefulGenericProposal(t) {
   };
 }
 
+function reviewBatchHtml() {
+  return "<div class='review-batch'>" +
+    "<button onclick='showBatchReviewProposal(\\"competitor\\")'>Generar propuestas de competidores seleccionados</button>" +
+    "<button class='secondary' onclick='showBatchReviewProposal(\\"generic\\")'>Generar propuestas de genéricos útiles seleccionados</button>" +
+    "</div>";
+}
+
 function showReviewProposal(kind, index) {
   var t = rows[index];
   var box = el("reviewProposal");
@@ -410,6 +425,37 @@ function showReviewProposal(kind, index) {
   box.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
+function showBatchReviewProposal(kind) {
+  var items = selectedForReview();
+  if (!items.length) { alert("No seleccionaste ningun termino en revision."); return; }
+
+  var proposals = kind === "competitor"
+    ? items.map(function (t) { return competitorProposal(t); })
+    : items.map(function (t) { return usefulGenericProposal(t); });
+  var targetFile = kind === "competitor" ? "irrelevant_entities.json" : "useful_generic_patterns.json";
+  var title = kind === "competitor" ? "Propuestas de competidores seleccionados" : "Propuestas de genéricos útiles seleccionados";
+  var json = JSON.stringify(proposals, null, 2);
+  var box = el("reviewProposal");
+  box.innerHTML = "<p class='proposal-note'>Esto genera propuestas. No aplica negativos.</p>" +
+    "<h3>" + esc(title) + "</h3>" +
+    "<p class='help'>Destino sugerido para commit manual: <strong>" + esc(targetFile) + "</strong></p>" +
+    "<textarea id='proposalJson' readonly>" + esc(json) + "</textarea>" +
+    "<button id='copyProposal'>Copiar propuesta JSON</button> " +
+    "<button id='closeReview' class='secondary'>Cerrar</button>";
+  box.hidden = false;
+  el("copyProposal").onclick = function () {
+    var textarea = el("proposalJson");
+    textarea.select();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textarea.value);
+    } else {
+      document.execCommand("copy");
+    }
+  };
+  el("closeReview").onclick = function () { box.hidden = true; };
+  box.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
 function renderTable() {
   if (!rows.length) {
     el("tableWrap").innerHTML = "<p>Sin search terms en este rango.</p>";
@@ -427,14 +473,14 @@ function renderTable() {
     sectionHtml("Listos para aplicar", "Unica seccion seleccionable. Requiere negative_allowed=true, EXACT/PHRASE, campaign_id y already_negative=false.", sections.ready, "ready") +
     sectionHtml("Rojo bloqueado", "Terminos rojos que no pasan alguna guarda de seguridad.", sections.blocked, "blocked") +
     sectionHtml("Ya negativos", "Terminos que ya tienen un negativo bloqueandolos.", sections.already, "done") +
-    sectionHtml("Revisar entidad ajena", "Posibles restaurantes, negocios o lugares externos no curados. Sin checkbox.", sections.review, "review") +
+    sectionHtml("Revisar entidad ajena", "Posibles restaurantes, negocios o lugares externos no curados. Sin checkbox de negativo.", sections.review, "review", reviewBatchHtml()) +
     sectionHtml("Ambiguos / pueden traer clientes", "Genericos u otras cocinas que pueden representar demanda util. Sin checkbox.", sections.ambiguous, "comp") +
     sectionHtml("Protegidos", "Marca propia o intencion Thai clara. Sin checkbox.", sections.protected, "protected") +
     sectionHtml("Monitoreo", "Terminos neutrales. Sin checkbox.", sections.monitoring, "");
   el("addBtn").hidden = false;
 }
 
-function selected() {
+function selectedForNegatives() {
   var out = [];
   document.querySelectorAll(".pick:checked").forEach(function (cb) {
     out.push(rows[parseInt(cb.getAttribute("data-i"), 10)]);
@@ -442,8 +488,20 @@ function selected() {
   return out;
 }
 
+function selectedForReview() {
+  var out = [];
+  document.querySelectorAll(".review-pick:checked").forEach(function (cb) {
+    out.push(rows[parseInt(cb.getAttribute("data-review-i"), 10)]);
+  });
+  return out;
+}
+
+function selected() {
+  return selectedForNegatives();
+}
+
 el("addBtn").onclick = function () {
-  var sel = selected();
+  var sel = selectedForNegatives();
   if (!sel.length) { alert("No seleccionaste ningun termino."); return; }
 
   // Google Ads: keyword maximo 80 caracteres. Los que excedan se EXCLUYEN
