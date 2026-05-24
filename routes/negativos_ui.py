@@ -60,6 +60,15 @@ _PAGE = """<!doctype html>
         padding: .05rem .35rem; border-radius: 4px; background: #f5f5f5;
         color: #333; border: 1px solid #ddd; vertical-align: middle; }
   .reason { color: #666; font-size: .8rem; }
+  .review-actions { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .45rem; }
+  .review-actions button { background: #7a5a00; padding: .35rem .45rem; font-size: .78rem; }
+  .review-actions button.secondary { background: #555; }
+  .review-actions button.neutral { background: #777; }
+  #reviewProposal { background: #fff; border: 1px solid #d9c36a; padding: .9rem;
+        border-radius: 6px; margin: 1rem 0; }
+  #reviewProposal textarea { width: 100%; min-height: 13rem; box-sizing: border-box;
+        font: .82rem ui-monospace, SFMono-Regular, Consolas, monospace; margin: .5rem 0; }
+  .proposal-note { color: #7a5a00; font-size: .9rem; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -95,6 +104,7 @@ _PAGE = """<!doctype html>
   <div id="confirm" hidden></div>
   <div id="banner" hidden></div>
   <div id="results"></div>
+  <div id="reviewProposal" hidden></div>
 </div>
 
 <script>
@@ -131,6 +141,41 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   });
+}
+
+function normalizeReviewText(s) {
+  return String(s || "")
+    .normalize("NFD").replace(/[\\u0300-\\u036f]/g, "")
+    .toLowerCase().replace(/\\s+/g, " ").trim();
+}
+
+function addUnique(out, value) {
+  value = String(value || "").replace(/\\s+/g, " ").trim();
+  if (!value) return;
+  var key = normalizeReviewText(value);
+  for (var i = 0; i < out.length; i++) {
+    if (normalizeReviewText(out[i]) === key) return;
+  }
+  out.push(value);
+}
+
+function canonicalForReview(t) {
+  return normalizeReviewText(t.suggested_negative || t.query);
+}
+
+function aliasesForReview(t) {
+  var aliases = [];
+  var q = String(t.query || "").replace(/\\s+/g, " ").trim();
+  var canonical = canonicalForReview(t);
+  addUnique(aliases, q);
+  addUnique(aliases, canonical);
+  if (canonical && canonical.indexOf("restaurante ") !== 0) {
+    addUnique(aliases, "restaurante " + canonical);
+  }
+  if (q && normalizeReviewText(q) !== canonical && normalizeReviewText(q).indexOf("restaurante ") !== 0) {
+    addUnique(aliases, "restaurante " + q);
+  }
+  return aliases;
 }
 
 // Match type aplicable que envia el clasificador (suggested_match_type).
@@ -259,6 +304,17 @@ function rowHtml(t, i, cls) {
       "<td class='num'>" + t.conversions + "</td>" +
       "<td>" + state + "</td></tr>";
   }
+  if (t.semantic_class === "external_entity_review") {
+    return "<tr class='" + cls + "'>" +
+      "<td></td>" +
+      "<td>" + esc(t.query) + badge + "</td>" +
+      "<td>" + esc(t.campaign_name) + "</td>" +
+      "<td class='num'>" + t.clicks + "</td>" +
+      "<td class='num'>" + t.impressions + "</td>" +
+      "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
+      "<td class='num'>" + t.conversions + "</td>" +
+      "<td>" + state + reviewActions(t, i) + "</td></tr>";
+  }
   var pick = canPick(t)
     ? "<input type='checkbox' class='pick' data-i='" + i + "'>"
     : "";
@@ -271,6 +327,87 @@ function rowHtml(t, i, cls) {
     "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
     "<td class='num'>" + t.conversions + "</td>" +
     "<td>" + state + "</td></tr>";
+}
+
+function reviewActions(t, i) {
+  return "<div class='review-actions' data-review-i='" + i + "'>" +
+    "<button onclick='showReviewProposal(\\"competitor\\"," + i + ")'>Confirmar competidor</button>" +
+    "<button class='secondary' onclick='showReviewProposal(\\"generic\\"," + i + ")'>Marcar como genérico útil</button>" +
+    "<button class='neutral' onclick='showReviewProposal(\\"keep\\"," + i + ")'>Mantener en revisión</button>" +
+    "</div>";
+}
+
+function reviewMeta(t, decision) {
+  return {
+    source_query: String(t.query || ""),
+    decision: decision,
+    confirmed_by: "hugo",
+    confirmed_at: new Date().toISOString(),
+    notes: ""
+  };
+}
+
+function competitorProposal(t) {
+  return {
+    canonical: canonicalForReview(t),
+    aliases: aliasesForReview(t),
+    category: "restaurante_ajeno",
+    confidence: "media",
+    suggested_match_type: "EXACT",
+    auto_apply: false,
+    review: reviewMeta(t, "confirmar_competidor")
+  };
+}
+
+function usefulGenericProposal(t) {
+  return {
+    pattern: String(t.query || ""),
+    normalized_pattern: normalizeReviewText(t.query),
+    classification_target: "ambiguous_useful",
+    reason: "Consulta generica o util para demanda potencial; no debe caer como entidad ajena.",
+    confidence: "media",
+    review: reviewMeta(t, "marcar_generico_util")
+  };
+}
+
+function showReviewProposal(kind, index) {
+  var t = rows[index];
+  var box = el("reviewProposal");
+  if (!t) return;
+
+  if (kind === "keep") {
+    box.innerHTML = "<p class='proposal-note'>Esto genera una propuesta. No aplica negativos.</p>" +
+      "<h3>Mantener en revisión</h3>" +
+      "<p>No cambia nada, no genera payload y no guarda en producción.</p>" +
+      "<button id='closeReview' class='secondary'>Cerrar</button>";
+    box.hidden = false;
+    el("closeReview").onclick = function () { box.hidden = true; };
+    box.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+
+  var proposal = kind === "competitor" ? competitorProposal(t) : usefulGenericProposal(t);
+  var targetFile = kind === "competitor" ? "irrelevant_entities.json" : "useful_generic_patterns.json";
+  var title = kind === "competitor" ? "Propuesta para entidad curada" : "Propuesta para genérico útil";
+  var json = JSON.stringify(proposal, null, 2);
+  box.innerHTML = "<p class='proposal-note'>Esto genera una propuesta. No aplica negativos.</p>" +
+    "<h3>" + esc(title) + "</h3>" +
+    "<p class='help'>Destino sugerido para commit manual: <strong>" + esc(targetFile) + "</strong></p>" +
+    "<textarea id='proposalJson' readonly>" + esc(json) + "</textarea>" +
+    "<button id='copyProposal'>Copiar propuesta JSON</button> " +
+    "<button id='closeReview' class='secondary'>Cerrar</button>";
+  box.hidden = false;
+  el("copyProposal").onclick = function () {
+    var textarea = el("proposalJson");
+    textarea.select();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textarea.value);
+    } else {
+      document.execCommand("copy");
+    }
+  };
+  el("closeReview").onclick = function () { box.hidden = true; };
+  box.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function renderTable() {
