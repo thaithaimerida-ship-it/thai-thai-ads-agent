@@ -40,6 +40,34 @@ def setup(tmp_path, monkeypatch, captured):
     monkeypatch.setattr(analysis, "get_db_path", lambda: db)
     fake_engine = {"get_ads_client": lambda: MagicMock(), "add_negative_keyword": captured}
     monkeypatch.setattr(analysis, "_get_engine", lambda: fake_engine)
+    monkeypatch.setattr(analysis, "_build_search_terms_payload", lambda date_range="LAST_7_DAYS": {
+        "status": "success",
+        "date_range": date_range,
+        "search_terms": [
+            {
+                "query": "querreke",
+                "campaign_id": "111",
+                "suggested_negative": "querreke",
+                "suggested_match_type": "EXACT",
+                "negative_allowed": True,
+                "base_negative_eligible": True,
+                "semantic_class": "red_safe",
+                "conversion_quality": "none",
+                "already_negative": False,
+            },
+            {
+                "query": "muay thai",
+                "campaign_id": "111",
+                "suggested_negative": "muay thai",
+                "suggested_match_type": "PHRASE",
+                "negative_allowed": True,
+                "base_negative_eligible": True,
+                "semantic_class": "red_safe",
+                "conversion_quality": "weak_local_action",
+                "already_negative": False,
+            },
+        ],
+    })
     return captured
 
 

@@ -35,6 +35,7 @@ class OptimizationAction(BaseModel):
 
 class ExecuteOptimizationRequest(BaseModel):
     actions: List[OptimizationAction]
+    date_range: Optional[str] = None
 
 
 def _get_engine():
@@ -195,6 +196,233 @@ def _compute_negative_allowed(term: dict) -> bool:
     )
 
 
+def _normalize_date_range(date_range: str | None) -> str:
+    return (date_range or "LAST_7_DAYS").strip().upper()
+
+
+def _build_search_terms_payload(date_range: str = "LAST_7_DAYS") -> dict:
+    date_range = _normalize_date_range(date_range)
+    if date_range not in VALID_DATE_RANGES:
+        return {
+            "status": "error",
+            "message": f"date_range invalido: '{date_range}'. Validos: {sorted(VALID_DATE_RANGES)}",
+        }
+    engine = _get_engine()
+    if not engine:
+        raise Exception("Engine not available")
+    target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+    client = engine["get_ads_client"]()
+    raw_terms = engine["fetch_search_term_data"](client, target_id, date_range)
+    conversion_breakdown = fetch_search_term_conversion_breakdown(client, target_id, date_range)
+
+    # Pool top-100 por gasto. Fase 1: el gasto solo acota el pool (no clasifica).
+    # NOTA Fase 1: top-100 NO resuelve irrelevantes de gasto muy bajo;
+    # la acumulacion historica 7/30/90d queda para Fase 2.
+    raw_top = sorted(raw_terms, key=lambda st: st.get("cost_micros", 0), reverse=True)[:100]
+
+    _GROUP_ORDER = {"rojo": 0, "amarillo": 1, "verde": 2, "blanco": 3}
+    formatted = []
+    for st in raw_top:
+        cost = st.get("cost_micros", 0) / 1_000_000
+        conversions = float(st.get("conversions", 0))
+        all_conversions = float(st.get("all_conversions", conversions) or 0)
+        breakdown_key = (_normalize(st.get("query", "")), str(st.get("campaign_id", "")))
+        breakdown = (conversion_breakdown or {}).get(breakdown_key) if conversion_breakdown is not None else None
+        conversion_quality = classify_conversion_quality(
+            breakdown.get("actions") if breakdown else None,
+            conversions=breakdown.get("conversions", conversions) if breakdown else conversions,
+            all_conversions=breakdown.get("all_conversions", all_conversions) if breakdown else all_conversions,
+        )
+        term = classify_search_term(
+            st.get("query", ""),
+            cost,
+            conversions,
+            conversion_quality=conversion_quality,
+        )
+        term.update({
+            "campaign_name": st.get("campaign_name", ""),
+            "campaign_id": str(st.get("campaign_id", "")),
+            "clicks": int(st.get("clicks", 0)),
+            "impressions": int(st.get("impressions", 0)),
+            "cost": round(cost, 2),
+            "conversions": round(conversions, 1),
+            "all_conversions": round(all_conversions, 1),
+            # Shim retrocompatible para el monitor pre-Fase 1:
+            "negative_candidate": term["classification"] == "rojo",
+            "competitor_term": term["classification"] == "amarillo",
+        })
+        formatted.append(term)
+
+    # Orden final: rojos -> amarillos -> verdes/blancos; dentro de grupo, gasto desc.
+    formatted.sort(key=lambda t: (_GROUP_ORDER.get(t["classification"], 9), -t["cost"]))
+
+    # Fase 2: enriquecer con ventanas historicas + acumulados (aditivo, retrocompat).
+    # Solo LEE el historial local (read-only respecto a Google Ads).
+    _norms = [_normalize(t["query"]) for t in formatted]
+    _agg = aggregate_windows(_norms)
+    for t in formatted:
+        a = _agg.get(_normalize(t["query"]), {})
+        t["cost_7d"] = a.get("cost_7d", 0.0)
+        t["cost_30d"] = a.get("cost_30d", 0.0)
+        t["cost_90d"] = a.get("cost_90d", 0.0)
+        t["distinct_days_30d"] = a.get("distinct_days_30d", 0)
+        t["distinct_weeks_90d"] = a.get("distinct_weeks_90d", 0)
+        t["recurrent"] = a.get("distinct_weeks_90d", 0) >= 2
+
+    # #2/#3: marcar terminos ya bloqueados como negativos (read-only, nivel campana).
+    _negative_lookup_reliable = True
+    try:
+        _negs_by_campaign = fetch_negative_keywords(client, target_id)
+    except Exception:
+        _negs_by_campaign = {}
+        _negative_lookup_reliable = False
+    for t in formatted:
+        if not _negative_lookup_reliable:
+            t["already_negative"] = None
+            t["blocked_by"] = None
+            t["negative_smart_uncertain"] = False
+            t["negative_allowed"] = False
+            continue
+
+        _camp = _negs_by_campaign.get(str(t.get("campaign_id", "")), {})
+        _blocking = find_blocking_negative(t["query"], _camp.get("negatives", []))
+        t["already_negative"] = _blocking is not None
+        t["blocked_by"] = ({"text": _blocking["text"], "match_type": _blocking["match_type"]}
+                           if _blocking else None)
+        t["negative_smart_uncertain"] = bool(_blocking) and _camp.get("channel_type") == "SMART"
+        t["negative_allowed"] = _compute_negative_allowed(t)
+
+    counts = {k: sum(1 for t in formatted if t["classification"] == k)
+              for k in ("rojo", "amarillo", "verde", "blanco")}
+
+    return {
+        "status": "success",
+        "date_range": date_range,
+        "total": len(formatted),
+        "counts": counts,
+        # Shim retrocompatible:
+        "negative_candidates": counts["rojo"],
+        "competitor_terms": counts["amarillo"],
+        "search_terms": formatted,
+        # Fase 2: rojos recurrentes/acumulados (aditivo, tope 10). auto_apply=False.
+        "accumulated_reds": accumulated_reds(today_top100_norms=_norms),
+    }
+
+
+def _block_keyword_rejection(action: OptimizationAction, reason: str, message: str, gate: dict | None = None) -> dict:
+    result = {
+        "action": action.type,
+        "target": action.keyword,
+        "status": "rejected",
+        "reason": reason,
+        "message": message,
+    }
+    if gate is not None:
+        result["gate"] = gate
+    return result
+
+
+def _validate_block_keyword_gate(action: OptimizationAction, gate_rows: list[dict], date_range: str) -> tuple[bool, dict]:
+    gate_debug = {
+        "date_range": date_range,
+        "campaign_id": action.campaign_id,
+        "received_keyword": action.keyword,
+        "received_match_type": action.match_type,
+        "matched": False,
+    }
+
+    if not action.campaign_id:
+        return False, _block_keyword_rejection(
+            action, "missing_campaign_id", "campaign_id ausente: no se aplica negativo.", gate_debug)
+    if not action.keyword:
+        return False, _block_keyword_rejection(
+            action, "missing_keyword", "keyword ausente: no se aplica negativo.", gate_debug)
+
+    mt = (action.match_type or "").strip().upper()
+    gate_debug["received_match_type"] = mt or action.match_type
+    if mt == "":
+        return False, _block_keyword_rejection(
+            action, "missing_match_type", "match_type ausente: no se aplica negativo.", gate_debug)
+    if mt == "BROAD":
+        return False, _block_keyword_rejection(
+            action, "broad_not_allowed", "BROAD no permitido desde /execute-optimization.", gate_debug)
+    if mt not in ("EXACT", "PHRASE"):
+        return False, _block_keyword_rejection(
+            action, "match_type_invalid", f"match_type invalido: {action.match_type!r}.", gate_debug)
+
+    campaign_id = str(action.campaign_id)
+    keyword_norm = _normalize(action.keyword)
+    matches = [
+        row for row in (gate_rows or [])
+        if str(row.get("campaign_id", "")) == campaign_id
+        and row.get("suggested_negative")
+        and _normalize(row.get("suggested_negative")) == keyword_norm
+    ]
+    if not matches:
+        return False, _block_keyword_rejection(
+            action,
+            "suggested_negative_not_found",
+            "No se encontro una fila vigente con campaign_id + suggested_negative para autorizar el negativo.",
+            gate_debug,
+        )
+
+    row = matches[0]
+    gate_debug.update({
+        "matched": True,
+        "query": row.get("query"),
+        "suggested_negative": row.get("suggested_negative"),
+        "suggested_match_type": row.get("suggested_match_type"),
+        "negative_allowed": row.get("negative_allowed"),
+        "base_negative_eligible": row.get("base_negative_eligible"),
+        "semantic_class": row.get("semantic_class"),
+        "conversion_quality": row.get("conversion_quality"),
+        "already_negative": row.get("already_negative"),
+    })
+
+    suggested_mt = (row.get("suggested_match_type") or "").strip().upper()
+    if suggested_mt not in ("EXACT", "PHRASE"):
+        return False, _block_keyword_rejection(
+            action, "suggested_match_type_invalid", "suggested_match_type invalido o ausente.", gate_debug)
+    if mt != suggested_mt:
+        return False, _block_keyword_rejection(
+            action, "match_type_mismatch", "match_type no coincide con suggested_match_type vigente.", gate_debug)
+    if row.get("negative_allowed") is not True:
+        return False, _block_keyword_rejection(
+            action, "negative_allowed_false", "negative_allowed no es true.", gate_debug)
+    if row.get("base_negative_eligible") is not True:
+        return False, _block_keyword_rejection(
+            action, "base_negative_eligible_false", "base_negative_eligible no es true.", gate_debug)
+    if row.get("semantic_class") != "red_safe":
+        return False, _block_keyword_rejection(
+            action, "semantic_class_not_red_safe", "semantic_class no es red_safe.", gate_debug)
+
+    conversion_quality = row.get("conversion_quality")
+    if conversion_quality is None:
+        return False, _block_keyword_rejection(
+            action, "conversion_quality_missing", "conversion_quality ausente.", gate_debug)
+    if conversion_quality == "unknown":
+        return False, _block_keyword_rejection(
+            action, "conversion_quality_unknown", "conversion_quality unknown no permite negativos.", gate_debug)
+    if conversion_quality == "money_action":
+        return False, _block_keyword_rejection(
+            action, "conversion_quality_money_action", "conversion_quality money_action no permite negativos.", gate_debug)
+    if conversion_quality not in {"none", "weak_local_action"}:
+        return False, _block_keyword_rejection(
+            action, "conversion_quality_not_allowed", "conversion_quality no permitida.", gate_debug)
+
+    if "already_negative" not in row:
+        return False, _block_keyword_rejection(
+            action, "already_negative_missing", "already_negative ausente.", gate_debug)
+    if row.get("already_negative") is True:
+        return False, _block_keyword_rejection(
+            action, "already_negative_true", "El termino ya esta bloqueado por un negativo.", gate_debug)
+    if row.get("already_negative") is not False:
+        return False, _block_keyword_rejection(
+            action, "already_negative_not_false", "already_negative no es false confiable.", gate_debug)
+
+    return True, {"row": row, "match_type": mt}
+
+
 @router.get("/search-terms")
 async def search_terms(date_range: str = "LAST_7_DAYS"):
     """
@@ -208,112 +436,7 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
     monitor pre-Fase 1. Endpoint read-only (solo Google Ads).
     """
     try:
-        date_range = date_range.strip().upper()
-        if date_range not in VALID_DATE_RANGES:
-            return {
-                "status": "error",
-                "message": f"date_range invalido: '{date_range}'. Validos: {sorted(VALID_DATE_RANGES)}",
-            }
-        engine = _get_engine()
-        if not engine:
-            raise Exception("Engine not available")
-        target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
-        client = engine["get_ads_client"]()
-        raw_terms = engine["fetch_search_term_data"](client, target_id, date_range)
-        conversion_breakdown = fetch_search_term_conversion_breakdown(client, target_id, date_range)
-
-        # Pool top-100 por gasto. Fase 1: el gasto solo acota el pool (no clasifica).
-        # NOTA Fase 1: top-100 NO resuelve irrelevantes de gasto muy bajo;
-        # la acumulacion historica 7/30/90d queda para Fase 2.
-        raw_top = sorted(raw_terms, key=lambda st: st.get("cost_micros", 0), reverse=True)[:100]
-
-        _GROUP_ORDER = {"rojo": 0, "amarillo": 1, "verde": 2, "blanco": 3}
-        formatted = []
-        for st in raw_top:
-            cost = st.get("cost_micros", 0) / 1_000_000
-            conversions = float(st.get("conversions", 0))
-            all_conversions = float(st.get("all_conversions", conversions) or 0)
-            breakdown_key = (_normalize(st.get("query", "")), str(st.get("campaign_id", "")))
-            breakdown = (conversion_breakdown or {}).get(breakdown_key) if conversion_breakdown is not None else None
-            conversion_quality = classify_conversion_quality(
-                breakdown.get("actions") if breakdown else None,
-                conversions=breakdown.get("conversions", conversions) if breakdown else conversions,
-                all_conversions=breakdown.get("all_conversions", all_conversions) if breakdown else all_conversions,
-            )
-            term = classify_search_term(
-                st.get("query", ""),
-                cost,
-                conversions,
-                conversion_quality=conversion_quality,
-            )
-            term.update({
-                "campaign_name": st.get("campaign_name", ""),
-                "campaign_id": str(st.get("campaign_id", "")),
-                "clicks": int(st.get("clicks", 0)),
-                "impressions": int(st.get("impressions", 0)),
-                "cost": round(cost, 2),
-                "conversions": round(conversions, 1),
-                "all_conversions": round(all_conversions, 1),
-                # Shim retrocompatible para el monitor pre-Fase 1:
-                "negative_candidate": term["classification"] == "rojo",
-                "competitor_term": term["classification"] == "amarillo",
-            })
-            formatted.append(term)
-
-        # Orden final: rojos -> amarillos -> verdes/blancos; dentro de grupo, gasto desc.
-        formatted.sort(key=lambda t: (_GROUP_ORDER.get(t["classification"], 9), -t["cost"]))
-
-        # Fase 2: enriquecer con ventanas historicas + acumulados (aditivo, retrocompat).
-        # Solo LEE el historial local (read-only respecto a Google Ads).
-        _norms = [_normalize(t["query"]) for t in formatted]
-        _agg = aggregate_windows(_norms)
-        for t in formatted:
-            a = _agg.get(_normalize(t["query"]), {})
-            t["cost_7d"] = a.get("cost_7d", 0.0)
-            t["cost_30d"] = a.get("cost_30d", 0.0)
-            t["cost_90d"] = a.get("cost_90d", 0.0)
-            t["distinct_days_30d"] = a.get("distinct_days_30d", 0)
-            t["distinct_weeks_90d"] = a.get("distinct_weeks_90d", 0)
-            t["recurrent"] = a.get("distinct_weeks_90d", 0) >= 2
-
-        # #2/#3: marcar terminos ya bloqueados como negativos (read-only, nivel campana).
-        _negative_lookup_reliable = True
-        try:
-            _negs_by_campaign = fetch_negative_keywords(client, target_id)
-        except Exception:
-            _negs_by_campaign = {}
-            _negative_lookup_reliable = False
-        for t in formatted:
-            if not _negative_lookup_reliable:
-                t["already_negative"] = None
-                t["blocked_by"] = None
-                t["negative_smart_uncertain"] = False
-                t["negative_allowed"] = False
-                continue
-
-            _camp = _negs_by_campaign.get(str(t.get("campaign_id", "")), {})
-            _blocking = find_blocking_negative(t["query"], _camp.get("negatives", []))
-            t["already_negative"] = _blocking is not None
-            t["blocked_by"] = ({"text": _blocking["text"], "match_type": _blocking["match_type"]}
-                               if _blocking else None)
-            t["negative_smart_uncertain"] = bool(_blocking) and _camp.get("channel_type") == "SMART"
-            t["negative_allowed"] = _compute_negative_allowed(t)
-
-        counts = {k: sum(1 for t in formatted if t["classification"] == k)
-                  for k in ("rojo", "amarillo", "verde", "blanco")}
-
-        return {
-            "status": "success",
-            "date_range": date_range,
-            "total": len(formatted),
-            "counts": counts,
-            # Shim retrocompatible:
-            "negative_candidates": counts["rojo"],
-            "competitor_terms": counts["amarillo"],
-            "search_terms": formatted,
-            # Fase 2: rojos recurrentes/acumulados (aditivo, tope 10). auto_apply=False.
-            "accumulated_reds": accumulated_reds(today_top100_norms=_norms),
-        }
+        return _build_search_terms_payload(date_range)
     except Exception as e:
         import traceback
         return {"status": "error", "message": str(e), "details": traceback.format_exc()}
@@ -606,9 +729,86 @@ async def execute_optimization(request: ExecuteOptimizationRequest):
         engine = _get_engine()
         target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
         results = []
+        block_actions = [action for action in request.actions if action.type == "block_keyword"]
+        gate_rows = None
+        gate_error = None
+        date_range = request.date_range or "LAST_7_DAYS"
+
+        if block_actions:
+            date_range = _normalize_date_range(date_range)
+            if date_range not in VALID_DATE_RANGES:
+                gate_error = _block_keyword_rejection(
+                    block_actions[0],
+                    "invalid_date_range",
+                    f"date_range invalido: {request.date_range!r}.",
+                    {"date_range": request.date_range},
+                )
+
+            if gate_error is None:
+                try:
+                    gate_payload = _build_search_terms_payload(date_range)
+                    if gate_payload.get("status") != "success":
+                        gate_error = _block_keyword_rejection(
+                            block_actions[0],
+                            "search_terms_gate_unavailable",
+                            gate_payload.get("message", "No se pudo construir el gate de search terms."),
+                            {"date_range": date_range},
+                        )
+                    else:
+                        gate_rows = gate_payload.get("search_terms") or []
+                except Exception as ex:
+                    logger.exception("execute_optimization: excepcion construyendo gate block_keyword")
+                    gate_error = _block_keyword_rejection(
+                        block_actions[0],
+                        "search_terms_gate_unavailable",
+                        str(ex),
+                        {"date_range": date_range},
+                    )
+
+        def _record_decision_result(action: OptimizationAction, result: dict) -> None:
+            try:
+                conn = sqlite3.connect(get_db_path())
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO decisions (decision_type, reason, confidence_score, executed, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                    (action.type, action.reason or "Accion desde dashboard", 90, 1 if result.get("status") == "executed" else 0)
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            results.append(result)
 
         for action in request.actions:
-            if action.type == "block_keyword" and engine and action.keyword and action.campaign_id:
+            if action.type == "block_keyword":
+                if gate_error is not None:
+                    result = dict(gate_error)
+                    result["target"] = action.keyword
+                    _record_decision_result(action, result)
+                    continue
+                if gate_rows is None:
+                    result = _block_keyword_rejection(
+                        action,
+                        "search_terms_gate_unavailable",
+                        "No se construyo el gate de search terms.",
+                        {"date_range": date_range},
+                    )
+                    _record_decision_result(action, result)
+                    continue
+
+                allowed, gate_result = _validate_block_keyword_gate(action, gate_rows, date_range)
+                if not allowed:
+                    _record_decision_result(action, gate_result)
+                    continue
+                if not engine:
+                    result = _block_keyword_rejection(
+                        action,
+                        "ads_engine_unavailable",
+                        "Motor de Google Ads no disponible.",
+                        {"date_range": date_range},
+                    )
+                    _record_decision_result(action, result)
+                    continue
                 # ── Fail-closed match_type (micro-fase) ──────────────────────
                 # La mini-app /negativos envia suggested_match_type del clasificador
                 # (EXACT en entidades curadas, PHRASE en patrones rojos). Aqui:
