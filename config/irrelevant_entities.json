@@ -38,5 +38,18 @@
   { "canonical": "tábom healthy food av yucatán mérida",
     "aliases": ["tábom healthy food av yucatán mérida", "tabom healthy food av yucatan merida", "táboom healthy food av yucatán mérida", "taboom healthy food av yucatan merida"],
     "category": "restaurante_ajeno", "confidence": "alta",
-    "suggested_match_type": "EXACT", "auto_apply": false }
+    "suggested_match_type": "EXACT", "auto_apply": false },
+  {
+    "canonical": "casa thai merida",
+    "aliases": [
+      "casa thai merida",
+      "casa thai mérida",
+      "restaurante casa thai merida",
+      "restaurante casa thai mérida"
+    ],
+    "category": "restaurante_ajeno",
+    "confidence": "alta",
+    "suggested_match_type": "EXACT",
+    "auto_apply": false
+  }
 ]

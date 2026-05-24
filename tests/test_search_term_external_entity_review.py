@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 import pytest
 
@@ -106,3 +107,24 @@ def test_phase_3a_regressions(query, semantic_class, classification):
     assert result["classification"] == classification
     assert result["negative_allowed"] is False
     assert result["suggested_match_type"] != "BROAD"
+
+
+def test_casa_thai_merida_is_curated_external_entity_exact_no_auto_apply():
+    result = classify_search_term("casa thai merida")
+    config_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "config",
+        "irrelevant_entities.json",
+    )
+    with open(config_path, encoding="utf-8") as f:
+        entities = json.load(f)
+    casa_thai = next(e for e in entities if e["canonical"] == "casa thai merida")
+
+    assert result["semantic_class"] == "red_safe"
+    assert result["business_intent"] == "external_business"
+    assert result["entity_status"] == "curated"
+    assert result["classification"] == "rojo"
+    assert result["suggested_negative"] == "casa thai merida"
+    assert result["suggested_match_type"] == "EXACT"
+    assert result["negative_allowed"] is False
+    assert casa_thai["auto_apply"] is False

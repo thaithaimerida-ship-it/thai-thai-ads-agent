@@ -32,6 +32,7 @@ def _classifier_case(
     [
         ("hacienda teya", "none", "EXACT"),
         ("hacienda teya", "weak_local_action", "EXACT"),
+        ("casa thai merida", "none", "EXACT"),
         ("receta pad thai", "none", "PHRASE"),
     ],
 )
