@@ -14,171 +14,167 @@ class Strategist:
         return analyze_campaign_data(audit_data) or {}
 
     def detect_waste(self, campaigns, keywords, search_terms) -> dict:
-        """Detecta gasto desperdiciado en keywords y campañas."""
-        critical_waste = []
-        high_waste = []
-        moderate_waste = []
-        total_waste = 0
+        """Detecta gasto en revision y mantiene compatibilidad con total_waste."""
+        return self._detect_review_spend(campaigns, keywords, search_terms)
 
-        # Enriquecer keywords con Keyword Planner (lazy, graceful — no bloquea si falla)
-        _kp_map = {}
-        try:
-            from engine.keyword_planner import enrich_keywords_with_data
-            _kw_dicts = [
-                {"text": kw.get("text", ""), "match_type": "PHRASE"}
-                for kw in keywords if kw.get("text")
-            ]
-            _enriched = enrich_keywords_with_data(_kw_dicts)
-            _kp_map = {e["text"].lower(): e for e in _enriched}
-        except Exception:
-            pass  # Keyword Planner no disponible — continuar sin datos de volumen
+    def _detect_review_spend(self, campaigns, keywords, search_terms) -> dict:
+        critical = []
+        high = []
+        moderate = []
+
+        def spend_mxn(row):
+            return float(row.get("cost_micros", 0) or 0) / 1_000_000
+
+        def quality(row):
+            q = row.get("conversion_quality")
+            if q in {"money_action", "weak_local_action", "unknown", "none"}:
+                return q
+            if float(row.get("money_action_conversions", 0) or 0) > 0:
+                return "money_action"
+            if float(row.get("conversions", 0) or 0) > 0:
+                return "money_action"
+            if float(row.get("all_conversions", 0) or 0) > 0:
+                return "weak_local_action"
+            return "none"
+
+        def keyword_item(kw, spend, review_level, action, reason, confidence):
+            return {
+                "type": "keyword",
+                "keyword": kw.get("text", ""),
+                "campaign": kw.get("campaign_name", ""),
+                "campaign_id": kw.get("campaign_id", ""),
+                "spend": round(spend, 2),
+                "conversions": float(kw.get("conversions", 0) or 0),
+                "all_conversions": float(kw.get("all_conversions", 0) or 0),
+                "conversion_quality": quality(kw),
+                "reason": reason,
+                "action": action,
+                "review_level": review_level,
+                "confidence": confidence,
+                "planner_data": {},
+            }
 
         for kw in keywords:
-            spend = kw.get("cost_micros", 0) / 1_000_000
-            conversions = float(kw.get("conversions", 0))
-            keyword_text = kw.get("text", "")
-            campaign_name = kw.get("campaign_name", "")
-            campaign_id = kw.get("campaign_id", "")
-
+            spend = spend_mxn(kw)
             if spend <= 0:
                 continue
 
-            planner_data = _kp_map.get(keyword_text.lower(), {})
-            avg_searches = planner_data.get("avg_monthly_searches", 0)
-            competition = planner_data.get("competition", "UNKNOWN")
+            q = quality(kw)
+            if q == "money_action":
+                continue
+            if q == "weak_local_action":
+                if spend >= 20:
+                    moderate.append(keyword_item(
+                        kw, spend, "soft", "review",
+                        "Gasto con accion local debil; revisar sin bloquear", 55))
+                continue
+            if q == "unknown":
+                if spend >= 20:
+                    moderate.append(keyword_item(
+                        kw, spend, "tracking_uncertain", "review_tracking",
+                        "Tracking incierto; revisar calidad de conversion antes de actuar", 50))
+                continue
 
-            wrong_intent = any(term in keyword_text.lower() for term in [
-                "china", "chino", "japonés", "sushi", "receta", "recipe"
+            text = str(kw.get("text", "")).lower()
+            wrong_intent = any(term in text for term in [
+                "china", "chino", "japones", "sushi", "receta", "recipe"
             ])
+            if spend > 100:
+                critical.append(keyword_item(
+                    kw, spend, "no_signal", "review_before_block",
+                    "Intent equivocado" if wrong_intent else "Alto gasto sin conversiones",
+                    95 if wrong_intent else 85))
+            elif spend >= 50:
+                high.append(keyword_item(
+                    kw, spend, "no_signal", "review_before_block",
+                    "Gasto moderado sin retorno", 80))
+            elif spend >= 20:
+                moderate.append(keyword_item(
+                    kw, spend, "no_signal", "monitor",
+                    "Monitorear de cerca", 70))
 
-            # Si la keyword tiene volumen alto y competencia no es HIGH,
-            # puede tener potencial — bajar severidad aunque tenga 0 conversiones
-            has_potential = avg_searches > 100 and competition not in ("HIGH", "UNKNOWN")
-
-            if spend > 100 and conversions == 0:
-                if has_potential and not wrong_intent:
-                    # Tiene potencial según Keyword Planner — monitorear en lugar de bloquear
-                    moderate_waste.append({
-                        "type": "keyword",
-                        "keyword": keyword_text,
-                        "campaign": campaign_name,
-                        "campaign_id": campaign_id,
-                        "spend": round(spend, 2),
-                        "conversions": 0,
-                        "reason": f"Gasto alto sin conversiones pero volumen {avg_searches}/mes — monitorear",
-                        "action": "monitor",
-                        "confidence": 60,
-                        "planner_data": planner_data,
-                    })
-                else:
-                    critical_waste.append({
-                        "type": "keyword",
-                        "keyword": keyword_text,
-                        "campaign": campaign_name,
-                        "campaign_id": campaign_id,
-                        "spend": round(spend, 2),
-                        "conversions": 0,
-                        "reason": "Intent equivocado" if wrong_intent else "Alto gasto sin conversiones",
-                        "action": "block_immediately",
-                        "impact": f"Ahorro ${round(spend, 2)}/semana",
-                        "confidence": 95 if wrong_intent else 85,
-                        "planner_data": planner_data,
-                    })
-                total_waste += spend
-            elif spend >= 50 and conversions == 0:
-                if has_potential and not wrong_intent:
-                    moderate_waste.append({
-                        "type": "keyword",
-                        "keyword": keyword_text,
-                        "campaign": campaign_name,
-                        "campaign_id": campaign_id,
-                        "spend": round(spend, 2),
-                        "conversions": 0,
-                        "reason": f"Gasto moderado sin retorno pero volumen {avg_searches}/mes — monitorear",
-                        "action": "monitor",
-                        "confidence": 55,
-                        "planner_data": planner_data,
-                    })
-                else:
-                    high_waste.append({
-                        "type": "keyword",
-                        "keyword": keyword_text,
-                        "campaign": campaign_name,
-                        "campaign_id": campaign_id,
-                        "spend": round(spend, 2),
-                        "conversions": 0,
-                        "reason": "Gasto moderado sin retorno",
-                        "action": "block",
-                        "confidence": 80,
-                        "planner_data": planner_data,
-                    })
-                total_waste += spend
-            elif spend >= 20 and conversions == 0:
-                moderate_waste.append({
-                    "type": "keyword",
-                    "keyword": keyword_text,
-                    "campaign": campaign_name,
-                    "campaign_id": campaign_id,
-                    "spend": round(spend, 2),
-                    "conversions": 0,
-                    "reason": "Monitorear de cerca",
-                    "action": "monitor",
-                    "confidence": 70,
-                    "planner_data": planner_data,
-                })
-                total_waste += spend
-
+        all_conv_campaign_ids = {"22612348265", "23730364039"}
         for camp in campaigns:
-            spend = camp.get("cost_micros", 0) / 1_000_000
-            conversions = float(camp.get("conversions", 0))
-            name = camp.get("name", "")
+            spend = spend_mxn(camp)
             camp_id = str(camp.get("id", ""))
-
-            if spend > 100 and conversions == 0:
-                critical_waste.append({
+            conversions = float(camp.get("conversions", 0) or 0)
+            all_conversions = float(camp.get("all_conversions", 0) or 0)
+            effective = (
+                float(camp.get("money_action_conversions", 0) or 0)
+                or (all_conversions if camp_id in all_conv_campaign_ids else conversions)
+            )
+            if spend > 100 and effective == 0:
+                critical.append({
                     "type": "campaign",
-                    "campaign": name,
+                    "campaign": camp.get("name", ""),
                     "campaign_id": camp_id,
                     "spend": round(spend, 2),
-                    "conversions": 0,
-                    "reason": "Campaña sin resultados",
-                    "action": "pause",
-                    "impact": f"Ahorro ${round(spend, 2)}/semana",
-                    "confidence": 90
+                    "conversions": conversions,
+                    "all_conversions": all_conversions,
+                    "conversion_quality": "none",
+                    "reason": "Campana sin senales de conversion en el rango",
+                    "action": "review_campaign",
+                    "review_level": "campaign_no_signal",
+                    "confidence": 80,
                 })
-                total_waste += spend
+
+        campaign_level_ids = {
+            str(item.get("campaign_id", ""))
+            for item in critical
+            if item.get("type") == "campaign"
+        }
+        review_items = critical + high + moderate
+        review_total = 0.0
+        excluded_nested = 0
+        for item in review_items:
+            nested = (
+                item.get("type") == "keyword"
+                and str(item.get("campaign_id", "")) in campaign_level_ids
+            )
+            item["excluded_from_total"] = bool(nested)
+            if nested:
+                excluded_nested += 1
+            else:
+                review_total += float(item.get("spend", 0) or 0)
+
+        def included_total(items):
+            return round(sum(float(i.get("spend", 0) or 0) for i in items if not i.get("excluded_from_total")), 2)
 
         return {
             "summary": {
-                "total_waste": round(total_waste, 2),
-                "critical_waste": round(sum(w["spend"] for w in critical_waste), 2),
-                "high_waste": round(sum(w["spend"] for w in high_waste), 2),
-                "moderate_waste": round(sum(w["spend"] for w in moderate_waste), 2),
-                "keywords_to_block": len([w for w in critical_waste + high_waste if w["type"] == "keyword"]),
-                "campaigns_to_pause": len([w for w in critical_waste if w["type"] == "campaign"])
+                "review_spend_total": round(review_total, 2),
+                "review_spend_excluded_nested": excluded_nested,
+                "total_waste": round(review_total, 2),
+                "critical_waste": included_total(critical),
+                "high_waste": included_total(high),
+                "moderate_waste": included_total(moderate),
+                "keywords_to_block": len([w for w in critical + high if w["type"] == "keyword"]),
+                "campaign_review_items": len([w for w in critical if w["type"] == "campaign"]),
+                "campaigns_to_pause": 0,
             },
-            "critical_items": critical_waste[:5],
-            "high_priority": high_waste[:5],
-            "moderate": moderate_waste[:5]
+            "critical_items": critical[:5],
+            "high_priority": high[:5],
+            "moderate": moderate[:5],
         }
 
     def generate_proposals(self, campaigns, keywords, waste_data, hour_data, landing_page_data, promotion_data) -> list:
         """Genera propuestas priorizadas de optimización."""
         proposals = []
 
-        # 1. PAUSE decisions
+        # 1. Campaign review decisions. Fase 8A: never propose an automatic pause
+        # from a single review-spend signal.
         for item in waste_data.get("critical_items", []):
             if item["type"] == "campaign":
                 proposals.append({
                     "decision_id": f"dec_{len(proposals)+1:03d}",
-                    "type": "pause_campaign",
-                    "action": f"Pausar '{item['campaign']}'",
+                    "type": "review_campaign",
+                    "action": f"Revisar '{item['campaign']}'",
                     "target": {"campaign_id": item["campaign_id"], "campaign_name": item["campaign"]},
-                    "reason": f"${item['spend']:.2f} gastados con 0 conversiones",
+                    "reason": f"${item['spend']:.2f} en revision; validar tendencia antes de pausar",
                     "data_evidence": {"current_spend": item["spend"], "conversions": 0, "days_without_conversion": 7, "total_waste": item["spend"]},
-                    "impact": {"savings_weekly": item["spend"], "risk": "low", "reversibility": "high"},
+                    "impact": {"savings_weekly": 0, "risk": "low", "reversibility": "high"},
                     "confidence": item["confidence"],
-                    "urgency": "critical",
+                    "urgency": "medium",
                     "approval_required": True
                 })
 
@@ -430,3 +426,4 @@ class Strategist:
             "suggested_promotions": promotions[:3],
             "quick_wins": ["Add 'Free Delivery >$300' banner (5 min setup)", "Reduce delivery fee in valle hours"]
         }
+

@@ -574,6 +574,63 @@ async def ads_report(date_range: str = "LAST_7_DAYS"):
 ALL_CONVERSIONS_CAMPAIGN_IDS = {"22612348265", "23730364039"}
 
 
+def _campaign_effective_conversions(campaign: dict) -> float:
+    camp_id = str(campaign.get("id") or campaign.get("campaign_id") or "")
+    money = float(campaign.get("money_action_conversions", 0) or 0)
+    if money > 0:
+        return money
+    conversions = float(campaign.get("conversions", 0) or 0)
+    all_conversions = float(campaign.get("all_conversions", 0) or 0)
+    if camp_id in ALL_CONVERSIONS_CAMPAIGN_IDS:
+        return all_conversions
+    return conversions
+
+
+def _campaign_review_recommendation(
+    date_range: str,
+    effective_conversions: float,
+    spend: float,
+    min_spend: float,
+    effective_cpa: float = 0,
+    cpa_max: float | None = None,
+    cpa_critical: float | None = None,
+    trend_7d_status: str | None = None,
+    trend_30d_status: str | None = None,
+) -> dict:
+    date_range = (date_range or "").upper()
+    if effective_conversions == 0 and spend > min_spend:
+        if trend_7d_status == "bad" and trend_30d_status == "bad":
+            return {
+                "semaphore": "critical",
+                "alerts": [f"Sin conversiones con gasto ${spend:.2f} (umbral ${min_spend:.0f})"],
+                "actions": ["Revisión manual prioritaria", "Considerar pausa manual"],
+            }
+        if date_range == "YESTERDAY":
+            return {
+                "semaphore": "warning",
+                "alerts": [f"Alerta diaria: gasto ${spend:.2f} sin conversiones (umbral ${min_spend:.0f})"],
+                "actions": ["Monitorear 48–72h", "Revisar términos de búsqueda"],
+            }
+        return {
+            "semaphore": "critical",
+            "alerts": [f"Sin conversiones con gasto ${spend:.2f} (umbral ${min_spend:.0f})"],
+            "actions": ["Revisar targeting", "Revisar conversión/tracking"],
+        }
+    if cpa_critical is not None and effective_cpa > cpa_critical:
+        return {
+            "semaphore": "critical",
+            "alerts": [f"CPA ${effective_cpa:.2f} sobre crítico ${cpa_critical:.0f}"],
+            "actions": ["Revisión manual prioritaria", "Revisar keywords"],
+        }
+    if cpa_max is not None and effective_cpa > cpa_max:
+        return {
+            "semaphore": "warning",
+            "alerts": [f"CPA ${effective_cpa:.2f} sobre máximo ${cpa_max:.0f}"],
+            "actions": ["Optimizar bids"],
+        }
+    return {"semaphore": None, "alerts": [], "actions": []}
+
+
 @router.get("/analyze-campaigns-detailed")
 async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
     try:
@@ -594,7 +651,9 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
 
         waste_data = _detect_waste(campaigns, keywords, search_terms)
         waste_by_campaign = {}
-        for item in waste_data["critical_items"] + waste_data["high_priority"]:
+        for item in waste_data["critical_items"] + waste_data["high_priority"] + waste_data.get("moderate", []):
+            if item.get("excluded_from_total"):
+                continue
             cid = item.get("campaign_id", "")
             waste_by_campaign[cid] = waste_by_campaign.get(cid, 0) + item["spend"]
 
@@ -611,10 +670,7 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
             camp_id = str(c.get("id", ""))
             waste = waste_by_campaign.get(camp_id, 0)
 
-            if camp_id in ALL_CONVERSIONS_CAMPAIGN_IDS:
-                effective_conversions = all_conversions
-            else:
-                effective_conversions = conversions
+            effective_conversions = _campaign_effective_conversions(c)
             effective_cpa = spend / effective_conversions if effective_conversions > 0 else 0
 
             cfg = get_campaign_thresholds(c.get("name", ""), camp_id)
@@ -623,10 +679,20 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
             cpa_critical = cfg["cpa_critical"]
             min_spend    = cfg["min_spend_to_block"]
 
-            if effective_conversions == 0 and spend > min_spend:
-                semaphore = "critical"
-                alerts = [f"Sin conversiones con gasto ${spend:.2f} (umbral ${min_spend:.0f})"]
-                actions = ["Pausar campaña", "Revisar targeting"]
+            review_rec = _campaign_review_recommendation(
+                date_range=date_range,
+                effective_conversions=effective_conversions,
+                spend=spend,
+                min_spend=min_spend,
+                effective_cpa=effective_cpa,
+                cpa_max=cpa_max,
+                cpa_critical=cpa_critical,
+            )
+
+            if review_rec["semaphore"]:
+                semaphore = review_rec["semaphore"]
+                alerts = review_rec["alerts"]
+                actions = review_rec["actions"]
             elif effective_cpa > cpa_critical:
                 semaphore = "critical"
                 alerts = [f"CPA ${effective_cpa:.2f} sobre crítico ${cpa_critical:.0f} (ideal ${cpa_ideal:.0f})"]
@@ -670,10 +736,15 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
         # Aquí reconstruimos esa misma composición para que el email pueda
         # decir de qué está hecho el número sin abrir Google Ads.
         _present_ids = {str(c.get("id", "")) for c in campaigns}
-        _waste_items = waste_data.get("critical_items", []) + waste_data.get("high_priority", [])
+        _waste_items = (
+            waste_data.get("critical_items", [])
+            + waste_data.get("high_priority", [])
+            + waste_data.get("moderate", [])
+        )
         _contributing = [
             it for it in _waste_items
             if str(it.get("campaign_id", "")) in _present_ids
+            and not it.get("excluded_from_total")
         ]
         _excluded = [
             it for it in _waste_items
@@ -681,20 +752,24 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
         ]
         _kw = [it for it in _contributing if it.get("type") == "keyword"]
         _camp = [it for it in _contributing if it.get("type") == "campaign"]
+        _soft = [it for it in _contributing if it.get("review_level") in ("soft", "tracking_uncertain")]
         _wsum = waste_data.get("summary", {})
         _full_count = _wsum.get("keywords_to_block", 0) + _wsum.get("campaigns_to_pause", 0)
         _capped = _full_count > len(_waste_items)
 
         _parts = []
         if _kw:
-            _parts.append(f"{len(_kw)} keyword(s) con gasto ≥ $50 y 0 conv.")
+            _parts.append(f"{len(_kw)} keyword(s) en revision")
         if _camp:
-            _parts.append(f"{len(_camp)} campaña(s) con gasto > $100 y 0 conv.")
+            _parts.append(f"{len(_camp)} campana(s) en revision")
+        if _soft:
+            _parts.append(f"{len(_soft)} item(s) con senal debil o tracking incierto")
         _desc = (
-            f"{len(_contributing)} ítem(s): " + " + ".join(_parts)
-            if _parts else "sin ítems de desperdicio detectados"
+            f"{len(_contributing)} item(s): " + " + ".join(_parts)
+            if _parts else "sin gasto en revision detectado"
         )
-        _desc += f" — rango {date_range}"
+        _desc += f" - rango {date_range}. No implica pausa automática. Requiere revisar tendencia y calidad de conversión."
+
         if _capped:
             _desc += "; lista recortada a top 5 críticos + top 5 altos"
         if _excluded:
@@ -711,6 +786,11 @@ async def analyze_campaigns_detailed(date_range: str = "YESTERDAY"):
                 "excellent": cnt.get("excellent", 0),
                 "total_waste": round(cnt["total_waste"], 2),
                 "total_waste_desc": _desc,
+                "review_spend_total": round(cnt["total_waste"], 2),
+                "review_spend_desc": _desc,
+                "daily_alert": date_range == "YESTERDAY",
+                "trend_7d": date_range == "LAST_7_DAYS",
+                "trend_30d": date_range == "LAST_30_DAYS",
                 "total_waste_items": len(_contributing),
                 "total_waste_keywords": len(_kw),
                 "total_waste_campaigns": len(_camp),
