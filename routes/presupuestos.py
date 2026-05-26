@@ -290,9 +290,13 @@ function render() {
       currentCell = "<td class='num " + driftCls + "'>$" + Number(r.current_budget_mxn).toFixed(2) + "</td>";
     }
     html += "<tr class='" + rowClass + "' data-id='" + r.id + "'>" +
-      "<td><input type='checkbox' class='pick' data-id='" + r.id + "'></td>" +
+      "<td>" + (r.apply_enabled === false
+        ? "<span class='muted' title='" + escapeHtml(r.apply_disabled_reason || "") + "'>solo lectura</span>"
+        : "<input type='checkbox' class='pick' data-id='" + r.id + "'>") + "</td>" +
       "<td>" + escapeHtml(r.campaign_name) + " <small>(" + escapeHtml(r.campaign_id) + ")</small></td>" +
-      "<td class='" + actionClass + "'>" + actionLabel + "</td>" +
+      "<td class='" + actionClass + "'>" + actionLabel +
+        (r.apply_enabled === false ? "<div class='muted'>" + escapeHtml(r.apply_disabled_reason || "") + "</div>" : "") +
+      "</td>" +
       currentCell +
       "<td class='num'>$" + Number(r.new_budget_mxn).toFixed(2) + "</td>" +
       "<td>" + escapeHtml(r.urgency) + "</td>" +
@@ -324,7 +328,7 @@ async def presupuestos_data() -> dict[str, Any]:
     """Devuelve las recomendaciones AI de scale/reduce pendientes de aprobación.
 
     Filtro:
-      - action_type IN ("scale", "reduce")
+      - action_type IN ("scale", "reduce", "budget_action", "budget_scale")
       - decision = "proposed"
       - executed = 0
       - approved_at IS NULL AND rejected_at IS NULL AND postponed_at IS NULL
@@ -355,7 +359,7 @@ async def presupuestos_data() -> dict[str, Any]:
                 SELECT id, action_type, campaign_id, campaign_name, urgency,
                        evidence_json, created_at
                   FROM autonomous_decisions
-                 WHERE action_type IN ('scale', 'reduce')
+                 WHERE action_type IN ('scale', 'reduce', 'budget_action', 'budget_scale')
                    AND decision = 'proposed'
                    AND executed = 0
                    AND approved_at  IS NULL
@@ -376,7 +380,7 @@ async def presupuestos_data() -> dict[str, Any]:
     candidates = []
     for r in rows:
         evidence = _safe_json(r["evidence_json"])
-        new_budget_mxn = evidence.get("new_budget_mxn") if isinstance(evidence, dict) else None
+        new_budget_mxn = _budget_suggestion_amount(evidence)
         reason = evidence.get("reason") if isinstance(evidence, dict) else None
         if new_budget_mxn is None or reason is None:
             continue
@@ -389,15 +393,23 @@ async def presupuestos_data() -> dict[str, Any]:
     recommendations = []
     latest_at = None
     for r, new_budget_mxn, reason in candidates:
+        action_type_original = r["action_type"]
+        display_action_type = _display_budget_action_type(action_type_original)
+        apply_enabled = action_type_original in {"scale", "reduce"}
         recommendations.append({
             "id": r["id"],
-            "action_type": r["action_type"],
+            "action_type": display_action_type,
+            "action_type_original": action_type_original,
+            "display_action_type": display_action_type,
             "campaign_id": r["campaign_id"],
             "campaign_name": r["campaign_name"],
             "urgency": r["urgency"],
             "new_budget_mxn": new_budget_mxn,
+            "suggested_budget_mxn": new_budget_mxn,
             "current_budget_mxn": current_budgets.get(r["campaign_id"]),
             "reason": reason,
+            "apply_enabled": apply_enabled,
+            "apply_disabled_reason": "" if apply_enabled else "Pendiente de compatibilidad de aplicacion",
             "created_at": r["created_at"],
         })
         if latest_at is None or (r["created_at"] and r["created_at"] > latest_at):
@@ -448,6 +460,24 @@ def _safe_json(raw):
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return {}
+
+
+def _budget_suggestion_amount(evidence):
+    if not isinstance(evidence, dict):
+        return None
+    for key in ("new_budget_mxn", "suggested_daily_budget", "suggested_daily_budget_mxn"):
+        value = evidence.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return value
+    return None
+
+
+def _display_budget_action_type(action_type):
+    if action_type == "budget_action":
+        return "reduce"
+    if action_type == "budget_scale":
+        return "scale"
+    return action_type
 
 
 @router.post("/apply-budget-changes", dependencies=[Depends(require_token)])

@@ -116,6 +116,19 @@ def _insert_negative(memory) -> int:
     )
 
 
+def _insert_budget_decision(
+    memory, *, action_type, evidence, campaign_id="22612348265",
+    campaign_name="Local", decision="proposed", executed=False,
+) -> int:
+    return memory.record_autonomous_decision(
+        action_type=action_type, risk_level=2, urgency="normal",
+        decision=decision,
+        campaign_id=campaign_id, campaign_name=campaign_name,
+        evidence=evidence,
+        executed=executed,
+    )
+
+
 HEADERS_OK = {"X-API-Token": "test-token-123"}
 
 
@@ -336,6 +349,115 @@ class TestDataEndpointEnrichment:
         rec = body["recommendations"][0]
         assert rec["new_budget_mxn"] == 150.0
         assert rec["current_budget_mxn"] is None
+
+
+class TestDataEndpointContract:
+    def test_includes_scale_reduce_budget_action_and_budget_scale(
+        self, client, isolated_db, customer_id_env, monkeypatch,
+    ):
+        monkeypatch.setattr("main.get_engine_modules", MagicMock(side_effect=RuntimeError("no live ads")))
+        ids = {
+            "scale": _insert_budget_decision(
+                isolated_db, action_type="scale",
+                evidence={"reason": "scale reason", "new_budget_mxn": 150.0},
+                campaign_id="1", campaign_name="Scale",
+            ),
+            "reduce": _insert_budget_decision(
+                isolated_db, action_type="reduce",
+                evidence={"reason": "reduce reason", "new_budget_mxn": 80.0},
+                campaign_id="2", campaign_name="Reduce",
+            ),
+            "budget_action": _insert_budget_decision(
+                isolated_db, action_type="budget_action",
+                evidence={"reason": "ba1 reason", "suggested_daily_budget": 90.0},
+                campaign_id="3", campaign_name="BA1",
+            ),
+            "budget_scale": _insert_budget_decision(
+                isolated_db, action_type="budget_scale",
+                evidence={"reason": "ba2 reason", "suggested_daily_budget_mxn": 180.0},
+                campaign_id="4", campaign_name="BA2",
+            ),
+        }
+
+        r = client.get("/presupuestos/data")
+
+        assert r.status_code == 200
+        body = r.json()
+        by_id = {rec["id"]: rec for rec in body["recommendations"]}
+        assert set(ids.values()) == set(by_id)
+        assert by_id[ids["scale"]]["action_type_original"] == "scale"
+        assert by_id[ids["scale"]]["display_action_type"] == "scale"
+        assert by_id[ids["scale"]]["new_budget_mxn"] == 150.0
+        assert by_id[ids["scale"]]["suggested_budget_mxn"] == 150.0
+        assert by_id[ids["scale"]]["apply_enabled"] is True
+        assert by_id[ids["reduce"]]["display_action_type"] == "reduce"
+        assert by_id[ids["reduce"]]["apply_enabled"] is True
+        assert by_id[ids["budget_action"]]["action_type_original"] == "budget_action"
+        assert by_id[ids["budget_action"]]["display_action_type"] == "reduce"
+        assert by_id[ids["budget_action"]]["new_budget_mxn"] == 90.0
+        assert by_id[ids["budget_action"]]["suggested_budget_mxn"] == 90.0
+        assert by_id[ids["budget_action"]]["apply_enabled"] is False
+        assert by_id[ids["budget_action"]]["apply_disabled_reason"] == "Pendiente de compatibilidad de aplicacion"
+        assert by_id[ids["budget_scale"]]["action_type_original"] == "budget_scale"
+        assert by_id[ids["budget_scale"]]["display_action_type"] == "scale"
+        assert by_id[ids["budget_scale"]]["new_budget_mxn"] == 180.0
+        assert by_id[ids["budget_scale"]]["suggested_budget_mxn"] == 180.0
+        assert by_id[ids["budget_scale"]]["apply_enabled"] is False
+
+    def test_data_omits_non_budget_terminal_and_invalid_rows(
+        self, client, isolated_db, customer_id_env, monkeypatch,
+    ):
+        monkeypatch.setattr("main.get_engine_modules", MagicMock(side_effect=RuntimeError("no live ads")))
+        valid_id = _insert_budget_decision(
+            isolated_db, action_type="budget_action",
+            evidence={"reason": "valid ba1", "suggested_daily_budget": 90.0},
+            campaign_id="1",
+        )
+        _insert_negative(isolated_db)
+        _insert_budget_decision(
+            isolated_db, action_type="scale",
+            evidence={"reason": "executed", "new_budget_mxn": 120.0},
+            campaign_id="2", executed=True,
+        )
+        _insert_budget_decision(
+            isolated_db, action_type="reduce",
+            evidence={"reason": "wrong decision", "new_budget_mxn": 70.0},
+            campaign_id="3", decision="observe",
+        )
+        _insert_budget_decision(
+            isolated_db, action_type="budget_scale",
+            evidence={"reason": "missing amount"},
+            campaign_id="4",
+        )
+        _insert_budget_decision(
+            isolated_db, action_type="budget_action",
+            evidence={"suggested_daily_budget": 70.0},
+            campaign_id="5",
+        )
+
+        r = client.get("/presupuestos/data")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["count"] == 1
+        assert body["recommendations"][0]["id"] == valid_id
+
+    def test_data_contract_does_not_call_budget_mutation(
+        self, client, isolated_db, customer_id_env, monkeypatch,
+    ):
+        monkeypatch.setattr("main.get_engine_modules", MagicMock(side_effect=RuntimeError("no live ads")))
+        update = MagicMock()
+        monkeypatch.setattr("engine.ads_client.update_campaign_budget", update)
+        _insert_budget_decision(
+            isolated_db, action_type="budget_scale",
+            evidence={"reason": "ba2 reason", "suggested_daily_budget_mxn": 180.0},
+            campaign_id="4", campaign_name="BA2",
+        )
+
+        r = client.get("/presupuestos/data")
+
+        assert r.status_code == 200
+        update.assert_not_called()
 
 
 class TestBatchMixedOutcomes:
