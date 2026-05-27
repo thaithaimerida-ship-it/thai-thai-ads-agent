@@ -146,21 +146,19 @@ def test_preview_increase_respects_max_percent_and_absolute_caps(
     assert by_id["small"]["change_mxn"] == 8.0
 
 
-def test_preview_excludes_uncertain_tracking_shared_disabled_and_invalid_budget(
+def test_preview_excludes_uncertain_tracking_disabled_and_invalid_budget(
     client, customer_id_env, monkeypatch,
 ):
     _install_engine(
         monkeypatch,
         primary=[
             _campaign("unknown", conversion_quality="unknown"),
-            _campaign("shared", shared=True),
             _campaign("paused", status="PAUSED"),
             _campaign("nobudget", budget=0),
             _campaign("ok", conversions=5.0),
         ],
         trend=[
             _campaign("unknown", conversion_quality="unknown"),
-            _campaign("shared", shared=True),
             _campaign("paused", status="PAUSED"),
             _campaign("nobudget", budget=0),
             _campaign("ok", conversions=15.0),
@@ -170,6 +168,35 @@ def test_preview_excludes_uncertain_tracking_shared_disabled_and_invalid_budget(
     body = client.get("/presupuestos/preview").json()
 
     assert [p["campaign_id"] for p in body["proposals"]] == ["ok"]
+
+
+def test_preview_includes_good_shared_budget_as_review_only_hold(
+    client, customer_id_env, monkeypatch,
+):
+    _install_engine(
+        monkeypatch,
+        primary=[_campaign("shared", name="Experiencia", shared=True, budget=200.0, conversions=20.0)],
+        trend=[_campaign("shared", name="Experiencia", shared=True, budget=200.0, conversions=60.0)],
+    )
+
+    body = client.get("/presupuestos/preview").json()
+
+    assert body["status"] == "success"
+    assert body["mode"] == "preview"
+    assert body["persisted"] is False
+    assert body["applies_changes"] is False
+    assert body["count"] == 1
+    proposal = body["proposals"][0]
+    assert proposal["campaign_id"] == "shared"
+    assert proposal["direction"] == "hold"
+    assert proposal["suggested_budget_mxn"] == proposal["current_budget_mxn"]
+    assert proposal["change_mxn"] == 0
+    assert proposal["change_pct"] == 0
+    assert proposal["reason"] == "Health bueno, pero no aplicable por guardrail."
+    assert proposal["warnings"] == ["La campaña usa presupuesto compartido."]
+    assert proposal["guardrails"] == ["no_apply_budget_changes", "shared_budget"]
+    assert proposal["apply_enabled"] is False
+    assert proposal["is_review_only"] is True
 
 
 def test_preview_weak_local_only_is_not_treated_as_money_action(
@@ -256,6 +283,13 @@ def test_presupuestos_page_has_separate_preview_ui_without_apply_call():
 def test_presupuestos_preview_uses_human_copy_for_security_rules():
     from routes.presupuestos import _PAGE
 
+    assert "Presupuestos AI &mdash; Revisión manual" in _PAGE
+    assert "Propuestas guardadas:" in _PAGE
+    assert "Preview actual:" in _PAGE
+    assert "Dirección" in _PAGE
+    assert "Razón" in _PAGE
+    assert "7 días:" in _PAGE
+    assert "30 días:" in _PAGE
     assert "Reglas de seguridad" in _PAGE
     assert "Solo vista previa" in _PAGE
     assert "No se guardó ninguna propuesta" in _PAGE
@@ -267,6 +301,7 @@ def test_presupuestos_preview_uses_human_copy_for_security_rules():
     assert "Aumento máximo: $50 MXN/día" in _PAGE
     assert "Aumento máximo: $30 MXN/día" in _PAGE
     assert "Hay señales útiles, pero no son pedidos o reservas confirmadas." in _PAGE
+    assert "La campaña usa presupuesto compartido." in _PAGE
 
 
 def test_presupuestos_preview_human_copy_keeps_apply_flow_out_of_preview_block():

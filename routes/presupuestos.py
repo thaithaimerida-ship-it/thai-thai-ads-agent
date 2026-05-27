@@ -74,7 +74,7 @@ _PAGE = """<!doctype html>
 </style>
 </head>
 <body>
-<h1>Presupuestos AI &mdash; Recomendaciones pendientes (scale / reduce)</h1>
+<h1>Presupuestos AI &mdash; Revisión manual</h1>
 
 <div id="gate" hidden>
   <p>Pega tu token de acceso (necesario solo para aplicar cambios):</p>
@@ -113,6 +113,8 @@ _PAGE = """<!doctype html>
 "use strict";
 var TOKEN_KEY = "tt_admin_token";
 var rows = [];
+var previewCount = 0;
+var latestSavedAt = "n/a";
 
 function el(id) { return document.getElementById(id); }
 function escapeHtml(s) {
@@ -270,8 +272,8 @@ function load() {
         return;
       }
       rows = d.recommendations || [];
-      el("meta").textContent = rows.length + " recomendaciones pendientes" +
-        " · ultima: " + (d.latest_at || "n/a");
+      latestSavedAt = d.latest_at || "n/a";
+      updateMeta();
       render();
     })
     .catch(function(e) {
@@ -288,7 +290,9 @@ function loadPreview() {
         el("previewMeta").textContent = "Error: " + (d.message || "desconocido");
         return;
       }
-      el("previewMeta").textContent = d.count + " propuesta(s) preview · No aplica cambios";
+      previewCount = d.count || 0;
+      updateMeta();
+      el("previewMeta").textContent = "Preview actual: " + previewCount + " · No aplica cambios";
       renderPreview(d.proposals || []);
     })
     .catch(function(e) {
@@ -304,29 +308,43 @@ function renderPreview(proposals) {
   }
   var html = "<table><thead><tr>" +
     "<th>Campana</th><th class='num'>Actual $/dia</th><th class='num'>Sugerido $/dia</th>" +
-    "<th class='num'>Cambio</th><th>Direccion</th><th>Razon</th><th>Evidencia</th><th>Advertencias</th><th>Reglas de seguridad</th>" +
+    "<th class='num'>Cambio</th><th>Dirección</th><th>Razón</th><th>Evidencia</th><th>Advertencias</th><th>Reglas de seguridad</th>" +
     "</tr></thead><tbody>";
   for (var i = 0; i < proposals.length; i++) {
     var p = proposals[i];
     var evidence = p.evidence || {};
-    var evidenceText = "7d $" + Number(evidence.spend_primary || 0).toFixed(0) +
-      " · 30d $" + Number(evidence.spend_trend || 0).toFixed(0) +
-      " · conv " + Number(evidence.money_actions_primary || 0).toFixed(1);
+    var suggestedText = p.is_review_only ? "Sin sugerencia" : "$" + Number(p.suggested_budget_mxn).toFixed(2);
     html += "<tr>" +
       "<td>" + escapeHtml(p.campaign_name) + " <small>(" + escapeHtml(p.campaign_id) + ")</small>" +
         "<div class='muted'>Preview, no guardado · No aplica cambios</div></td>" +
       "<td class='num'>$" + Number(p.current_budget_mxn).toFixed(2) + "</td>" +
-      "<td class='num'>$" + Number(p.suggested_budget_mxn).toFixed(2) + "</td>" +
+      "<td class='num'>" + escapeHtml(suggestedText) + "</td>" +
       "<td class='num'>$" + Number(p.change_mxn).toFixed(2) + " (" + Number(p.change_pct).toFixed(1) + "%)</td>" +
       "<td>" + escapeHtml(labelDirection(p.direction)) + "</td>" +
       "<td class='reason'>" + escapeHtml(humanReason(p.reason, p.warnings || [], p.guardrails || [])) + "</td>" +
-      "<td class='reason'>" + escapeHtml(evidenceText) + "</td>" +
+      "<td class='reason'>" + escapeHtml(formatEvidence(evidence)) + "</td>" +
       "<td class='reason'>" + escapeHtml((p.warnings || []).map(labelWarning).join(' · ')) + "</td>" +
       "<td class='reason'>" + escapeHtml((p.guardrails || []).map(labelGuardrail).join(' · ')) + "</td>" +
       "</tr>";
   }
   html += "</tbody></table>";
   wrap.innerHTML = html;
+}
+
+function updateMeta(latestAt) {
+  el("meta").textContent = "Propuestas guardadas: " + rows.length +
+    " · Preview actual: " + previewCount +
+    " · última guardada: " + latestSavedAt;
+}
+
+function formatMoney(value) {
+  return "$" + Number(value || 0).toLocaleString("es-MX", { maximumFractionDigits: 0 });
+}
+
+function formatEvidence(evidence) {
+  return "7 días: " + formatMoney(evidence.spend_primary) + " de gasto, " +
+    Number(evidence.money_actions_primary || 0).toFixed(0) + " conversiones. " +
+    "30 días: " + formatMoney(evidence.spend_trend) + " de gasto.";
 }
 
 function labelDirection(value) {
@@ -357,7 +375,9 @@ function labelGuardrail(value) {
 
 function labelWarning(value) {
   var labels = {
-    "weak_local_action no es money_action": "Hay señales útiles, pero no son pedidos o reservas confirmadas."
+    "weak_local_action no es money_action": "Hay señales útiles, pero no son pedidos o reservas confirmadas.",
+    "La campaña usa presupuesto compartido.": "La campaña usa presupuesto compartido.",
+    "Puede tener presupuesto compartido.": "Puede tener presupuesto compartido."
   };
   return labels[value] || value || "";
 }
@@ -606,8 +626,6 @@ def _build_budget_preview_proposals(
         status = str(campaign.get("status") or "").upper()
         if status != "ENABLED":
             continue
-        if campaign.get("budget_explicitly_shared") is True:
-            continue
         if current_budget is None or current_budget <= 0:
             continue
         if _tracking_uncertain(campaign) or _tracking_uncertain(trend):
@@ -627,6 +645,39 @@ def _build_budget_preview_proposals(
             "campaign_enabled",
             "not_shared_budget",
         ]
+
+        if campaign.get("budget_explicitly_shared") is True:
+            if money_primary > 0 and money_trend > 0:
+                yesterday = yesterday_by_id.get(campaign_id, {})
+                proposals.append({
+                    "campaign_id": campaign_id,
+                    "campaign_name": campaign.get("name") or "",
+                    "campaign_status": status,
+                    "current_budget_mxn": round(current_budget, 2),
+                    "suggested_budget_mxn": round(current_budget, 2),
+                    "change_mxn": 0,
+                    "change_pct": 0,
+                    "direction": "hold",
+                    "reason": "Health bueno, pero no aplicable por guardrail.",
+                    "evidence": {
+                        "primary_range": primary_range,
+                        "trend_range": trend_range,
+                        "spend_primary": round(spend_primary, 2),
+                        "spend_trend": round(spend_trend, 2),
+                        "money_actions_primary": money_primary,
+                        "money_actions_trend": money_trend,
+                        "weak_local_actions_primary": weak_primary,
+                        "weak_local_actions_trend": weak_trend,
+                        "ctr_primary": _ctr(campaign),
+                        "yesterday_spend": round(_spend_mxn(yesterday), 2),
+                        "yesterday_money_actions": _money_actions(yesterday),
+                    },
+                    "guardrails": ["no_apply_budget_changes", "shared_budget"],
+                    "warnings": ["La campaña usa presupuesto compartido."],
+                    "apply_enabled": False,
+                    "is_review_only": True,
+                })
+            continue
 
         if money_primary > 0 and money_trend > 0:
             increase_cap = 30.0 if current_budget < 100 else 50.0
@@ -679,6 +730,7 @@ def _build_budget_preview_proposals(
             "guardrails": guardrails,
             "warnings": warnings,
             "apply_enabled": False,
+            "is_review_only": False,
         })
     return proposals
 
