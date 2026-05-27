@@ -15,7 +15,7 @@ import json
 import os
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -49,6 +49,14 @@ class SaveBudgetPreviewRequest(BaseModel):
     warnings: list[Any] | None = None
     guardrails: list[Any] | None = None
     source: str | None = None
+
+
+class BudgetReviewActionRequest(BaseModel):
+    decision_id: int
+    action: Literal["reject", "postpone", "keep_review"]
+    reason: str | None = None
+    postpone_until: str | None = None
+    source: Literal["manual_review"]
 
 
 _PAGE = """<!doctype html>
@@ -169,6 +177,13 @@ el("previewWrap").addEventListener("click", function(ev) {
 el("tableWrap").addEventListener("change", function(ev) {
   if (ev.target && ev.target.classList.contains("pick")) updateApplyState();
 });
+el("tableWrap").addEventListener("click", function(ev) {
+  if (ev.target && ev.target.classList.contains("review-action")) {
+    var id = parseInt(ev.target.getAttribute("data-id"), 10);
+    var action = ev.target.getAttribute("data-action");
+    if (!isNaN(id) && action) reviewAction(id, action);
+  }
+});
 
 function selectedIds() {
   var checks = document.querySelectorAll("#tableWrap input.pick:checked");
@@ -178,6 +193,50 @@ function selectedIds() {
     if (!isNaN(n)) ids.push(n);
   }
   return ids;
+}
+
+function reviewAction(decisionId, action) {
+  var token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    showBanner("warn", "Esta acción requiere token. Pega tu token para modificar el estado de revisión.");
+    return;
+  }
+  var reason = "";
+  var postponeUntil = null;
+  if (action === "reject") {
+    reason = window.prompt("Razón para rechazar la propuesta:", "") || "";
+  } else if (action === "postpone") {
+    reason = window.prompt("Razón para posponer la propuesta:", "") || "";
+    postponeUntil = window.prompt("Posponer hasta (YYYY-MM-DD, opcional):", "") || null;
+  } else if (action === "keep_review") {
+    reason = window.prompt("Nota para mantener en revisión:", "") || "";
+  }
+  fetch("/budget-recommendations/review-action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Token": token },
+    body: JSON.stringify({
+      decision_id: decisionId,
+      action: action,
+      reason: reason,
+      postpone_until: postponeUntil,
+      source: "manual_review"
+    }),
+  })
+    .then(function(r) {
+      return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; });
+    })
+    .then(function(res) {
+      if (!res.ok || res.data.status !== "success") {
+        var msg = (res.data && (res.data.detail || res.data.message || res.data.reason)) || ("HTTP " + res.status);
+        showBanner("err", "Error: " + escapeHtml(msg));
+        return;
+      }
+      showBanner("ok", escapeHtml(res.data.message || "Estado actualizado. No se aplicó ningún cambio."));
+      load();
+    })
+    .catch(function(e) {
+      showBanner("err", "Error de red: " + escapeHtml(e.message));
+    });
 }
 
 function updateApplyState() {
@@ -446,11 +505,20 @@ function render() {
     "<th></th><th>Campaña</th><th>Accion</th>" +
     "<th class='num'>Actual $/dia</th><th class='num'>Nuevo $/dia</th>" +
     "<th>Urgencia</th><th>Razon</th><th>Creada</th></tr></thead><tbody>";
+  var hasApplyableRows = false;
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
+    if (r.apply_enabled !== false) hasApplyableRows = true;
     var actionClass = r.action_type === "scale" ? "action-scale" : "action-reduce";
     var reviewStatus = r.review_status ? "<div class='muted'>" + escapeHtml(labelReviewStatus(r.review_status)) + "</div>" : "";
     var disabledLabel = labelApplyDisabled(r.apply_disabled_reason || "");
+    var reviewButtons = r.is_manual_preview
+      ? "<div class='review-actions'>" +
+        "<button class='secondary review-action' data-action='reject' data-id='" + r.id + "'>Rechazar</button> " +
+        "<button class='secondary review-action' data-action='postpone' data-id='" + r.id + "'>Posponer</button> " +
+        "<button class='secondary review-action' data-action='keep_review' data-id='" + r.id + "'>Mantener en revisión</button>" +
+        "</div>"
+      : "";
     var actionLabel = r.action_type === "scale" ? "scale ↑" : "reduce ↓";
     var rowClass = r.urgency === "critical" ? "urgency-critical" :
                    r.urgency === "urgent"   ? "urgency-urgent" : "";
@@ -470,6 +538,7 @@ function render() {
       "<td class='" + actionClass + "'>" + actionLabel +
         reviewStatus +
         (r.apply_enabled === false ? "<div class='muted'>" + escapeHtml(disabledLabel) + "</div>" : "") +
+        reviewButtons +
       "</td>" +
       currentCell +
       "<td class='num'>$" + Number(r.new_budget_mxn).toFixed(2) + "</td>" +
@@ -480,7 +549,7 @@ function render() {
   }
   html += "</tbody></table>";
   wrap.innerHTML = html;
-  el("applyBtn").hidden = false;
+  el("applyBtn").hidden = !hasApplyableRows;
   updateApplyState();
 }
 
@@ -635,6 +704,7 @@ async def presupuestos_data() -> dict[str, Any]:
                 is_manual_preview,
                 apply_enabled,
             ),
+            "is_manual_preview": is_manual_preview,
             "review_status": "Guardada para revisión" if is_manual_preview else "",
             "created_at": r["created_at"],
         })
@@ -854,6 +924,129 @@ def _budget_apply_disabled_reason(
     if action_type in {"budget_action", "budget_scale"}:
         return "Pendiente de compatibilidad de aplicacion"
     return "No aplicable"
+
+
+def _append_budget_review_action(
+    evidence: dict[str, Any],
+    request: BudgetReviewActionRequest,
+    previous_state: dict[str, Any],
+    new_state: dict[str, Any],
+) -> dict[str, Any]:
+    updated = dict(evidence)
+    actions = updated.get("review_actions")
+    if not isinstance(actions, list):
+        actions = []
+    audit_entry = {
+        "action": request.action,
+        "actor": "admin_api_token",
+        "source": request.source,
+        "reason": request.reason or "",
+        "postpone_until": request.postpone_until,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "previous_state": previous_state,
+        "new_state": new_state,
+    }
+    actions.append(audit_entry)
+    updated["review_actions"] = actions
+    return updated
+
+
+def _budget_review_message(action: str) -> str:
+    messages = {
+        "reject": "Propuesta rechazada. No se aplicó ningún cambio.",
+        "postpone": "Propuesta pospuesta. No se aplicó ningún cambio.",
+        "keep_review": "Propuesta mantenida en revisión. No se aplicó ningún cambio.",
+    }
+    return messages[action]
+
+
+@router.post("/budget-recommendations/review-action", dependencies=[Depends(require_token)])
+async def budget_recommendation_review_action(request: BudgetReviewActionRequest) -> dict[str, Any]:
+    """Actualiza solo estado de revisión para propuestas manual_preview.
+
+    No instancia Google Ads client, no ejecuta validate_only y no aplica presupuesto.
+    """
+    db_path = get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM autonomous_decisions WHERE id = ?",
+            (request.decision_id,),
+        ).fetchone()
+
+        if not row:
+            return {"status": "error", "decision_id": request.decision_id, "reason": "not_found"}
+        if row["executed"] == 1:
+            return {"status": "error", "decision_id": request.decision_id, "reason": "already_executed"}
+        if row["rejected_at"] is not None:
+            return {"status": "error", "decision_id": request.decision_id, "reason": "rejected"}
+        if row["postponed_at"] is not None:
+            return {"status": "error", "decision_id": request.decision_id, "reason": "postponed"}
+        if row["approved_at"] is not None:
+            return {"status": "error", "decision_id": request.decision_id, "reason": "approved"}
+        if row["decision"] != "proposed":
+            return {
+                "status": "error",
+                "decision_id": request.decision_id,
+                "reason": "wrong_decision_state",
+                "detail": row["decision"],
+            }
+
+        evidence = _safe_json(row["evidence_json"])
+        if not _is_manual_preview_evidence(evidence):
+            return {"status": "error", "decision_id": request.decision_id, "reason": "not_manual_preview"}
+
+        previous_state = {
+            "decision": row["decision"],
+            "executed": row["executed"],
+            "approved_at": row["approved_at"],
+            "rejected_at": row["rejected_at"],
+            "postponed_at": row["postponed_at"],
+        }
+        new_state = dict(previous_state)
+        if request.action == "reject":
+            new_state["rejected_at"] = "now"
+        elif request.action == "postpone":
+            new_state["postponed_at"] = "now"
+
+        updated_evidence = _append_budget_review_action(
+            evidence,
+            request,
+            previous_state,
+            new_state,
+        )
+        evidence_json = json.dumps(updated_evidence, ensure_ascii=False)
+
+        if request.action == "reject":
+            conn.execute(
+                """
+                UPDATE autonomous_decisions
+                   SET rejected_at = datetime('now'), evidence_json = ?
+                 WHERE id = ?
+                """,
+                (evidence_json, request.decision_id),
+            )
+        elif request.action == "postpone":
+            conn.execute(
+                """
+                UPDATE autonomous_decisions
+                   SET postponed_at = datetime('now'), evidence_json = ?
+                 WHERE id = ?
+                """,
+                (evidence_json, request.decision_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE autonomous_decisions SET evidence_json = ? WHERE id = ?",
+                (evidence_json, request.decision_id),
+            )
+
+    return {
+        "status": "success",
+        "decision_id": request.decision_id,
+        "action": request.action,
+        "message": _budget_review_message(request.action),
+    }
 
 
 def _build_budget_preview_proposals(

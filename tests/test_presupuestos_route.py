@@ -9,6 +9,8 @@ Aisla SQLite usando tmp_path y patcheando routes.presupuestos.get_db_path.
 """
 from __future__ import annotations
 
+import json
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -148,6 +150,14 @@ def _insert_budget_decision(
     )
 
 
+def conn_record_count(db_path: str, decision_id: int) -> int:
+    with sqlite3.connect(db_path) as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM autonomous_decisions WHERE id = ?",
+            (decision_id,),
+        ).fetchone()[0]
+
+
 HEADERS_OK = {"X-API-Token": "test-token-123"}
 
 
@@ -160,6 +170,14 @@ class TestAuth:
     def test_apply_without_token_returns_401(self, client, customer_id_env, admin_token, isolated_db):
         decision_id = _insert_scale(isolated_db)
         r = client.post("/apply-budget-changes", json={"decision_ids": [decision_id]})
+        assert r.status_code == 401
+
+    def test_review_action_without_token_returns_401(self, client, customer_id_env, admin_token, isolated_db):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+        r = client.post(
+            "/budget-recommendations/review-action",
+            json={"decision_id": decision_id, "action": "reject", "source": "manual_review"},
+        )
         assert r.status_code == 401
 
 
@@ -175,6 +193,186 @@ class TestValidation:
             headers=HEADERS_OK,
         )
         assert r.status_code == 422
+
+    def test_review_action_invalid_action_returns_422(self, client, admin_token, isolated_db, customer_id_env):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+        r = client.post(
+            "/budget-recommendations/review-action",
+            json={"decision_id": decision_id, "action": "approve", "source": "manual_review"},
+            headers=HEADERS_OK,
+        )
+        assert r.status_code == 422
+
+    def test_review_action_invalid_source_returns_422(self, client, admin_token, isolated_db, customer_id_env):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+        r = client.post(
+            "/budget-recommendations/review-action",
+            json={"decision_id": decision_id, "action": "reject", "source": "ui"},
+            headers=HEADERS_OK,
+        )
+        assert r.status_code == 422
+
+
+class TestBudgetReviewAction:
+    def test_reject_manual_preview_marks_rejected_and_hides_pending_without_ads_calls(
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+    ):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+
+        r = client.post(
+            "/budget-recommendations/review-action",
+            json={
+                "decision_id": decision_id,
+                "action": "reject",
+                "reason": "No subir delivery esta semana.",
+                "source": "manual_review",
+            },
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["decision_id"] == decision_id
+        assert body["action"] == "reject"
+        assert body["message"] == "Propuesta rechazada. No se aplicó ningún cambio."
+        with sqlite3.connect(isolated_db.db_path) as conn:
+            row = conn.execute(
+                "SELECT rejected_at, postponed_at, approved_at, executed, evidence_json "
+                "FROM autonomous_decisions WHERE id = ?",
+                (decision_id,),
+            ).fetchone()
+        assert row[0] is not None
+        assert row[1] is None
+        assert row[2] is None
+        assert row[3] == 0
+        evidence = json.loads(row[4])
+        assert evidence["review_actions"][-1]["action"] == "reject"
+        assert evidence["review_actions"][-1]["reason"] == "No subir delivery esta semana."
+        assert evidence["review_actions"][-1]["actor"] == "admin_api_token"
+        assert client.get("/presupuestos/data").json()["count"] == 0
+        assert conn_record_count(isolated_db.db_path, decision_id) == 1
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
+        mocked_ads["update_campaign_budget"].assert_not_called()
+
+    def test_postpone_manual_preview_marks_postponed_and_hides_pending_without_ads_calls(
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+    ):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+
+        r = client.post(
+            "/budget-recommendations/review-action",
+            json={
+                "decision_id": decision_id,
+                "action": "postpone",
+                "reason": "Revisar la proxima semana.",
+                "postpone_until": "2026-06-03",
+                "source": "manual_review",
+            },
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["message"] == "Propuesta pospuesta. No se aplicó ningún cambio."
+        with sqlite3.connect(isolated_db.db_path) as conn:
+            row = conn.execute(
+                "SELECT rejected_at, postponed_at, approved_at, executed, evidence_json "
+                "FROM autonomous_decisions WHERE id = ?",
+                (decision_id,),
+            ).fetchone()
+        assert row[0] is None
+        assert row[1] is not None
+        assert row[2] is None
+        assert row[3] == 0
+        evidence = json.loads(row[4])
+        assert evidence["review_actions"][-1]["action"] == "postpone"
+        assert evidence["review_actions"][-1]["postpone_until"] == "2026-06-03"
+        assert evidence["review_actions"][-1]["reason"] == "Revisar la proxima semana."
+        assert client.get("/presupuestos/data").json()["count"] == 0
+        assert conn_record_count(isolated_db.db_path, decision_id) == 1
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
+        mocked_ads["update_campaign_budget"].assert_not_called()
+
+    def test_keep_review_manual_preview_stays_visible_and_only_audits(
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+    ):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+
+        r = client.post(
+            "/budget-recommendations/review-action",
+            json={
+                "decision_id": decision_id,
+                "action": "keep_review",
+                "reason": "Quiero pensarlo.",
+                "source": "manual_review",
+            },
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["message"] == "Propuesta mantenida en revisión. No se aplicó ningún cambio."
+        with sqlite3.connect(isolated_db.db_path) as conn:
+            row = conn.execute(
+                "SELECT rejected_at, postponed_at, approved_at, executed, evidence_json "
+                "FROM autonomous_decisions WHERE id = ?",
+                (decision_id,),
+            ).fetchone()
+        assert row[0] is None
+        assert row[1] is None
+        assert row[2] is None
+        assert row[3] == 0
+        evidence = json.loads(row[4])
+        assert evidence["review_actions"][-1]["action"] == "keep_review"
+        data = client.get("/presupuestos/data").json()
+        assert data["count"] == 1
+        assert data["recommendations"][0]["id"] == decision_id
+        assert conn_record_count(isolated_db.db_path, decision_id) == 1
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
+        mocked_ads["update_campaign_budget"].assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("setup", "reason"),
+        [
+            (lambda mem: 99999, "not_found"),
+            (lambda mem: _insert_manual_preview_scale(mem, new_budget_mxn=55.0), "already_executed"),
+            (lambda mem: _insert_manual_preview_scale(mem, new_budget_mxn=56.0), "rejected"),
+            (lambda mem: _insert_manual_preview_scale(mem, new_budget_mxn=57.0), "postponed"),
+            (lambda mem: _insert_scale(mem), "not_manual_preview"),
+        ],
+    )
+    def test_review_action_rejects_invalid_state_without_ads_calls(
+        self, setup, reason, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+    ):
+        decision_id = setup(isolated_db)
+        if reason == "already_executed":
+            with sqlite3.connect(isolated_db.db_path) as conn:
+                conn.execute("UPDATE autonomous_decisions SET executed = 1 WHERE id = ?", (decision_id,))
+        elif reason == "rejected":
+            with sqlite3.connect(isolated_db.db_path) as conn:
+                conn.execute("UPDATE autonomous_decisions SET rejected_at = datetime('now') WHERE id = ?", (decision_id,))
+        elif reason == "postponed":
+            with sqlite3.connect(isolated_db.db_path) as conn:
+                conn.execute("UPDATE autonomous_decisions SET postponed_at = datetime('now') WHERE id = ?", (decision_id,))
+
+        r = client.post(
+            "/budget-recommendations/review-action",
+            json={"decision_id": decision_id, "action": "reject", "source": "manual_review"},
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "error"
+        assert r.json()["reason"] == reason
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
+        mocked_ads["update_campaign_budget"].assert_not_called()
 
 
 class TestInvariantes:

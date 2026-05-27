@@ -318,6 +318,20 @@ def test_presupuestos_page_has_separate_preview_ui_without_apply_call():
     assert "class='pick'" not in preview_block
 
 
+def test_manual_preview_ui_has_review_buttons_without_apply_language():
+    from routes.presupuestos import _PAGE
+
+    assert "Rechazar" in _PAGE
+    assert "Posponer" in _PAGE
+    assert "Mantener en revisión" in _PAGE
+    assert "/budget-recommendations/review-action" in _PAGE
+    review_block = _PAGE.split("function reviewAction(", 1)[1]
+    review_block = review_block.split("function updateApplyState", 1)[0]
+    assert "/apply-budget-changes" not in review_block
+    assert "update_campaign_budget" not in review_block
+    assert "validate_only" not in review_block
+
+
 def test_presupuestos_preview_uses_human_copy_for_security_rules():
     from routes.presupuestos import _PAGE
 
