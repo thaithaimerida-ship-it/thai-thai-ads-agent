@@ -82,6 +82,8 @@ _PAGE = """<!doctype html>
   td.reason { color: #444; max-width: 380px; }
   .action-scale { color: #0a7a0a; font-weight: 600; }
   .action-reduce { color: #b35900; font-weight: 600; }
+  .review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; min-width: 220px; }
+  .review-actions .review-action { white-space: nowrap; }
   .urgency-critical { background: #fde0e0; }
   .urgency-urgent   { background: #fff3c0; }
   td.drift-medium  { background: #fff3c0; font-weight: 600; }
