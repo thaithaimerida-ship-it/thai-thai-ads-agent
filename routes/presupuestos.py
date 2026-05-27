@@ -307,7 +307,7 @@ function renderPreview(proposals) {
     return;
   }
   var html = "<table><thead><tr>" +
-    "<th>Campana</th><th class='num'>Actual $/dia</th><th class='num'>Sugerido $/dia</th>" +
+    "<th>Campaña</th><th class='num'>Actual $/dia</th><th class='num'>Sugerido $/dia</th>" +
     "<th class='num'>Cambio</th><th>Dirección</th><th>Razón</th><th>Evidencia</th><th>Advertencias</th><th>Reglas de seguridad</th>" +
     "</tr></thead><tbody>";
   for (var i = 0; i < proposals.length; i++) {
@@ -315,8 +315,7 @@ function renderPreview(proposals) {
     var evidence = p.evidence || {};
     var suggestedText = p.is_review_only ? "Sin sugerencia" : "$" + Number(p.suggested_budget_mxn).toFixed(2);
     html += "<tr>" +
-      "<td>" + escapeHtml(p.campaign_name) + " <small>(" + escapeHtml(p.campaign_id) + ")</small>" +
-        "<div class='muted'>Preview, no guardado · No aplica cambios</div></td>" +
+      "<td>" + escapeHtml(p.campaign_name) + " <small>(" + escapeHtml(p.campaign_id) + ")</small></td>" +
       "<td class='num'>$" + Number(p.current_budget_mxn).toFixed(2) + "</td>" +
       "<td class='num'>" + escapeHtml(suggestedText) + "</td>" +
       "<td class='num'>$" + Number(p.change_mxn).toFixed(2) + " (" + Number(p.change_pct).toFixed(1) + "%)</td>" +
@@ -398,12 +397,12 @@ function humanReason(reason, warnings, guardrails) {
 function render() {
   var wrap = el("tableWrap");
   if (!rows.length) {
-    wrap.innerHTML = "<div id='empty'>Sin recomendaciones de presupuesto pendientes.</div>";
+    wrap.innerHTML = "<div id='empty'>Sin propuestas guardadas pendientes.</div>";
     el("applyBtn").hidden = true;
     return;
   }
   var html = "<table><thead><tr>" +
-    "<th></th><th>Campana</th><th>Accion</th>" +
+    "<th></th><th>Campaña</th><th>Accion</th>" +
     "<th class='num'>Actual $/dia</th><th class='num'>Nuevo $/dia</th>" +
     "<th>Urgencia</th><th>Razon</th><th>Creada</th></tr></thead><tbody>";
   for (var i = 0; i < rows.length; i++) {

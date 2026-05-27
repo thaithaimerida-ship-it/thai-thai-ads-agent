@@ -284,6 +284,8 @@ def test_presupuestos_preview_uses_human_copy_for_security_rules():
     from routes.presupuestos import _PAGE
 
     assert "Presupuestos AI &mdash; Revisión manual" in _PAGE
+    assert "Campaña" in _PAGE
+    assert "Sin propuestas guardadas pendientes." in _PAGE
     assert "Propuestas guardadas:" in _PAGE
     assert "Preview actual:" in _PAGE
     assert "Dirección" in _PAGE
@@ -307,8 +309,11 @@ def test_presupuestos_preview_uses_human_copy_for_security_rules():
 def test_presupuestos_preview_human_copy_keeps_apply_flow_out_of_preview_block():
     from routes.presupuestos import _PAGE
 
+    assert "Preview, no guardado" in _PAGE
+    assert "No aplica cambios" in _PAGE
     preview_block = _PAGE.split("function loadPreview()", 1)[1]
     preview_block = preview_block.split("function render()", 1)[0]
+    assert "Preview, no guardado · No aplica cambios" not in preview_block
     assert "/apply-budget-changes" not in preview_block
     assert "class='pick'" not in preview_block
     assert "X-API-Token" not in preview_block
