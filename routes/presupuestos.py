@@ -14,6 +14,7 @@ del operador: `negative` → /negativos, `quality_alert` → email).
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,6 +25,8 @@ from engine.db_sync import get_db_path
 from routes.auth_token import require_token
 
 router = APIRouter(tags=["presupuestos"])
+
+_PREVIEW_ALLOWED_RANGES = {"LAST_7_DAYS", "LAST_14_DAYS", "LAST_30_DAYS"}
 
 
 class ApplyBudgetChangesRequest(BaseModel):
@@ -87,6 +90,17 @@ _PAGE = """<!doctype html>
     <a id="logout">borrar token</a>
   </div>
 
+  <section id="previewSection" style="background:#fff;border:1px solid #eee;border-radius:6px;padding:1rem;margin-bottom:1rem;">
+    <h2 style="font-size:1rem;margin:.1rem 0 .4rem;">Generar preview de propuestas</h2>
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.6rem;">
+      <button id="previewBtn" class="secondary">Generar preview</button>
+      <span style="background:#eef3ff;color:#234;padding:.15rem .45rem;border-radius:4px;font-size:.8rem;">Preview, no guardado</span>
+      <span class="muted">No aplica cambios</span>
+    </div>
+    <div id="previewMeta" class="muted"></div>
+    <div id="previewWrap"></div>
+  </section>
+
   <div id="tableWrap"></div>
 
   <button id="applyBtn" hidden disabled title="Selecciona al menos una recomendacion">
@@ -126,6 +140,7 @@ el("logout").addEventListener("click", function() {
   localStorage.removeItem(TOKEN_KEY); showGate();
 });
 el("load").addEventListener("click", load);
+el("previewBtn").addEventListener("click", loadPreview);
 el("applyBtn").addEventListener("click", applySelected);
 el("tableWrap").addEventListener("change", function(ev) {
   if (ev.target && ev.target.classList.contains("pick")) updateApplyState();
@@ -262,6 +277,56 @@ function load() {
     .catch(function(e) {
       el("meta").textContent = "Error de red: " + e.message;
     });
+}
+
+function loadPreview() {
+  el("previewMeta").textContent = "Generando preview...";
+  fetch("/presupuestos/preview?date_range=LAST_7_DAYS")
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.status !== "success") {
+        el("previewMeta").textContent = "Error: " + (d.message || "desconocido");
+        return;
+      }
+      el("previewMeta").textContent = d.count + " propuesta(s) preview · No aplica cambios";
+      renderPreview(d.proposals || []);
+    })
+    .catch(function(e) {
+      el("previewMeta").textContent = "Error de red: " + e.message;
+    });
+}
+
+function renderPreview(proposals) {
+  var wrap = el("previewWrap");
+  if (!proposals.length) {
+    wrap.innerHTML = "<div id='empty'>Sin propuestas preview con las reglas actuales.</div>";
+    return;
+  }
+  var html = "<table><thead><tr>" +
+    "<th>Campana</th><th class='num'>Actual $/dia</th><th class='num'>Sugerido $/dia</th>" +
+    "<th class='num'>Cambio</th><th>Direccion</th><th>Razon</th><th>Evidencia</th><th>Advertencias</th><th>Guardrails</th>" +
+    "</tr></thead><tbody>";
+  for (var i = 0; i < proposals.length; i++) {
+    var p = proposals[i];
+    var evidence = p.evidence || {};
+    var evidenceText = "7d $" + Number(evidence.spend_primary || 0).toFixed(0) +
+      " · 30d $" + Number(evidence.spend_trend || 0).toFixed(0) +
+      " · conv " + Number(evidence.money_actions_primary || 0).toFixed(1);
+    html += "<tr>" +
+      "<td>" + escapeHtml(p.campaign_name) + " <small>(" + escapeHtml(p.campaign_id) + ")</small>" +
+        "<div class='muted'>Preview, no guardado · No aplica cambios</div></td>" +
+      "<td class='num'>$" + Number(p.current_budget_mxn).toFixed(2) + "</td>" +
+      "<td class='num'>$" + Number(p.suggested_budget_mxn).toFixed(2) + "</td>" +
+      "<td class='num'>$" + Number(p.change_mxn).toFixed(2) + " (" + Number(p.change_pct).toFixed(1) + "%)</td>" +
+      "<td>" + escapeHtml(p.direction) + "</td>" +
+      "<td class='reason'>" + escapeHtml(p.reason) + "</td>" +
+      "<td class='reason'>" + escapeHtml(evidenceText) + "</td>" +
+      "<td class='reason'>" + escapeHtml((p.warnings || []).join(' · ')) + "</td>" +
+      "<td class='reason'>" + escapeHtml((p.guardrails || []).join(' · ')) + "</td>" +
+      "</tr>";
+  }
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
 }
 
 function render() {
@@ -421,6 +486,221 @@ async def presupuestos_data() -> dict[str, Any]:
         "latest_at": latest_at,
         "count": len(recommendations),
     }
+
+
+@router.get("/presupuestos/preview")
+async def presupuestos_preview(
+    date_range: str | None = None,
+    primary_range: str | None = None,
+    trend_range: str | None = None,
+) -> dict[str, Any]:
+    """Preview read-only de propuestas conservadoras de presupuesto.
+
+    No lee ni escribe autonomous_decisions, no requiere token y no llama ninguna
+    ruta/funcion de aplicacion. Solo usa fetch_campaign_data read-only.
+    """
+    primary = primary_range or date_range or "LAST_7_DAYS"
+    trend = trend_range or "LAST_30_DAYS"
+    if primary not in _PREVIEW_ALLOWED_RANGES:
+        return {"status": "error", "message": f"primary_range no permitido: {primary}", "proposals": []}
+    if trend not in _PREVIEW_ALLOWED_RANGES:
+        return {"status": "error", "message": f"trend_range no permitido: {trend}", "proposals": []}
+
+    try:
+        from main import get_engine_modules
+        engine = get_engine_modules()
+        if not engine:
+            return {"status": "error", "message": "engine no disponible", "proposals": []}
+        customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+        if not customer_id:
+            return {"status": "error", "message": "GOOGLE_ADS_TARGET_CUSTOMER_ID no configurado", "proposals": []}
+        client = engine["get_ads_client"]()
+        primary_rows = engine["fetch_campaign_data"](client, customer_id, primary) or []
+        trend_rows = engine["fetch_campaign_data"](client, customer_id, trend) or []
+        yesterday_rows = engine["fetch_campaign_data"](client, customer_id, "YESTERDAY") or []
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "proposals": []}
+
+    proposals = _build_budget_preview_proposals(
+        primary_rows,
+        trend_rows,
+        yesterday_rows,
+        primary_range=primary,
+        trend_range=trend,
+    )
+    return {
+        "status": "success",
+        "mode": "preview",
+        "persisted": False,
+        "applies_changes": False,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "count": len(proposals),
+        "proposals": proposals,
+    }
+
+
+def _build_budget_preview_proposals(
+    primary_rows: list[dict[str, Any]],
+    trend_rows: list[dict[str, Any]],
+    yesterday_rows: list[dict[str, Any]],
+    *,
+    primary_range: str,
+    trend_range: str,
+) -> list[dict[str, Any]]:
+    trend_by_id = {_campaign_id(c): c for c in trend_rows if _campaign_id(c)}
+    yesterday_by_id = {_campaign_id(c): c for c in yesterday_rows if _campaign_id(c)}
+    proposals = []
+
+    for campaign in primary_rows:
+        campaign_id = _campaign_id(campaign)
+        if not campaign_id:
+            continue
+        trend = trend_by_id.get(campaign_id, {})
+        current_budget = _number(campaign.get("daily_budget_mxn"))
+        status = str(campaign.get("status") or "").upper()
+        if status != "ENABLED":
+            continue
+        if campaign.get("budget_explicitly_shared") is True:
+            continue
+        if current_budget is None or current_budget <= 0:
+            continue
+        if _tracking_uncertain(campaign) or _tracking_uncertain(trend):
+            continue
+
+        money_primary = _money_actions(campaign)
+        money_trend = _money_actions(trend)
+        weak_primary = _weak_local_actions(campaign)
+        weak_trend = _weak_local_actions(trend)
+        spend_primary = _spend_mxn(campaign)
+        spend_trend = _spend_mxn(trend)
+        warnings = []
+        guardrails = [
+            "preview_only",
+            "no_db_write",
+            "no_apply_budget_changes",
+            "campaign_enabled",
+            "not_shared_budget",
+        ]
+
+        if money_primary > 0 and money_trend > 0:
+            increase_cap = 30.0 if current_budget < 100 else 50.0
+            increase = min(round(current_budget * 0.10, 2), increase_cap)
+            suggested = round(current_budget + increase, 2)
+            guardrails.extend(["max_increase_pct_10", f"max_increase_mxn_{int(increase_cap)}"])
+            direction = "increase"
+            reason = "Tendencia con conversiones primarias; aumento conservador de preview."
+        elif money_primary <= 0 and money_trend <= 0 and (weak_primary > 0 or weak_trend > 0):
+            suggested = round(current_budget, 2)
+            direction = "hold"
+            reason = "Solo hay weak_local_action; mantener presupuesto y revisar calidad antes de escalar."
+            warnings.append("weak_local_action no es money_action")
+            guardrails.append("weak_local_action_requires_review")
+        elif _reduction_candidate(campaign, trend, current_budget):
+            reduction = round(current_budget * 0.10, 2)
+            suggested = round(current_budget - reduction, 2)
+            direction = "decrease"
+            reason = "Tendencia 7d/30d sin conversiones; reduccion conservadora de preview."
+            guardrails.append("max_reduction_pct_10")
+        else:
+            continue
+
+        change = round(suggested - current_budget, 2)
+        change_pct = round((change / current_budget) * 100.0, 2) if current_budget else 0.0
+        yesterday = yesterday_by_id.get(campaign_id, {})
+        proposals.append({
+            "campaign_id": campaign_id,
+            "campaign_name": campaign.get("name") or "",
+            "campaign_status": status,
+            "current_budget_mxn": round(current_budget, 2),
+            "suggested_budget_mxn": suggested,
+            "change_mxn": change,
+            "change_pct": change_pct,
+            "direction": direction,
+            "reason": reason,
+            "evidence": {
+                "primary_range": primary_range,
+                "trend_range": trend_range,
+                "spend_primary": round(spend_primary, 2),
+                "spend_trend": round(spend_trend, 2),
+                "money_actions_primary": money_primary,
+                "money_actions_trend": money_trend,
+                "weak_local_actions_primary": weak_primary,
+                "weak_local_actions_trend": weak_trend,
+                "ctr_primary": _ctr(campaign),
+                "yesterday_spend": round(_spend_mxn(yesterday), 2),
+                "yesterday_money_actions": _money_actions(yesterday),
+            },
+            "guardrails": guardrails,
+            "warnings": warnings,
+            "apply_enabled": False,
+        })
+    return proposals
+
+
+def _campaign_id(campaign: dict[str, Any]) -> str:
+    value = campaign.get("id") or campaign.get("campaign_id")
+    return str(value) if value is not None else ""
+
+
+def _number(value) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _spend_mxn(campaign: dict[str, Any]) -> float:
+    spend = _number(campaign.get("spend"))
+    if spend is not None:
+        return spend
+    micros = _number(campaign.get("cost_micros"))
+    return micros / 1_000_000 if micros is not None else 0.0
+
+
+def _money_actions(campaign: dict[str, Any]) -> float:
+    quality = str(campaign.get("conversion_quality") or "").lower()
+    if quality in {"unknown", "weak_local_action"}:
+        return 0.0
+    for key in ("money_actions", "money_action", "primary_conversions", "conversions"):
+        value = _number(campaign.get(key))
+        if value is not None:
+            return max(value, 0.0)
+    return 0.0
+
+
+def _weak_local_actions(campaign: dict[str, Any]) -> float:
+    for key in ("weak_local_actions", "weak_local_action"):
+        value = _number(campaign.get(key))
+        if value is not None:
+            return max(value, 0.0)
+    if str(campaign.get("conversion_quality") or "").lower() == "weak_local_action":
+        return max(_number(campaign.get("all_conversions")) or 0.0, 0.0)
+    return 0.0
+
+
+def _tracking_uncertain(campaign: dict[str, Any]) -> bool:
+    return str(campaign.get("conversion_quality") or "").lower() == "unknown"
+
+
+def _ctr(campaign: dict[str, Any]) -> float:
+    direct = _number(campaign.get("ctr"))
+    if direct is not None:
+        return round(direct, 2)
+    clicks = _number(campaign.get("clicks")) or 0.0
+    impressions = _number(campaign.get("impressions")) or 0.0
+    return round((clicks / impressions) * 100.0, 2) if impressions > 0 else 0.0
+
+
+def _reduction_candidate(campaign: dict[str, Any], trend: dict[str, Any], current_budget: float) -> bool:
+    if _money_actions(campaign) > 0 or _money_actions(trend) > 0:
+        return False
+    if _weak_local_actions(campaign) > 0 or _weak_local_actions(trend) > 0:
+        return False
+    spend_primary = _spend_mxn(campaign)
+    spend_trend = _spend_mxn(trend)
+    return spend_primary >= current_budget * 3 and spend_trend >= current_budget * 10
 
 
 def _fetch_current_budgets(campaign_ids: set) -> dict:
