@@ -36,6 +36,21 @@ class ApplyBudgetChangesRequest(BaseModel):
     decision_ids: list[int] = Field(min_length=1, max_length=20)
 
 
+class SaveBudgetPreviewRequest(BaseModel):
+    campaign_id: Any = None
+    campaign_name: str | None = None
+    current_budget_mxn: Any = None
+    suggested_budget_mxn: Any = None
+    change_mxn: Any = None
+    change_pct: Any = None
+    direction: str | None = None
+    reason: str | None = None
+    evidence: dict[str, Any] | None = None
+    warnings: list[Any] | None = None
+    guardrails: list[Any] | None = None
+    source: str | None = None
+
+
 _PAGE = """<!doctype html>
 <html lang="es">
 <head>
@@ -113,6 +128,7 @@ _PAGE = """<!doctype html>
 "use strict";
 var TOKEN_KEY = "tt_admin_token";
 var rows = [];
+var previewRows = [];
 var previewCount = 0;
 var latestSavedAt = "n/a";
 
@@ -144,6 +160,12 @@ el("logout").addEventListener("click", function() {
 el("load").addEventListener("click", load);
 el("previewBtn").addEventListener("click", loadPreview);
 el("applyBtn").addEventListener("click", applySelected);
+el("previewWrap").addEventListener("click", function(ev) {
+  if (ev.target && ev.target.classList.contains("save-preview")) {
+    var idx = parseInt(ev.target.getAttribute("data-index"), 10);
+    if (!isNaN(idx)) savePreview(idx, ev.target.getAttribute("data-url"));
+  }
+});
 el("tableWrap").addEventListener("change", function(ev) {
   if (ev.target && ev.target.classList.contains("pick")) updateApplyState();
 });
@@ -291,9 +313,10 @@ function loadPreview() {
         return;
       }
       previewCount = d.count || 0;
+      previewRows = d.proposals || [];
       updateMeta();
       el("previewMeta").textContent = "Preview actual: " + previewCount + " · No aplica cambios";
-      renderPreview(d.proposals || []);
+      renderPreview(previewRows);
     })
     .catch(function(e) {
       el("previewMeta").textContent = "Error de red: " + e.message;
@@ -308,12 +331,15 @@ function renderPreview(proposals) {
   }
   var html = "<table><thead><tr>" +
     "<th>Campaña</th><th class='num'>Actual $/dia</th><th class='num'>Sugerido $/dia</th>" +
-    "<th class='num'>Cambio</th><th>Dirección</th><th>Razón</th><th>Evidencia</th><th>Advertencias</th><th>Reglas de seguridad</th>" +
+    "<th class='num'>Cambio</th><th>Dirección</th><th>Razón</th><th>Evidencia</th><th>Advertencias</th><th>Reglas de seguridad</th><th>Revisión</th>" +
     "</tr></thead><tbody>";
   for (var i = 0; i < proposals.length; i++) {
     var p = proposals[i];
     var evidence = p.evidence || {};
     var suggestedText = p.is_review_only ? "Sin sugerencia" : "$" + Number(p.suggested_budget_mxn).toFixed(2);
+    var saveCell = p.direction === "increase" || p.direction === "decrease"
+      ? "<button class='secondary save-preview' data-index='" + i + "' data-url='/budget-preview/save'>Guardar para revisión</button>"
+      : "<span class='muted'>Solo revisión. No se puede guardar como cambio de presupuesto.</span>";
     html += "<tr>" +
       "<td>" + escapeHtml(p.campaign_name) + " <small>(" + escapeHtml(p.campaign_id) + ")</small></td>" +
       "<td class='num'>$" + Number(p.current_budget_mxn).toFixed(2) + "</td>" +
@@ -324,6 +350,7 @@ function renderPreview(proposals) {
       "<td class='reason'>" + escapeHtml(formatEvidence(evidence)) + "</td>" +
       "<td class='reason'>" + escapeHtml((p.warnings || []).map(labelWarning).join(' · ')) + "</td>" +
       "<td class='reason'>" + escapeHtml((p.guardrails || []).map(labelGuardrail).join(' · ')) + "</td>" +
+      "<td>" + saveCell + "</td>" +
       "</tr>";
   }
   html += "</tbody></table>";
@@ -438,6 +465,51 @@ function render() {
   wrap.innerHTML = html;
   el("applyBtn").hidden = false;
   updateApplyState();
+}
+
+function savePreview(index, url) {
+  var token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    showBanner("warn", "Guardar para revisión requiere token. Pega tu token arriba para continuar.");
+    return;
+  }
+  var row = previewRows[index];
+  if (!row) return;
+  fetch(url || "/budget-preview/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Token": token },
+    body: JSON.stringify({
+      campaign_id: row.campaign_id,
+      campaign_name: row.campaign_name,
+      current_budget_mxn: row.current_budget_mxn,
+      suggested_budget_mxn: row.suggested_budget_mxn,
+      change_mxn: row.change_mxn,
+      change_pct: row.change_pct,
+      direction: row.direction,
+      reason: row.reason,
+      evidence: row.evidence || {},
+      warnings: row.warnings || [],
+      guardrails: row.guardrails || [],
+      source: "manual_preview"
+    }),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.status === "success") {
+        showBanner("ok", "Propuesta guardada. No se aplicó ningún cambio.");
+        load();
+        return;
+      }
+      if (d.status === "duplicate") {
+        showBanner("warn", escapeHtml(d.message || "Ya existe una propuesta pendiente."));
+        load();
+        return;
+      }
+      showBanner("err", escapeHtml(d.message || "No se pudo guardar la propuesta."));
+    })
+    .catch(function(e) {
+      showBanner("err", "Error de red: " + escapeHtml(e.message));
+    });
 }
 
 init();
@@ -602,6 +674,144 @@ async def presupuestos_preview(
         "count": len(proposals),
         "proposals": proposals,
     }
+
+
+@router.post("/budget-preview/save", dependencies=[Depends(require_token)])
+async def save_budget_preview(request: SaveBudgetPreviewRequest) -> dict[str, Any]:
+    """Guarda una propuesta del preview como pendiente de revision manual.
+
+    No aplica presupuesto, no ejecuta validate_only y no toca Google Ads.
+    """
+    validation_error = _validate_save_preview_request(request)
+    if validation_error:
+        return validation_error
+
+    campaign_id = str(request.campaign_id).strip()
+    direction = (request.direction or "").strip().lower()
+    action_type = "scale" if direction == "increase" else "reduce"
+    existing_id = _find_pending_budget_preview(campaign_id)
+    if existing_id is not None:
+        return {
+            "status": "duplicate",
+            "existing_decision_id": existing_id,
+            "message": "Ya existe una propuesta pendiente para esta campaña.",
+            "applied": False,
+        }
+
+    now = datetime.now(timezone.utc).isoformat()
+    current_budget = float(request.current_budget_mxn)
+    suggested_budget = float(request.suggested_budget_mxn)
+    evidence = {
+        "source": "manual_preview",
+        "current_budget_mxn": current_budget,
+        "new_budget_mxn": suggested_budget,
+        "suggested_budget_mxn": suggested_budget,
+        "change_mxn": float(request.change_mxn or 0),
+        "change_pct": float(request.change_pct or 0),
+        "direction": direction,
+        "reason": request.reason or "",
+        "evidence": request.evidence or {},
+        "warnings": request.warnings or [],
+        "guardrails": request.guardrails or [],
+        "preview_generated_at": now,
+        "saved_by": "admin_token_user",
+    }
+    keyword = f"campaign:{campaign_id}:manual_preview:{direction}"
+
+    db_path = get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO autonomous_decisions
+            (action_type, risk_level, urgency, decision,
+             campaign_id, campaign_name, keyword, evidence_json,
+             session_id, approval_token, executed, proposal_sent,
+             learning_phase_protected, whitelisted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                action_type,
+                2,
+                "normal",
+                "proposed",
+                campaign_id,
+                request.campaign_name or "",
+                keyword,
+                json.dumps(evidence, ensure_ascii=False),
+                "manual_preview",
+                None,
+                0,
+                0,
+                0,
+                0,
+            ),
+        )
+        decision_id = cursor.lastrowid
+
+    return {
+        "status": "success",
+        "decision_id": decision_id,
+        "message": "Propuesta guardada para revisión manual.",
+        "applied": False,
+        "executed": False,
+    }
+
+
+def _validate_save_preview_request(request: SaveBudgetPreviewRequest) -> dict[str, Any] | None:
+    direction = (request.direction or "").strip().lower()
+    if direction == "hold":
+        return {
+            "status": "error",
+            "reason": "review_only_not_saveable",
+            "message": "Las filas Revisar no se guardan como propuesta aplicable.",
+        }
+    if direction not in {"increase", "decrease"}:
+        return {"status": "error", "reason": "invalid_direction", "message": "Dirección inválida."}
+    if not str(request.campaign_id or "").strip():
+        return {"status": "error", "reason": "missing_campaign_id", "message": "Falta campaign_id."}
+    if request.suggested_budget_mxn is None:
+        return {
+            "status": "error",
+            "reason": "missing_suggested_budget_mxn",
+            "message": "Falta suggested_budget_mxn.",
+        }
+    suggested_budget = _number(request.suggested_budget_mxn)
+    if suggested_budget is None or suggested_budget <= 0:
+        return {
+            "status": "error",
+            "reason": "invalid_suggested_budget_mxn",
+            "message": "suggested_budget_mxn inválido.",
+        }
+    current_budget = _number(request.current_budget_mxn)
+    if current_budget is None or current_budget <= 0:
+        return {
+            "status": "error",
+            "reason": "invalid_current_budget_mxn",
+            "message": "current_budget_mxn inválido.",
+        }
+    return None
+
+
+def _find_pending_budget_preview(campaign_id: str) -> int | None:
+    db_path = get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id
+              FROM autonomous_decisions
+             WHERE campaign_id = ?
+               AND action_type IN ('scale', 'reduce')
+               AND decision = 'proposed'
+               AND executed = 0
+               AND approved_at IS NULL
+               AND rejected_at IS NULL
+               AND postponed_at IS NULL
+             ORDER BY id DESC
+             LIMIT 1
+            """,
+            (campaign_id,),
+        ).fetchone()
+    return int(row[0]) if row else None
 
 
 def _build_budget_preview_proposals(

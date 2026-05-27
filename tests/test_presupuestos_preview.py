@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from engine.memory import MemorySystem
+
 
 @pytest.fixture
 def client():
@@ -16,6 +18,23 @@ def client():
 @pytest.fixture
 def customer_id_env(monkeypatch):
     monkeypatch.setenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "4021070209")
+
+
+@pytest.fixture
+def isolated_db(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test_presupuestos_preview.db")
+    mem = MemorySystem(db_path=db_path)
+    monkeypatch.setattr("routes.presupuestos.get_db_path", lambda: db_path)
+    return mem
+
+
+@pytest.fixture
+def admin_token(monkeypatch):
+    monkeypatch.setenv("ADMIN_API_TOKEN", "test-token-123")
+    return "test-token-123"
+
+
+HEADERS_OK = {"X-API-Token": "test-token-123"}
 
 
 def _campaign(
@@ -66,6 +85,25 @@ def _install_engine(monkeypatch, *, primary, trend=None, yesterday=None):
     }
     monkeypatch.setattr("main.get_engine_modules", lambda: engine)
     return engine, calls
+
+
+def _save_payload(**overrides):
+    payload = {
+        "campaign_id": "22612348265",
+        "campaign_name": "Thai Mérida - Local",
+        "current_budget_mxn": 158.0,
+        "suggested_budget_mxn": 173.8,
+        "change_mxn": 15.8,
+        "change_pct": 10.0,
+        "direction": "increase",
+        "reason": "Tendencia con conversiones primarias; aumento conservador de preview.",
+        "evidence": {"primary_range": "LAST_7_DAYS", "money_actions_primary": 144.0},
+        "warnings": [],
+        "guardrails": ["preview_only", "no_apply_budget_changes"],
+        "source": "manual_preview",
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_preview_opens_without_token_and_returns_read_only_contract(
@@ -317,3 +355,137 @@ def test_presupuestos_preview_human_copy_keeps_apply_flow_out_of_preview_block()
     assert "/apply-budget-changes" not in preview_block
     assert "class='pick'" not in preview_block
     assert "X-API-Token" not in preview_block
+
+
+def test_save_preview_requires_token(client, isolated_db, admin_token):
+    response = client.post("/budget-preview/save", json=_save_payload())
+
+    assert response.status_code == 401
+
+
+def test_save_preview_increase_creates_scale_pending_decision(
+    client, isolated_db, admin_token,
+):
+    response = client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["message"] == "Propuesta guardada para revisión manual."
+    assert body["applied"] is False
+    assert body["executed"] is False
+
+    with sqlite3.connect(isolated_db.db_path) as conn:
+        row = conn.execute(
+            "SELECT action_type, decision, executed, campaign_id, campaign_name, evidence_json "
+            "FROM autonomous_decisions WHERE id = ?",
+            (body["decision_id"],),
+        ).fetchone()
+    assert row[0] == "scale"
+    assert row[1] == "proposed"
+    assert row[2] == 0
+    assert row[3] == "22612348265"
+    assert row[4] == "Thai Mérida - Local"
+    assert '"source": "manual_preview"' in row[5]
+    assert '"new_budget_mxn": 173.8' in row[5]
+    assert '"saved_by": "admin_token_user"' in row[5]
+
+
+def test_save_preview_decrease_creates_reduce_pending_decision(
+    client, isolated_db, admin_token,
+):
+    payload = _save_payload(direction="decrease", suggested_budget_mxn=140.0, change_mxn=-18.0)
+
+    response = client.post("/budget-preview/save", json=payload, headers=HEADERS_OK)
+
+    assert response.status_code == 200
+    body = response.json()
+    with sqlite3.connect(isolated_db.db_path) as conn:
+        action_type = conn.execute(
+            "SELECT action_type FROM autonomous_decisions WHERE id = ?",
+            (body["decision_id"],),
+        ).fetchone()[0]
+    assert action_type == "reduce"
+
+
+@pytest.mark.parametrize(
+    "payload,reason",
+    [
+        (_save_payload(direction="hold"), "review_only_not_saveable"),
+        (_save_payload(campaign_id=""), "missing_campaign_id"),
+        (_save_payload(suggested_budget_mxn=None), "missing_suggested_budget_mxn"),
+        (_save_payload(suggested_budget_mxn=0), "invalid_suggested_budget_mxn"),
+        (_save_payload(current_budget_mxn=0), "invalid_current_budget_mxn"),
+        (_save_payload(direction="optimize"), "invalid_direction"),
+    ],
+)
+def test_save_preview_rejects_invalid_payloads(
+    client, isolated_db, admin_token, payload, reason,
+):
+    response = client.post("/budget-preview/save", json=payload, headers=HEADERS_OK)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "error"
+    assert body["reason"] == reason
+    with sqlite3.connect(isolated_db.db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM autonomous_decisions").fetchone()[0]
+    assert count == 0
+
+
+def test_save_preview_prevents_duplicate_pending_campaign(
+    client, isolated_db, admin_token,
+):
+    first = client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK).json()
+    second = client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK).json()
+
+    assert first["status"] == "success"
+    assert second["status"] == "duplicate"
+    assert second["existing_decision_id"] == first["decision_id"]
+    assert second["message"] == "Ya existe una propuesta pendiente para esta campaña."
+    assert second["applied"] is False
+    with sqlite3.connect(isolated_db.db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM autonomous_decisions").fetchone()[0]
+    assert count == 1
+
+
+def test_saved_preview_appears_in_presupuestos_data(
+    client, isolated_db, admin_token, customer_id_env, monkeypatch,
+):
+    monkeypatch.setattr("main.get_engine_modules", MagicMock(side_effect=RuntimeError("no live ads")))
+    client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK)
+
+    response = client.get("/presupuestos/data")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    rec = body["recommendations"][0]
+    assert rec["action_type_original"] == "scale"
+    assert rec["campaign_id"] == "22612348265"
+    assert rec["new_budget_mxn"] == 173.8
+    assert rec["apply_enabled"] is True
+
+
+def test_save_preview_does_not_call_budget_mutation(
+    client, isolated_db, admin_token, monkeypatch,
+):
+    update = MagicMock()
+    monkeypatch.setattr("engine.ads_client.update_campaign_budget", update)
+
+    response = client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK)
+
+    assert response.status_code == 200
+    update.assert_not_called()
+
+
+def test_preview_ui_has_save_button_only_for_actionable_rows():
+    from routes.presupuestos import _PAGE
+
+    assert "Guardar para revisión" in _PAGE
+    assert "Solo revisión. No se puede guardar como cambio de presupuesto." in _PAGE
+    preview_block = _PAGE.split("function loadPreview()", 1)[1]
+    preview_block = preview_block.split("function render()", 1)[0]
+    assert "/budget-preview/save" in preview_block
+    assert "/apply-budget-changes" not in preview_block
+    assert "class='pick'" not in preview_block
