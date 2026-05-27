@@ -304,7 +304,7 @@ function renderPreview(proposals) {
   }
   var html = "<table><thead><tr>" +
     "<th>Campana</th><th class='num'>Actual $/dia</th><th class='num'>Sugerido $/dia</th>" +
-    "<th class='num'>Cambio</th><th>Direccion</th><th>Razon</th><th>Evidencia</th><th>Advertencias</th><th>Guardrails</th>" +
+    "<th class='num'>Cambio</th><th>Direccion</th><th>Razon</th><th>Evidencia</th><th>Advertencias</th><th>Reglas de seguridad</th>" +
     "</tr></thead><tbody>";
   for (var i = 0; i < proposals.length; i++) {
     var p = proposals[i];
@@ -318,15 +318,61 @@ function renderPreview(proposals) {
       "<td class='num'>$" + Number(p.current_budget_mxn).toFixed(2) + "</td>" +
       "<td class='num'>$" + Number(p.suggested_budget_mxn).toFixed(2) + "</td>" +
       "<td class='num'>$" + Number(p.change_mxn).toFixed(2) + " (" + Number(p.change_pct).toFixed(1) + "%)</td>" +
-      "<td>" + escapeHtml(p.direction) + "</td>" +
-      "<td class='reason'>" + escapeHtml(p.reason) + "</td>" +
+      "<td>" + escapeHtml(labelDirection(p.direction)) + "</td>" +
+      "<td class='reason'>" + escapeHtml(humanReason(p.reason, p.warnings || [], p.guardrails || [])) + "</td>" +
       "<td class='reason'>" + escapeHtml(evidenceText) + "</td>" +
-      "<td class='reason'>" + escapeHtml((p.warnings || []).join(' · ')) + "</td>" +
-      "<td class='reason'>" + escapeHtml((p.guardrails || []).join(' · ')) + "</td>" +
+      "<td class='reason'>" + escapeHtml((p.warnings || []).map(labelWarning).join(' · ')) + "</td>" +
+      "<td class='reason'>" + escapeHtml((p.guardrails || []).map(labelGuardrail).join(' · ')) + "</td>" +
       "</tr>";
   }
   html += "</tbody></table>";
   wrap.innerHTML = html;
+}
+
+function labelDirection(value) {
+  var labels = {
+    increase: "Aumentar",
+    decrease: "Reducir",
+    hold: "Revisar"
+  };
+  return labels[value] || value || "";
+}
+
+function labelGuardrail(value) {
+  var labels = {
+    preview_only: "Solo vista previa",
+    no_db_write: "No se guardó ninguna propuesta",
+    no_apply_budget_changes: "No se aplican cambios de presupuesto",
+    campaign_enabled: "Campaña activa",
+    not_shared_budget: "Presupuesto individual",
+    max_increase_pct_10: "Aumento máximo: 10%",
+    max_increase_mxn_50: "Aumento máximo: $50 MXN/día",
+    max_increase_mxn_30: "Aumento máximo: $30 MXN/día",
+    max_reduction_pct_10: "Reducción máxima: 10%",
+    weak_local_action_requires_review: "Requiere revisar calidad de conversión",
+    shared_budget: "Presupuesto compartido"
+  };
+  return labels[value] || value || "";
+}
+
+function labelWarning(value) {
+  var labels = {
+    "weak_local_action no es money_action": "Hay señales útiles, pero no son pedidos o reservas confirmadas."
+  };
+  return labels[value] || value || "";
+}
+
+function humanReason(reason, warnings, guardrails) {
+  if ((guardrails || []).indexOf("shared_budget") !== -1) {
+    return "La campaña parece usar presupuesto compartido. No se propone aumento automático. Requiere revisión manual.";
+  }
+  var labels = {
+    "Tendencia con conversiones primarias; aumento conservador de preview.": "Buen desempeño en tendencia. Se sugiere revisar un aumento conservador.",
+    "Solo hay weak_local_action; mantener presupuesto y revisar calidad antes de escalar.": "Hay señales útiles, pero no suficientes para sugerir aumento. Revisar antes de escalar.",
+    "Tendencia 7d/30d sin conversiones; reduccion conservadora de preview.": "Tendencia débil en 7 y 30 días. Se sugiere revisar una reducción conservadora.",
+    "Health bueno, pero no aplicable por guardrail.": "La campaña tiene buen desempeño, pero requiere revisión manual antes de sugerir aumento."
+  };
+  return labels[reason] || reason || "";
 }
 
 function render() {

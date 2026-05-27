@@ -251,3 +251,29 @@ def test_presupuestos_page_has_separate_preview_ui_without_apply_call():
     preview_block = preview_block.split("function renderPreview", 1)[0]
     assert "/apply-budget-changes" not in preview_block
     assert "class='pick'" not in preview_block
+
+
+def test_presupuestos_preview_uses_human_copy_for_security_rules():
+    from routes.presupuestos import _PAGE
+
+    assert "Reglas de seguridad" in _PAGE
+    assert "Solo vista previa" in _PAGE
+    assert "No se guardó ninguna propuesta" in _PAGE
+    assert "No se aplican cambios de presupuesto" in _PAGE
+    assert "Aumentar" in _PAGE
+    assert "Reducir" in _PAGE
+    assert "Revisar" in _PAGE
+    assert "Aumento máximo: 10%" in _PAGE
+    assert "Aumento máximo: $50 MXN/día" in _PAGE
+    assert "Aumento máximo: $30 MXN/día" in _PAGE
+    assert "Hay señales útiles, pero no son pedidos o reservas confirmadas." in _PAGE
+
+
+def test_presupuestos_preview_human_copy_keeps_apply_flow_out_of_preview_block():
+    from routes.presupuestos import _PAGE
+
+    preview_block = _PAGE.split("function loadPreview()", 1)[1]
+    preview_block = preview_block.split("function render()", 1)[0]
+    assert "/apply-budget-changes" not in preview_block
+    assert "class='pick'" not in preview_block
+    assert "X-API-Token" not in preview_block
