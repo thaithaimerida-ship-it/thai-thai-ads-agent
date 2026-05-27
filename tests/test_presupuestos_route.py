@@ -105,6 +105,25 @@ def _insert_scale(memory, *, campaign_id="22612348265",
     )
 
 
+def _insert_manual_preview_scale(memory, *, campaign_id="22839241090",
+                                 campaign_name="Thai Mérida - Delivery",
+                                 new_budget_mxn=55.0) -> int:
+    return memory.record_autonomous_decision(
+        action_type="scale", risk_level=2, urgency="normal",
+        decision="proposed",
+        campaign_id=campaign_id, campaign_name=campaign_name,
+        evidence={
+            "source": "manual_preview",
+            "reason": "Tendencia con conversiones primarias; aumento conservador de preview.",
+            "current_budget_mxn": 50.0,
+            "new_budget_mxn": new_budget_mxn,
+            "suggested_budget_mxn": new_budget_mxn,
+            "direction": "increase",
+        },
+        executed=False,
+    )
+
+
 def _insert_negative(memory) -> int:
     return memory.record_autonomous_decision(
         action_type="negative", risk_level=2, urgency="normal",
@@ -189,6 +208,25 @@ class TestInvariantes:
         body = r.json()
         assert body["status"] == "error"
         assert body["failed"][0]["reason"] == "already_executed"
+        mocked_ads["update_campaign_budget"].assert_not_called()
+
+    def test_manual_preview_is_blocked_before_any_ads_budget_call(
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+    ):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+
+        r = client.post("/apply-budget-changes", json={"decision_ids": [decision_id]}, headers=HEADERS_OK)
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "error"
+        assert body["blocked_by_guardrail"] == [{
+            "decision_id": decision_id,
+            "reason": "manual_preview_not_applyable_yet",
+            "message": "Esta propuesta fue guardada para revisión y todavía no está habilitada para aplicación.",
+        }]
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
         mocked_ads["update_campaign_budget"].assert_not_called()
 
 

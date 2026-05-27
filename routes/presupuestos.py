@@ -421,6 +421,20 @@ function humanReason(reason, warnings, guardrails) {
   return labels[reason] || reason || "";
 }
 
+function labelApplyDisabled(reason) {
+  var labels = {
+    "Pendiente de fase de aprobación": "Aplicación pendiente de habilitar"
+  };
+  return labels[reason] || reason || "";
+}
+
+function labelReviewStatus(value) {
+  var labels = {
+    manual_preview: "Guardada para revisión"
+  };
+  return labels[value] || value || "";
+}
+
 function render() {
   var wrap = el("tableWrap");
   if (!rows.length) {
@@ -435,6 +449,8 @@ function render() {
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
     var actionClass = r.action_type === "scale" ? "action-scale" : "action-reduce";
+    var reviewStatus = r.review_status ? "<div class='muted'>" + escapeHtml(labelReviewStatus(r.review_status)) + "</div>" : "";
+    var disabledLabel = labelApplyDisabled(r.apply_disabled_reason || "");
     var actionLabel = r.action_type === "scale" ? "scale ↑" : "reduce ↓";
     var rowClass = r.urgency === "critical" ? "urgency-critical" :
                    r.urgency === "urgent"   ? "urgency-urgent" : "";
@@ -452,7 +468,8 @@ function render() {
         : "<input type='checkbox' class='pick' data-id='" + r.id + "'>") + "</td>" +
       "<td>" + escapeHtml(r.campaign_name) + " <small>(" + escapeHtml(r.campaign_id) + ")</small></td>" +
       "<td class='" + actionClass + "'>" + actionLabel +
-        (r.apply_enabled === false ? "<div class='muted'>" + escapeHtml(r.apply_disabled_reason || "") + "</div>" : "") +
+        reviewStatus +
+        (r.apply_enabled === false ? "<div class='muted'>" + escapeHtml(disabledLabel) + "</div>" : "") +
       "</td>" +
       currentCell +
       "<td class='num'>$" + Number(r.new_budget_mxn).toFixed(2) + "</td>" +
@@ -597,7 +614,9 @@ async def presupuestos_data() -> dict[str, Any]:
     for r, new_budget_mxn, reason in candidates:
         action_type_original = r["action_type"]
         display_action_type = _display_budget_action_type(action_type_original)
-        apply_enabled = action_type_original in {"scale", "reduce"}
+        evidence = _safe_json(r["evidence_json"])
+        is_manual_preview = _is_manual_preview_evidence(evidence)
+        apply_enabled = action_type_original in {"scale", "reduce"} and not is_manual_preview
         recommendations.append({
             "id": r["id"],
             "action_type": display_action_type,
@@ -611,7 +630,12 @@ async def presupuestos_data() -> dict[str, Any]:
             "current_budget_mxn": current_budgets.get(r["campaign_id"]),
             "reason": reason,
             "apply_enabled": apply_enabled,
-            "apply_disabled_reason": "" if apply_enabled else "Pendiente de compatibilidad de aplicacion",
+            "apply_disabled_reason": _budget_apply_disabled_reason(
+                action_type_original,
+                is_manual_preview,
+                apply_enabled,
+            ),
+            "review_status": "Guardada para revisión" if is_manual_preview else "",
             "created_at": r["created_at"],
         })
         if latest_at is None or (r["created_at"] and r["created_at"] > latest_at):
@@ -812,6 +836,24 @@ def _find_pending_budget_preview(campaign_id: str) -> int | None:
             (campaign_id,),
         ).fetchone()
     return int(row[0]) if row else None
+
+
+def _is_manual_preview_evidence(evidence: Any) -> bool:
+    return isinstance(evidence, dict) and evidence.get("source") == "manual_preview"
+
+
+def _budget_apply_disabled_reason(
+    action_type: str,
+    is_manual_preview: bool,
+    apply_enabled: bool,
+) -> str:
+    if apply_enabled:
+        return ""
+    if is_manual_preview:
+        return "Pendiente de fase de aprobación"
+    if action_type in {"budget_action", "budget_scale"}:
+        return "Pendiente de compatibilidad de aplicacion"
+    return "No aplicable"
 
 
 def _build_budget_preview_proposals(
@@ -1163,6 +1205,14 @@ async def apply_budget_changes(request: ApplyBudgetChangesRequest) -> dict:
 
         # ── Paso 3: Extraer new_budget_mxn de evidence (DB es source-of-truth)
         evidence = _safe_json(row["evidence_json"])
+        if _is_manual_preview_evidence(evidence):
+            blocked_by_guardrail.append({
+                "decision_id": decision_id,
+                "reason": "manual_preview_not_applyable_yet",
+                "message": "Esta propuesta fue guardada para revisión y todavía no está habilitada para aplicación.",
+            })
+            continue
+
         new_budget_mxn = evidence.get("new_budget_mxn") if isinstance(evidence, dict) else None
         if not isinstance(new_budget_mxn, (int, float)) or new_budget_mxn <= 0:
             failed.append({

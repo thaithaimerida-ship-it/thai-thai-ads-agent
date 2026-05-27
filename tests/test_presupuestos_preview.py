@@ -464,7 +464,25 @@ def test_saved_preview_appears_in_presupuestos_data(
     assert rec["action_type_original"] == "scale"
     assert rec["campaign_id"] == "22612348265"
     assert rec["new_budget_mxn"] == 173.8
-    assert rec["apply_enabled"] is True
+    assert rec["apply_enabled"] is False
+    assert rec["apply_disabled_reason"] == "Pendiente de fase de aprobación"
+    assert rec["review_status"] == "Guardada para revisión"
+
+
+def test_presupuestos_data_keeps_manual_preview_visible_but_not_applyable(
+    client, isolated_db, admin_token, customer_id_env, monkeypatch,
+):
+    monkeypatch.setattr("main.get_engine_modules", MagicMock(side_effect=RuntimeError("no live ads")))
+    client.post("/budget-preview/save", json=_save_payload(campaign_id="22839241090"), headers=HEADERS_OK)
+
+    body = client.get("/presupuestos/data").json()
+
+    assert body["count"] == 1
+    rec = body["recommendations"][0]
+    assert rec["campaign_id"] == "22839241090"
+    assert rec["apply_enabled"] is False
+    assert rec["apply_disabled_reason"] == "Pendiente de fase de aprobación"
+    assert rec["review_status"] == "Guardada para revisión"
 
 
 def test_save_preview_does_not_call_budget_mutation(
@@ -484,6 +502,8 @@ def test_preview_ui_has_save_button_only_for_actionable_rows():
 
     assert "Guardar para revisión" in _PAGE
     assert "Solo revisión. No se puede guardar como cambio de presupuesto." in _PAGE
+    assert "Guardada para revisión" in _PAGE
+    assert "Aplicación pendiente de habilitar" in _PAGE
     preview_block = _PAGE.split("function loadPreview()", 1)[1]
     preview_block = preview_block.split("function render()", 1)[0]
     assert "/budget-preview/save" in preview_block
