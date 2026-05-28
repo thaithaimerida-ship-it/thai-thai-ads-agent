@@ -123,6 +123,48 @@ def test_update_campaign_budget_validate_only_true_propagates_in_request():
     assert kwargs["request"].validate_only is True
 
 
+def test_update_campaign_budget_validate_only_empty_results_is_success():
+    mock_client = MagicMock()
+    mock_service = MagicMock()
+    mock_client.get_service.return_value = mock_service
+    budget_operation = MagicMock()
+    request = SimpleNamespace(customer_id="", operations=[], validate_only=None)
+    mock_client.get_type.side_effect = [budget_operation, request]
+    mock_service.mutate_campaign_budgets.return_value = MagicMock(results=[])
+
+    from engine.ads_client import update_campaign_budget
+    result = update_campaign_budget(
+        mock_client, "4021070209", "customers/4021070209/campaignBudgets/123",
+        50_000_000, validate_only=True,
+    )
+
+    assert result["status"] == "success"
+    assert result["validate_only"] is True
+    assert result["message"] == "validate_only_ok"
+    assert result["resource_name"] is None
+
+
+def test_update_campaign_budget_real_mutate_empty_results_is_traceable_success():
+    mock_client = MagicMock()
+    mock_service = MagicMock()
+    mock_client.get_service.return_value = mock_service
+    budget_operation = MagicMock()
+    request = SimpleNamespace(customer_id="", operations=[], validate_only=None)
+    mock_client.get_type.side_effect = [budget_operation, request]
+    mock_service.mutate_campaign_budgets.return_value = MagicMock(results=[])
+
+    from engine.ads_client import update_campaign_budget
+    result = update_campaign_budget(
+        mock_client, "4021070209", "customers/4021070209/campaignBudgets/123",
+        50_000_000, validate_only=False,
+    )
+
+    assert result["status"] == "success"
+    assert result["validate_only"] is False
+    assert result["message"] == "mutate_ok_no_resource_name"
+    assert result["resource_name"] is None
+
+
 def test_update_campaign_budget_preserves_validate_only_on_exception():
     mock_client = MagicMock()
     mock_service = MagicMock()

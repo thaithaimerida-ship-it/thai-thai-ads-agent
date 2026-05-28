@@ -1078,11 +1078,19 @@ def update_campaign_budget(
         request.validate_only = validate_only
 
         response = budget_service.mutate_campaign_budgets(request=request)
-        return {
+        results = getattr(response, "results", None) or []
+        resource_name = results[0].resource_name if results else None
+        message = None
+        if resource_name is None:
+            message = "validate_only_ok" if validate_only else "mutate_ok_no_resource_name"
+        result = {
             "status": "success",
             "validate_only": validate_only,
-            "resource_name": response.results[0].resource_name,
+            "resource_name": resource_name,
         }
+        if message:
+            result["message"] = message
+        return result
     except Exception as e:
         return {"status": "error", "validate_only": validate_only, "message": str(e)}
 
