@@ -59,6 +59,12 @@ class BudgetReviewActionRequest(BaseModel):
     source: Literal["manual_review"]
 
 
+class BudgetValidateApprovalRequest(BaseModel):
+    decision_id: int
+    source: Literal["manual_review"]
+    reason: str | None = None
+
+
 _PAGE = """<!doctype html>
 <html lang="es">
 <head>
@@ -183,7 +189,8 @@ el("tableWrap").addEventListener("click", function(ev) {
   if (ev.target && ev.target.classList.contains("review-action")) {
     var id = parseInt(ev.target.getAttribute("data-id"), 10);
     var action = ev.target.getAttribute("data-action");
-    if (!isNaN(id) && action) reviewAction(id, action);
+    if (!isNaN(id) && action === "approve_validate") validateApproval(id);
+    else if (!isNaN(id) && action) reviewAction(id, action);
   }
 });
 
@@ -234,6 +241,39 @@ function reviewAction(decisionId, action) {
         return;
       }
       showBanner("ok", escapeHtml(res.data.message || "Estado actualizado. No se aplicó ningún cambio."));
+      load();
+    })
+    .catch(function(e) {
+      showBanner("err", "Error de red: " + escapeHtml(e.message));
+    });
+}
+
+function validateApproval(decisionId) {
+  var token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    showBanner("warn", "Esta accion requiere token. Pega tu token para validar la propuesta.");
+    return;
+  }
+  var reason = window.prompt("Nota para validar la aplicacion sin cambiar presupuesto:", "") || "";
+  fetch("/budget-recommendations/validate-approval", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Token": token },
+    body: JSON.stringify({
+      decision_id: decisionId,
+      reason: reason,
+      source: "manual_review"
+    }),
+  })
+    .then(function(r) {
+      return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; });
+    })
+    .then(function(res) {
+      if (!res.ok || res.data.status !== "success") {
+        var msg = (res.data && (res.data.detail || res.data.message || res.data.reason)) || ("HTTP " + res.status);
+        showBanner("err", "Error: " + escapeHtml(msg));
+        return;
+      }
+      showBanner("ok", escapeHtml(res.data.message || "Validada para aplicacion. No se aplico ningun cambio."));
       load();
     })
     .catch(function(e) {
@@ -518,7 +558,9 @@ function render() {
       ? "<div class='review-actions'>" +
         "<button class='secondary review-action' data-action='reject' data-id='" + r.id + "'>Rechazar</button> " +
         "<button class='secondary review-action' data-action='postpone' data-id='" + r.id + "'>Posponer</button> " +
-        "<button class='secondary review-action' data-action='keep_review' data-id='" + r.id + "'>Mantener en revisión</button>" +
+        "<button class='secondary review-action' data-action='keep_review' data-id='" + r.id + "'>Mantener en revisión</button> " +
+        "<button class='secondary review-action' data-action='approve_validate' data-id='" + r.id + "'>Validar aplicación</button>" +
+        "<div class='muted'>Esto validará la aplicación, pero no cambiará presupuesto todavía.</div>" +
         "</div>"
       : "";
     var actionLabel = r.action_type === "scale" ? "scale ↑" : "reduce ↓";
@@ -688,6 +730,10 @@ async def presupuestos_data() -> dict[str, Any]:
         evidence = _safe_json(r["evidence_json"])
         is_manual_preview = _is_manual_preview_evidence(evidence)
         apply_enabled = action_type_original in {"scale", "reduce"} and not is_manual_preview
+        approval_validation = evidence.get("approval_validation") if isinstance(evidence, dict) else None
+        manual_review_status = "Guardada para revisión"
+        if isinstance(approval_validation, dict) and approval_validation.get("validated") is True:
+            manual_review_status = "Validada para aplicación. Pendiente de aplicación final."
         recommendations.append({
             "id": r["id"],
             "action_type": display_action_type,
@@ -707,7 +753,7 @@ async def presupuestos_data() -> dict[str, Any]:
                 apply_enabled,
             ),
             "is_manual_preview": is_manual_preview,
-            "review_status": "Guardada para revisión" if is_manual_preview else "",
+            "review_status": manual_review_status if is_manual_preview else "",
             "created_at": r["created_at"],
         })
         if latest_at is None or (r["created_at"] and r["created_at"] > latest_at):
@@ -964,6 +1010,52 @@ def _budget_review_message(action: str) -> str:
     return messages[action]
 
 
+def _append_budget_validate_approval_action(
+    evidence: dict[str, Any],
+    request: BudgetValidateApprovalRequest,
+    previous_state: dict[str, Any],
+    *,
+    current_budget_verified_mxn: float,
+    requested_budget_mxn: float,
+    validate_only_result: dict[str, Any],
+) -> dict[str, Any]:
+    updated = dict(evidence)
+    actions = updated.get("review_actions")
+    if not isinstance(actions, list):
+        actions = []
+    success = validate_only_result.get("status") == "success"
+    new_state = dict(previous_state)
+    audit_entry = {
+        "action": "approve_validate",
+        "actor": "admin_api_token",
+        "source": request.source,
+        "reason": request.reason or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "previous_state": previous_state,
+        "new_state": new_state,
+        "current_budget_verified_mxn": current_budget_verified_mxn,
+        "requested_budget_mxn": requested_budget_mxn,
+        "validate_only_result": {
+            "success": success,
+            "status": validate_only_result.get("status"),
+            "message": validate_only_result.get("message", ""),
+            "resource_name": validate_only_result.get("resource_name", ""),
+        },
+        "applied": False,
+    }
+    actions.append(audit_entry)
+    updated["review_actions"] = actions
+    updated["approval_validation"] = {
+        "validated": success,
+        "validated_at": audit_entry["created_at"],
+        "current_budget_verified_mxn": current_budget_verified_mxn,
+        "requested_budget_mxn": requested_budget_mxn,
+        "validate_only_result": audit_entry["validate_only_result"],
+        "applied": False,
+    }
+    return updated
+
+
 def _sync_budget_db_to_gcs(warning_code: str) -> dict[str, Any]:
     try:
         from engine.db_sync import upload_to_gcs
@@ -1063,6 +1155,185 @@ async def budget_recommendation_review_action(request: BudgetReviewActionRequest
         "decision_id": request.decision_id,
         "action": request.action,
         "message": _budget_review_message(request.action),
+        **sync_result,
+    }
+
+
+@router.post("/budget-recommendations/validate-approval", dependencies=[Depends(require_token)])
+async def budget_recommendation_validate_approval(request: BudgetValidateApprovalRequest) -> dict[str, Any]:
+    """Valida una propuesta manual_preview con validate_only=True, sin aplicar presupuesto."""
+    from engine.ads_client import (
+        fetch_campaign_budget_info,
+        get_ads_client,
+        update_campaign_budget,
+        verify_budget_still_actionable,
+    )
+
+    customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
+    if not customer_id:
+        raise HTTPException(
+            status_code=500,
+            detail="GOOGLE_ADS_TARGET_CUSTOMER_ID no configurado en el entorno",
+        )
+
+    db_path = get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM autonomous_decisions WHERE id = ?",
+            (request.decision_id,),
+        ).fetchone()
+
+    if not row:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "not_found"}
+    if row["executed"] == 1:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "already_executed"}
+    if row["rejected_at"] is not None:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "rejected"}
+    if row["postponed_at"] is not None:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "postponed"}
+    if row["approved_at"] is not None:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "approved"}
+    if row["decision"] != "proposed":
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "wrong_decision_state",
+            "detail": row["decision"],
+        }
+    if row["action_type"] not in ("scale", "reduce"):
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "wrong_action_type",
+            "detail": row["action_type"],
+        }
+
+    evidence = _safe_json(row["evidence_json"])
+    if not _is_manual_preview_evidence(evidence):
+        return {"status": "error", "decision_id": request.decision_id, "reason": "not_manual_preview"}
+
+    new_budget_mxn = _number(evidence.get("new_budget_mxn"))
+    if new_budget_mxn is None or new_budget_mxn <= 0:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "invalid_new_budget_mxn"}
+    current_budget_stored_mxn = _number(evidence.get("current_budget_mxn"))
+    if current_budget_stored_mxn is None or current_budget_stored_mxn <= 0:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "invalid_current_budget_mxn"}
+
+    try:
+        client = get_ads_client()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo instanciar Google Ads client: {exc}",
+        )
+
+    budget_info = fetch_campaign_budget_info(client, customer_id, row["campaign_id"])
+    if "error" in budget_info:
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "budget_fetch_failed",
+            "detail": budget_info["error"],
+        }
+    current_budget_verified_mxn = _number(budget_info.get("current_daily_budget_mxn"))
+    budget_resource_name = budget_info.get("budget_resource_name")
+    if current_budget_verified_mxn is None or current_budget_verified_mxn <= 0 or not budget_resource_name:
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "budget_fetch_failed",
+            "detail": "missing current budget or budget resource name",
+        }
+    if budget_info.get("campaign_status") not in (None, "ENABLED"):
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "campaign_not_enabled",
+            "detail": budget_info.get("campaign_status"),
+        }
+    if budget_info.get("budget_explicitly_shared") is True:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "shared_budget"}
+    if abs(current_budget_verified_mxn - current_budget_stored_mxn) > 0.01:
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "budget_drift",
+            "current_budget_mxn": current_budget_verified_mxn,
+            "stored_current_budget_mxn": current_budget_stored_mxn,
+        }
+
+    guard_result = verify_budget_still_actionable(
+        client,
+        customer_id,
+        row["campaign_id"],
+        current_budget_stored_mxn,
+        new_budget_mxn,
+    )
+    if not guard_result.get("ok"):
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "guardrail_blocked",
+            "guardrail": guard_result.get("guard", ""),
+            "detail": guard_result.get("reason", ""),
+            "current_budget_mxn": guard_result.get("current_budget_mxn"),
+            "suggested_budget_mxn": new_budget_mxn,
+        }
+
+    budget_micros = int(new_budget_mxn * 1_000_000)
+    validate_result = update_campaign_budget(
+        client,
+        customer_id,
+        budget_resource_name,
+        budget_micros,
+        validate_only=True,
+    )
+    previous_state = {
+        "decision": row["decision"],
+        "executed": row["executed"],
+        "approved_at": row["approved_at"],
+        "rejected_at": row["rejected_at"],
+        "postponed_at": row["postponed_at"],
+    }
+    updated_evidence = _append_budget_validate_approval_action(
+        evidence,
+        request,
+        previous_state,
+        current_budget_verified_mxn=current_budget_verified_mxn,
+        requested_budget_mxn=new_budget_mxn,
+        validate_only_result=validate_result,
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE autonomous_decisions SET evidence_json = ? WHERE id = ?",
+            (json.dumps(updated_evidence, ensure_ascii=False), request.decision_id),
+        )
+
+    sync_result = _sync_budget_db_to_gcs("approval_validation_saved_locally_but_gcs_sync_failed")
+    if validate_result.get("status") != "success":
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "action": "approve_validate",
+            "reason": "validate_only_failed",
+            "message": "La validaciÃ³n de Google Ads fallÃ³. No se aplicÃ³ ningÃºn cambio.",
+            "validated": False,
+            "applied": False,
+            "validate_only_result": validate_result,
+            **sync_result,
+        }
+
+    return {
+        "status": "success",
+        "decision_id": request.decision_id,
+        "action": "approve_validate",
+        "message": "Validada para aplicaciÃ³n. Pendiente de aplicaciÃ³n final.",
+        "validated": True,
+        "applied": False,
+        "current_budget_verified_mxn": current_budget_verified_mxn,
+        "requested_budget_mxn": new_budget_mxn,
+        "validate_only_result": validate_result,
         **sync_result,
     }
 
