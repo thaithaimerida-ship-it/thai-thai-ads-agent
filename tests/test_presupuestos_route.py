@@ -215,8 +215,10 @@ class TestValidation:
 
 class TestBudgetReviewAction:
     def test_reject_manual_preview_marks_rejected_and_hides_pending_without_ads_calls(
-        self, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
     ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
         decision_id = _insert_manual_preview_scale(isolated_db)
 
         r = client.post(
@@ -236,6 +238,7 @@ class TestBudgetReviewAction:
         assert body["decision_id"] == decision_id
         assert body["action"] == "reject"
         assert body["message"] == "Propuesta rechazada. No se aplicó ningún cambio."
+        assert body["gcs_synced"] is True
         with sqlite3.connect(isolated_db.db_path) as conn:
             row = conn.execute(
                 "SELECT rejected_at, postponed_at, approved_at, executed, evidence_json "
@@ -255,10 +258,13 @@ class TestBudgetReviewAction:
         mocked_ads["fetch_campaign_budget_info"].assert_not_called()
         mocked_ads["verify_budget_still_actionable"].assert_not_called()
         mocked_ads["update_campaign_budget"].assert_not_called()
+        sync.assert_called_once_with()
 
     def test_postpone_manual_preview_marks_postponed_and_hides_pending_without_ads_calls(
-        self, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
     ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
         decision_id = _insert_manual_preview_scale(isolated_db)
 
         r = client.post(
@@ -277,6 +283,7 @@ class TestBudgetReviewAction:
         body = r.json()
         assert body["status"] == "success"
         assert body["message"] == "Propuesta pospuesta. No se aplicó ningún cambio."
+        assert body["gcs_synced"] is True
         with sqlite3.connect(isolated_db.db_path) as conn:
             row = conn.execute(
                 "SELECT rejected_at, postponed_at, approved_at, executed, evidence_json "
@@ -296,10 +303,13 @@ class TestBudgetReviewAction:
         mocked_ads["fetch_campaign_budget_info"].assert_not_called()
         mocked_ads["verify_budget_still_actionable"].assert_not_called()
         mocked_ads["update_campaign_budget"].assert_not_called()
+        sync.assert_called_once_with()
 
     def test_keep_review_manual_preview_stays_visible_and_only_audits(
-        self, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
     ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
         decision_id = _insert_manual_preview_scale(isolated_db)
 
         r = client.post(
@@ -317,6 +327,7 @@ class TestBudgetReviewAction:
         body = r.json()
         assert body["status"] == "success"
         assert body["message"] == "Propuesta mantenida en revisión. No se aplicó ningún cambio."
+        assert body["gcs_synced"] is True
         with sqlite3.connect(isolated_db.db_path) as conn:
             row = conn.execute(
                 "SELECT rejected_at, postponed_at, approved_at, executed, evidence_json "
@@ -336,6 +347,33 @@ class TestBudgetReviewAction:
         mocked_ads["fetch_campaign_budget_info"].assert_not_called()
         mocked_ads["verify_budget_still_actionable"].assert_not_called()
         mocked_ads["update_campaign_budget"].assert_not_called()
+        sync.assert_called_once_with()
+
+    @pytest.mark.parametrize("sync_result", [False, RuntimeError("gcs unavailable")])
+    def test_review_action_success_continues_when_gcs_sync_fails(
+        self, sync_result, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
+    ):
+        sync = MagicMock(side_effect=sync_result if isinstance(sync_result, Exception) else None)
+        if not isinstance(sync_result, Exception):
+            sync.return_value = sync_result
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+        decision_id = _insert_manual_preview_scale(isolated_db)
+
+        r = client.post(
+            "/budget-recommendations/review-action",
+            json={"decision_id": decision_id, "action": "keep_review", "source": "manual_review"},
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["gcs_synced"] is False
+        assert body["warning"] == "review_saved_locally_but_gcs_sync_failed"
+        sync.assert_called_once_with()
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
+        mocked_ads["update_campaign_budget"].assert_not_called()
 
     @pytest.mark.parametrize(
         ("setup", "reason"),
@@ -348,8 +386,10 @@ class TestBudgetReviewAction:
         ],
     )
     def test_review_action_rejects_invalid_state_without_ads_calls(
-        self, setup, reason, client, admin_token, customer_id_env, isolated_db, mocked_ads,
+        self, setup, reason, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
     ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
         decision_id = setup(isolated_db)
         if reason == "already_executed":
             with sqlite3.connect(isolated_db.db_path) as conn:
@@ -373,6 +413,7 @@ class TestBudgetReviewAction:
         mocked_ads["fetch_campaign_budget_info"].assert_not_called()
         mocked_ads["verify_budget_still_actionable"].assert_not_called()
         mocked_ads["update_campaign_budget"].assert_not_called()
+        sync.assert_not_called()
 
 
 class TestInvariantes:

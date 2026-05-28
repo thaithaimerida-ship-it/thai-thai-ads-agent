@@ -844,12 +844,14 @@ async def save_budget_preview(request: SaveBudgetPreviewRequest) -> dict[str, An
         )
         decision_id = cursor.lastrowid
 
+    sync_result = _sync_budget_db_to_gcs("preview_saved_locally_but_gcs_sync_failed")
     return {
         "status": "success",
         "decision_id": decision_id,
         "message": "Propuesta guardada para revisión manual.",
         "applied": False,
         "executed": False,
+        **sync_result,
     }
 
 
@@ -962,6 +964,18 @@ def _budget_review_message(action: str) -> str:
     return messages[action]
 
 
+def _sync_budget_db_to_gcs(warning_code: str) -> dict[str, Any]:
+    try:
+        from engine.db_sync import upload_to_gcs
+
+        synced = bool(upload_to_gcs())
+    except Exception:
+        synced = False
+    if synced:
+        return {"gcs_synced": True}
+    return {"gcs_synced": False, "warning": warning_code}
+
+
 @router.post("/budget-recommendations/review-action", dependencies=[Depends(require_token)])
 async def budget_recommendation_review_action(request: BudgetReviewActionRequest) -> dict[str, Any]:
     """Actualiza solo estado de revisión para propuestas manual_preview.
@@ -1043,11 +1057,13 @@ async def budget_recommendation_review_action(request: BudgetReviewActionRequest
                 (evidence_json, request.decision_id),
             )
 
+    sync_result = _sync_budget_db_to_gcs("review_saved_locally_but_gcs_sync_failed")
     return {
         "status": "success",
         "decision_id": request.decision_id,
         "action": request.action,
         "message": _budget_review_message(request.action),
+        **sync_result,
     }
 
 

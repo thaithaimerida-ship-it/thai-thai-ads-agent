@@ -378,8 +378,11 @@ def test_save_preview_requires_token(client, isolated_db, admin_token):
 
 
 def test_save_preview_increase_creates_scale_pending_decision(
-    client, isolated_db, admin_token,
+    client, isolated_db, admin_token, monkeypatch,
 ):
+    sync = MagicMock(return_value=True)
+    monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+
     response = client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK)
 
     assert response.status_code == 200
@@ -388,6 +391,7 @@ def test_save_preview_increase_creates_scale_pending_decision(
     assert body["message"] == "Propuesta guardada para revisión manual."
     assert body["applied"] is False
     assert body["executed"] is False
+    assert body["gcs_synced"] is True
 
     with sqlite3.connect(isolated_db.db_path) as conn:
         row = conn.execute(
@@ -403,6 +407,7 @@ def test_save_preview_increase_creates_scale_pending_decision(
     assert '"source": "manual_preview"' in row[5]
     assert '"new_budget_mxn": 173.8' in row[5]
     assert '"saved_by": "admin_token_user"' in row[5]
+    sync.assert_called_once_with()
 
 
 def test_save_preview_decrease_creates_reduce_pending_decision(
@@ -434,8 +439,11 @@ def test_save_preview_decrease_creates_reduce_pending_decision(
     ],
 )
 def test_save_preview_rejects_invalid_payloads(
-    client, isolated_db, admin_token, payload, reason,
+    client, isolated_db, admin_token, payload, reason, monkeypatch,
 ):
+    sync = MagicMock(return_value=True)
+    monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+
     response = client.post("/budget-preview/save", json=payload, headers=HEADERS_OK)
 
     assert response.status_code == 200
@@ -445,12 +453,16 @@ def test_save_preview_rejects_invalid_payloads(
     with sqlite3.connect(isolated_db.db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM autonomous_decisions").fetchone()[0]
     assert count == 0
+    sync.assert_not_called()
 
 
 def test_save_preview_prevents_duplicate_pending_campaign(
-    client, isolated_db, admin_token,
+    client, isolated_db, admin_token, monkeypatch,
 ):
+    sync = MagicMock(return_value=True)
+    monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
     first = client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK).json()
+    sync.reset_mock()
     second = client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK).json()
 
     assert first["status"] == "success"
@@ -461,6 +473,26 @@ def test_save_preview_prevents_duplicate_pending_campaign(
     with sqlite3.connect(isolated_db.db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM autonomous_decisions").fetchone()[0]
     assert count == 1
+    sync.assert_not_called()
+
+
+@pytest.mark.parametrize("sync_result", [False, RuntimeError("gcs unavailable")])
+def test_save_preview_success_continues_when_gcs_sync_fails(
+    client, isolated_db, admin_token, monkeypatch, sync_result,
+):
+    sync = MagicMock(side_effect=sync_result if isinstance(sync_result, Exception) else None)
+    if not isinstance(sync_result, Exception):
+        sync.return_value = sync_result
+    monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+
+    response = client.post("/budget-preview/save", json=_save_payload(), headers=HEADERS_OK)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["gcs_synced"] is False
+    assert body["warning"] == "preview_saved_locally_but_gcs_sync_failed"
+    sync.assert_called_once_with()
 
 
 def test_saved_preview_appears_in_presupuestos_data(
