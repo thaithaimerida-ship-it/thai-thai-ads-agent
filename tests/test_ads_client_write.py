@@ -2,6 +2,7 @@ import sqlite3
 import os
 import sys
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 sys.path.insert(0, ".")
@@ -72,7 +73,9 @@ def test_update_campaign_budget_calls_mutate():
     mock_client = MagicMock()
     mock_service = MagicMock()
     mock_client.get_service.return_value = mock_service
-    mock_client.get_type.return_value = MagicMock()
+    budget_operation = MagicMock()
+    request = SimpleNamespace(customer_id="", operations=[], validate_only=None)
+    mock_client.get_type.side_effect = [budget_operation, request]
     mock_service.mutate_campaign_budgets.return_value = MagicMock(
         results=[MagicMock(resource_name="customers/123/campaignBudgets/789")]
     )
@@ -83,10 +86,13 @@ def test_update_campaign_budget_calls_mutate():
     )
     assert result["status"] == "success"
     mock_service.mutate_campaign_budgets.assert_called_once()
+    kwargs = mock_service.mutate_campaign_budgets.call_args.kwargs
+    assert set(kwargs) == {"request"}
+    assert kwargs["request"].validate_only is False
 
 
-def test_update_campaign_budget_validate_only_true_propagates():
-    """validate_only=True debe pasarse al service como kwarg y reflejarse en el return.
+def test_update_campaign_budget_validate_only_true_propagates_in_request():
+    """validate_only=True debe pasarse dentro del request y reflejarse en el return.
 
     Este es el modo dry-run del ritual ads-mutation-dry-run: la API valida la
     operación pero NO la aplica. Lo usan routes/presupuestos y el subagente
@@ -95,7 +101,9 @@ def test_update_campaign_budget_validate_only_true_propagates():
     mock_client = MagicMock()
     mock_service = MagicMock()
     mock_client.get_service.return_value = mock_service
-    mock_client.get_type.return_value = MagicMock()
+    budget_operation = MagicMock()
+    request = SimpleNamespace(customer_id="", operations=[], validate_only=None)
+    mock_client.get_type.side_effect = [budget_operation, request]
     mock_service.mutate_campaign_budgets.return_value = MagicMock(
         results=[MagicMock(resource_name="customers/123/campaignBudgets/789")]
     )
@@ -109,7 +117,30 @@ def test_update_campaign_budget_validate_only_true_propagates():
     assert result["status"] == "success"
     assert result["validate_only"] is True
     kwargs = mock_service.mutate_campaign_budgets.call_args.kwargs
-    assert kwargs["validate_only"] is True
+    assert set(kwargs) == {"request"}
+    assert kwargs["request"].customer_id == "4021070209"
+    assert kwargs["request"].operations == [budget_operation]
+    assert kwargs["request"].validate_only is True
+
+
+def test_update_campaign_budget_preserves_validate_only_on_exception():
+    mock_client = MagicMock()
+    mock_service = MagicMock()
+    mock_client.get_service.return_value = mock_service
+    budget_operation = MagicMock()
+    request = SimpleNamespace(customer_id="", operations=[], validate_only=None)
+    mock_client.get_type.side_effect = [budget_operation, request]
+    mock_service.mutate_campaign_budgets.side_effect = RuntimeError("boom")
+
+    from engine.ads_client import update_campaign_budget
+    result = update_campaign_budget(
+        mock_client, "4021070209", "customers/4021070209/campaignBudgets/123",
+        50_000_000, validate_only=True,
+    )
+
+    assert result["status"] == "error"
+    assert result["validate_only"] is True
+    assert "boom" in result["message"]
 
 
 # ── TASK 6 ──────────────────────────────────────────────────────────────────

@@ -1072,11 +1072,12 @@ def update_campaign_budget(
 
         budget_operation.update_mask.paths.append("amount_micros")
 
-        response = budget_service.mutate_campaign_budgets(
-            customer_id=customer_id,
-            operations=[budget_operation],
-            validate_only=validate_only,
-        )
+        request = client.get_type("MutateCampaignBudgetsRequest")
+        request.customer_id = customer_id
+        request.operations.append(budget_operation)
+        request.validate_only = validate_only
+
+        response = budget_service.mutate_campaign_budgets(request=request)
         return {
             "status": "success",
             "validate_only": validate_only,
