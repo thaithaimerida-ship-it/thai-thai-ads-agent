@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from unittest.mock import MagicMock
 
@@ -104,6 +105,32 @@ def _save_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def _mark_saved_preview_validated(memory, decision_id: int, *, applied=False) -> None:
+    with sqlite3.connect(memory.db_path) as conn:
+        row = conn.execute(
+            "SELECT evidence_json FROM autonomous_decisions WHERE id = ?",
+            (decision_id,),
+        ).fetchone()
+        evidence = json.loads(row[0])
+        evidence["approval_validation"] = {
+            "validated": True,
+            "validated_at": "2026-05-28T21:30:56+00:00",
+            "current_budget_verified_mxn": evidence["current_budget_mxn"],
+            "requested_budget_mxn": evidence["new_budget_mxn"],
+            "validate_only_result": {
+                "success": True,
+                "status": "success",
+                "message": "validate_only_ok",
+                "resource_name": None,
+            },
+            "applied": applied,
+        }
+        conn.execute(
+            "UPDATE autonomous_decisions SET evidence_json = ? WHERE id = ?",
+            (json.dumps(evidence), decision_id),
+        )
 
 
 def test_preview_opens_without_token_and_returns_read_only_contract(
@@ -332,6 +359,38 @@ def test_manual_preview_ui_has_review_buttons_without_apply_language():
     assert "validate_only" not in review_block
 
 
+def test_manual_preview_ui_has_apply_approved_button_with_confirmation_gate():
+    from routes.presupuestos import _PAGE
+
+    assert "Aplicar presupuesto" in _PAGE
+    assert "Esto cambiar\u00e1 el presupuesto real en Google Ads." in _PAGE
+    assert "cancelada." in _PAGE
+    assert "Presupuesto aplicado correctamente." in _PAGE
+    assert "function applyApproved(" in _PAGE
+    assert 'prompt("Escribe APLICAR para cambiar el presupuesto real en Google Ads.")' in _PAGE
+    assert 'confirmation !== "APLICAR"' in _PAGE
+    assert "/budget-recommendations/apply-approved" in _PAGE
+    apply_block = _PAGE.split("function applyApproved(", 1)[1]
+    apply_block = apply_block.split("function updateApplyState", 1)[0]
+    assert "/budget-recommendations/apply-approved" in apply_block
+    assert "/apply-budget-changes" not in apply_block
+    assert "decision_ids" not in apply_block
+    assert "new_budget_mxn" not in apply_block
+
+
+def test_manual_preview_render_only_shows_apply_button_when_can_apply_approved():
+    from routes.presupuestos import _PAGE
+
+    render_block = _PAGE.split("function render()", 1)[1]
+    render_block = render_block.split("function savePreview", 1)[0]
+    assert "r.can_apply_approved === true" in render_block
+    assert "data-action='apply_approved'" in render_block
+    assert "Aplicar presupuesto" in render_block
+    manual_preview_row_block = render_block.split("var reviewButtons = r.is_manual_preview", 1)[1]
+    manual_preview_row_block = manual_preview_row_block.split("var actionLabel", 1)[0]
+    assert "class='pick'" not in manual_preview_row_block
+
+
 def test_presupuestos_preview_uses_human_copy_for_security_rules():
     from routes.presupuestos import _PAGE
 
@@ -529,6 +588,85 @@ def test_presupuestos_data_keeps_manual_preview_visible_but_not_applyable(
     assert rec["apply_enabled"] is False
     assert rec["apply_disabled_reason"] == "Pendiente de fase de aprobación"
     assert rec["review_status"] == "Guardada para revisión"
+
+
+def test_presupuestos_data_exposes_manual_approval_flags(
+    client, isolated_db, admin_token, customer_id_env, monkeypatch,
+):
+    monkeypatch.setattr("main.get_engine_modules", MagicMock(side_effect=RuntimeError("no live ads")))
+    client.post("/budget-preview/save", json=_save_payload(campaign_id="22839241090"), headers=HEADERS_OK)
+
+    rec = client.get("/presupuestos/data").json()["recommendations"][0]
+
+    assert rec["approval_validated"] is False
+    assert rec["approval_applied"] is False
+    assert rec["executed"] == 0
+    assert rec["approved_at"] is None
+    assert rec["rejected_at"] is None
+    assert rec["postponed_at"] is None
+    assert rec["can_apply_approved"] is False
+
+
+def test_presupuestos_data_can_apply_approved_for_validated_manual_preview(
+    client, isolated_db, admin_token, customer_id_env, monkeypatch,
+):
+    monkeypatch.setattr("main.get_engine_modules", MagicMock(return_value={
+        "get_ads_client": MagicMock(),
+        "fetch_campaign_data": MagicMock(return_value=[_campaign("22839241090", budget=158.0)]),
+    }))
+    response = client.post(
+        "/budget-preview/save",
+        json=_save_payload(campaign_id="22839241090", current_budget_mxn=158.0),
+        headers=HEADERS_OK,
+    )
+    decision_id = response.json()["decision_id"]
+    _mark_saved_preview_validated(isolated_db, decision_id, applied=False)
+
+    rec = client.get("/presupuestos/data").json()["recommendations"][0]
+
+    assert rec["approval_validated"] is True
+    assert rec["approval_applied"] is False
+    assert rec["current_budget_mxn"] == 158.0
+    assert rec["new_budget_mxn"] == 173.8
+    assert rec["can_apply_approved"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["not_validated", "applied", "executed", "approved", "rejected", "postponed"],
+)
+def test_presupuestos_data_can_apply_approved_false_for_blocked_states(
+    mutation, client, isolated_db, admin_token, customer_id_env, monkeypatch,
+):
+    monkeypatch.setattr("main.get_engine_modules", MagicMock(return_value={
+        "get_ads_client": MagicMock(),
+        "fetch_campaign_data": MagicMock(return_value=[_campaign("22839241090", budget=158.0)]),
+    }))
+    response = client.post(
+        "/budget-preview/save",
+        json=_save_payload(campaign_id="22839241090", current_budget_mxn=158.0),
+        headers=HEADERS_OK,
+    )
+    decision_id = response.json()["decision_id"]
+    if mutation != "not_validated":
+        _mark_saved_preview_validated(isolated_db, decision_id, applied=(mutation == "applied"))
+    with sqlite3.connect(isolated_db.db_path) as conn:
+        if mutation == "executed":
+            conn.execute("UPDATE autonomous_decisions SET executed = 1 WHERE id = ?", (decision_id,))
+        elif mutation == "approved":
+            conn.execute("UPDATE autonomous_decisions SET approved_at = datetime('now') WHERE id = ?", (decision_id,))
+        elif mutation == "rejected":
+            conn.execute("UPDATE autonomous_decisions SET rejected_at = datetime('now') WHERE id = ?", (decision_id,))
+        elif mutation == "postponed":
+            conn.execute("UPDATE autonomous_decisions SET postponed_at = datetime('now') WHERE id = ?", (decision_id,))
+
+    body = client.get("/presupuestos/data").json()
+
+    if mutation in {"executed", "approved", "rejected", "postponed"}:
+        assert body["recommendations"] == []
+    else:
+        rec = body["recommendations"][0]
+        assert rec["can_apply_approved"] is False
 
 
 def test_save_preview_does_not_call_budget_mutation(

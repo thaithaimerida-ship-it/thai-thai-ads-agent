@@ -197,6 +197,7 @@ el("tableWrap").addEventListener("click", function(ev) {
     var id = parseInt(ev.target.getAttribute("data-id"), 10);
     var action = ev.target.getAttribute("data-action");
     if (!isNaN(id) && action === "approve_validate") validateApproval(id);
+    else if (!isNaN(id) && action === "apply_approved") applyApproved(id, ev.target);
     else if (!isNaN(id) && action) reviewAction(id, action);
   }
 });
@@ -285,6 +286,47 @@ function validateApproval(decisionId) {
     })
     .catch(function(e) {
       showBanner("err", "Error de red: " + escapeHtml(e.message));
+    });
+}
+
+function applyApproved(decisionId, button) {
+  var token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    showBanner("warn", "Esta accion requiere token. Pega tu token para aplicar presupuesto real.");
+    return;
+  }
+  var confirmation = window.prompt("Escribe APLICAR para cambiar el presupuesto real en Google Ads.");
+  if (confirmation !== "APLICAR") {
+    showBanner("warn", "Aplicación cancelada.");
+    return;
+  }
+  if (button) button.disabled = true;
+  fetch("/budget-recommendations/apply-approved", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Token": token },
+    body: JSON.stringify({
+      decision_id: decisionId,
+      source: "manual_review",
+      confirmation: "APLICAR",
+      reason: "Aplicación final confirmada desde mini-app."
+    }),
+  })
+    .then(function(r) {
+      return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; });
+    })
+    .then(function(res) {
+      if (!res.ok || res.data.status !== "success" || res.data.applied !== true) {
+        var msg = (res.data && (res.data.detail || res.data.message || res.data.reason)) || ("HTTP " + res.status);
+        showBanner("err", "Error: " + escapeHtml(msg));
+        if (button) button.disabled = false;
+        return;
+      }
+      showBanner("ok", "Presupuesto aplicado correctamente.");
+      load();
+    })
+    .catch(function(e) {
+      showBanner("err", "Error de red: " + escapeHtml(e.message));
+      if (button) button.disabled = false;
     });
 }
 
@@ -561,6 +603,10 @@ function render() {
     var actionClass = r.action_type === "scale" ? "action-scale" : "action-reduce";
     var reviewStatus = r.review_status ? "<div class='muted'>" + escapeHtml(labelReviewStatus(r.review_status)) + "</div>" : "";
     var disabledLabel = labelApplyDisabled(r.apply_disabled_reason || "");
+    var applyApprovedButton = r.can_apply_approved === true
+      ? " <button class='secondary review-action' data-action='apply_approved' data-id='" + r.id + "'>Aplicar presupuesto</button>" +
+        "<div class='muted'>Esto cambiará el presupuesto real en Google Ads.</div>"
+      : "";
     var reviewButtons = r.is_manual_preview
       ? "<div class='review-actions'>" +
         "<button class='secondary review-action' data-action='reject' data-id='" + r.id + "'>Rechazar</button> " +
@@ -568,6 +614,7 @@ function render() {
         "<button class='secondary review-action' data-action='keep_review' data-id='" + r.id + "'>Mantener en revisión</button> " +
         "<button class='secondary review-action' data-action='approve_validate' data-id='" + r.id + "'>Validar aplicación</button>" +
         "<div class='muted'>Esto validará la aplicación, pero no cambiará presupuesto todavía.</div>" +
+        applyApprovedButton +
         "</div>"
       : "";
     var actionLabel = r.action_type === "scale" ? "scale ↑" : "reduce ↓";
@@ -696,7 +743,8 @@ async def presupuestos_data() -> dict[str, Any]:
             cursor = conn.execute(
                 """
                 SELECT id, action_type, campaign_id, campaign_name, urgency,
-                       evidence_json, created_at
+                       evidence_json, created_at, executed, approved_at,
+                       rejected_at, postponed_at
                   FROM autonomous_decisions
                  WHERE action_type IN ('scale', 'reduce', 'budget_action', 'budget_scale')
                    AND decision = 'proposed'
@@ -738,8 +786,29 @@ async def presupuestos_data() -> dict[str, Any]:
         is_manual_preview = _is_manual_preview_evidence(evidence)
         apply_enabled = action_type_original in {"scale", "reduce"} and not is_manual_preview
         approval_validation = evidence.get("approval_validation") if isinstance(evidence, dict) else None
+        approval_validated = (
+            isinstance(approval_validation, dict)
+            and approval_validation.get("validated") is True
+        )
+        approval_applied = (
+            isinstance(approval_validation, dict)
+            and approval_validation.get("applied") is True
+        )
+        current_budget_mxn = current_budgets.get(r["campaign_id"])
+        can_apply_approved = (
+            is_manual_preview
+            and approval_validated
+            and not approval_applied
+            and r["executed"] == 0
+            and r["approved_at"] is None
+            and r["rejected_at"] is None
+            and r["postponed_at"] is None
+            and action_type_original in {"scale", "reduce"}
+            and current_budget_mxn is not None
+            and new_budget_mxn is not None
+        )
         manual_review_status = "Guardada para revisión"
-        if isinstance(approval_validation, dict) and approval_validation.get("validated") is True:
+        if approval_validated:
             manual_review_status = "Validada para aplicación. Pendiente de aplicación final."
         recommendations.append({
             "id": r["id"],
@@ -751,7 +820,7 @@ async def presupuestos_data() -> dict[str, Any]:
             "urgency": r["urgency"],
             "new_budget_mxn": new_budget_mxn,
             "suggested_budget_mxn": new_budget_mxn,
-            "current_budget_mxn": current_budgets.get(r["campaign_id"]),
+            "current_budget_mxn": current_budget_mxn,
             "reason": reason,
             "apply_enabled": apply_enabled,
             "apply_disabled_reason": _budget_apply_disabled_reason(
@@ -761,6 +830,13 @@ async def presupuestos_data() -> dict[str, Any]:
             ),
             "is_manual_preview": is_manual_preview,
             "review_status": manual_review_status if is_manual_preview else "",
+            "approval_validated": approval_validated,
+            "approval_applied": approval_applied,
+            "executed": r["executed"],
+            "approved_at": r["approved_at"],
+            "rejected_at": r["rejected_at"],
+            "postponed_at": r["postponed_at"],
+            "can_apply_approved": can_apply_approved,
             "created_at": r["created_at"],
         })
         if latest_at is None or (r["created_at"] and r["created_at"] > latest_at):
