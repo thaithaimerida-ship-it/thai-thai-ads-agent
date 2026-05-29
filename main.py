@@ -14,6 +14,42 @@ import random
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CORS_ORIGINS = (
+    "https://thai-thai-ads-agent-624172071613.us-central1.run.app",
+    "https://thai-thai-ads-agent-safxqpxa6q-uc.a.run.app",
+    "https://thaithaimerida.com",
+    "https://www.thaithaimerida.com",
+)
+
+LOCALHOST_CORS_ORIGINS = (
+    "http://localhost:8080",
+    "http://localhost:5173",
+    "http://127.0.0.1:8080",
+    "http://127.0.0.1:5173",
+)
+
+
+def _dedupe_origins(origins: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for origin in origins:
+        clean = origin.strip()
+        if not clean or clean == "*" or clean in seen:
+            continue
+        seen.add(clean)
+        result.append(clean)
+    return result
+
+
+def resolve_cors_origins() -> list[str]:
+    configured = os.getenv("ALLOWED_ORIGINS", "")
+    origins = _dedupe_origins(configured.split(",")) if configured else list(DEFAULT_CORS_ORIGINS)
+    environment = os.getenv("ENVIRONMENT", "").strip().lower()
+    allow_localhost = os.getenv("ALLOW_LOCALHOST_CORS", "").strip().lower() == "true"
+    if environment == "development" or allow_localhost:
+        origins = _dedupe_origins(origins + list(LOCALHOST_CORS_ORIGINS))
+    return origins
+
 # ── GCS import diagnostic (temporal — confirma que el paquete está instalado) ─
 try:
     import google.cloud
@@ -153,8 +189,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=resolve_cors_origins(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
