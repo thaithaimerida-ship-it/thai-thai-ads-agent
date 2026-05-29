@@ -23,20 +23,20 @@ def _load_service_account_info() -> dict:
             _cached_info = json.loads(json_str)
             logger.info("Credentials loaded from GOOGLE_CREDENTIALS_JSON env var")
             return _cached_info
-        except json.JSONDecodeError as e:
-            logger.error("GOOGLE_CREDENTIALS_JSON has invalid JSON: %s", e)
+        except json.JSONDecodeError:
+            logger.error("GOOGLE_CREDENTIALS_JSON has invalid JSON")
     for env_key in ("GA4_CREDENTIALS_PATH", "GOOGLE_SHEETS_CREDENTIALS_PATH"):
         path = os.getenv(env_key)
         if path and os.path.exists(path):
             with open(path, "r") as f:
                 _cached_info = json.load(f)
-            logger.info("Credentials loaded from file: %s", path)
+            logger.info("Credentials loaded from configured file")
             return _cached_info
     default_path = "./ga4-credentials.json"
     if os.path.exists(default_path):
         with open(default_path, "r") as f:
             _cached_info = json.load(f)
-        logger.info("Credentials loaded from default path: %s", default_path)
+        logger.info("Credentials loaded from default credentials path")
         return _cached_info
     return {}
 
@@ -49,7 +49,7 @@ def get_credentials(scopes: list[str]) -> Credentials | None:
     try:
         return Credentials.from_service_account_info(info, scopes=scopes)
     except Exception as e:
-        logger.error("Failed to create credentials: %s", e)
+        logger.error("Service account auth initialization failed: %s", type(e).__name__)
         return None
 
 
