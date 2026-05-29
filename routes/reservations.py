@@ -3,6 +3,7 @@ Routes de Reservaciones — POST /reservations, GET /reservations
 Incluye helpers de email, WhatsApp e ICS.
 """
 import os
+import urllib.parse
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -10,8 +11,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from engine.db_sync import get_db_path
+from engine.url_safety import UnsafeUrlError, safe_urlopen
 
 router = APIRouter(tags=["reservations"])
+CALLMEBOT_BASE_URL = "https://api.callmebot.com/whatsapp.php"
+CALLMEBOT_ALLOWED_HOSTS = {"api.callmebot.com"}
 
 
 class ReservationRequest(BaseModel):
@@ -86,9 +90,6 @@ def _generate_ics(reservation: ReservationRequest) -> str:
 
 
 def send_whatsapp_restaurant(reservation: ReservationRequest):
-    import urllib.request
-    import urllib.parse
-
     phone = os.getenv("CALLMEBOT_PHONE", "")
     apikey = os.getenv("CALLMEBOT_APIKEY", "")
     if not phone or not apikey:
@@ -104,12 +105,14 @@ def send_whatsapp_restaurant(reservation: ReservationRequest):
         f"Tel: {reservation.phone}"
     )
     url = (
-        f"https://api.callmebot.com/whatsapp.php"
+        f"{CALLMEBOT_BASE_URL}"
         f"?phone={phone}&text={urllib.parse.quote(text)}&apikey={apikey}"
     )
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        with safe_urlopen(url, allowed_hosts=CALLMEBOT_ALLOWED_HOSTS, timeout=10) as resp:
             print(f"[whatsapp_sent] status={resp.status}")
+    except UnsafeUrlError:
+        print("[whatsapp_failed] unsafe_url")
     except Exception as e:
         print(f"[whatsapp_failed] error={e}")
 

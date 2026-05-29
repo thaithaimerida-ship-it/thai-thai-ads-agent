@@ -6,6 +6,9 @@ Locally: audits source code files.
 """
 import os
 from typing import Dict
+import urllib.error
+
+from engine.url_safety import UnsafeUrlError, safe_urlopen
 
 LANDING_PAGE_PATH = os.getenv(
     "LANDING_PAGE_PATH",
@@ -15,6 +18,7 @@ LANDING_PAGE_URL = os.getenv(
     "LANDING_PAGE_URL",
     "https://www.thaithaimerida.com"
 )
+LANDING_PAGE_ALLOWED_HOSTS = {"thaithaimerida.com", "www.thaithaimerida.com"}
 
 
 def compute_friction_score(ctr_pct: float, conversion_rate_pct: float) -> Dict:
@@ -60,20 +64,24 @@ def _audit_live_url(url: str) -> Dict:
     Fetches the live landing page and audits its HTML structure.
     Checks: mobile meta, CTA buttons, form, GA4/analytics, page speed signals.
     """
-    import urllib.request
-    import urllib.error
-
     issues = []
     score = 100
 
     try:
-        req = urllib.request.Request(
+        with safe_urlopen(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; ThaiThaiAudit/1.0)"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+            allowed_hosts=LANDING_PAGE_ALLOWED_HOSTS,
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; ThaiThaiAudit/1.0)"},
+        ) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
             status_code = resp.status
+    except UnsafeUrlError:
+        return {
+            "score": 50, "status": "warning",
+            "issues": ["URL de landing no permitida para auditoria externa"],
+            "issues_count": 1, "url": url, "mode": "live_url_audit_rejected",
+        }
     except urllib.error.HTTPError as e:
         return {
             "score": 0, "status": "critical",
