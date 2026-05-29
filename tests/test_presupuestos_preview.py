@@ -384,11 +384,36 @@ def test_manual_preview_render_only_shows_apply_button_when_can_apply_approved()
     render_block = _PAGE.split("function render()", 1)[1]
     render_block = render_block.split("function savePreview", 1)[0]
     assert "r.can_apply_approved === true" in render_block
+    assert 'r.can_apply_approved === true\n      ? "Lista para aplicación final"' in render_block
+    assert "var validateApprovalButton = r.approval_validated === true" in render_block
     assert "data-action='apply_approved'" in render_block
     assert "Aplicar presupuesto" in render_block
     manual_preview_row_block = render_block.split("var reviewButtons = r.is_manual_preview", 1)[1]
     manual_preview_row_block = manual_preview_row_block.split("var actionLabel", 1)[0]
     assert "class='pick'" not in manual_preview_row_block
+    assert "validateApprovalButton +" in manual_preview_row_block
+
+
+def test_manual_preview_validated_applyable_copy_is_final_apply_only():
+    from routes.presupuestos import _PAGE
+
+    render_block = _PAGE.split("function render()", 1)[1]
+    render_block = render_block.split("function savePreview", 1)[0]
+    status_block = render_block.split("var disabledLabel =", 1)[1]
+    status_block = status_block.split("var applyApprovedButton", 1)[0]
+    validate_block = render_block.split("var validateApprovalButton =", 1)[1]
+    validate_block = validate_block.split("var reviewButtons", 1)[0]
+
+    assert "Lista para aplicación final" in status_block
+    assert "Aplicación pendiente de habilitar" not in status_block
+    assert 'r.approval_validated === true\n      ? ""' in validate_block
+    assert "Validar aplicación" in validate_block
+    assert "Aplicar presupuesto" in render_block
+    assert "Esto cambiará el presupuesto real en Google Ads." in render_block
+    assert "/apply-budget-changes" not in validate_block
+    apply_block = _PAGE.split("function applyApproved(", 1)[1]
+    apply_block = apply_block.split("function updateApplyState", 1)[0]
+    assert "decision_ids" not in apply_block
 
 
 def test_presupuestos_preview_uses_human_copy_for_security_rules():

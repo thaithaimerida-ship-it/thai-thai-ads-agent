@@ -602,18 +602,23 @@ function render() {
     if (r.apply_enabled !== false) hasApplyableRows = true;
     var actionClass = r.action_type === "scale" ? "action-scale" : "action-reduce";
     var reviewStatus = r.review_status ? "<div class='muted'>" + escapeHtml(labelReviewStatus(r.review_status)) + "</div>" : "";
-    var disabledLabel = labelApplyDisabled(r.apply_disabled_reason || "");
+    var disabledLabel = r.can_apply_approved === true
+      ? "Lista para aplicación final"
+      : labelApplyDisabled(r.apply_disabled_reason || "");
     var applyApprovedButton = r.can_apply_approved === true
       ? " <button class='secondary review-action' data-action='apply_approved' data-id='" + r.id + "'>Aplicar presupuesto</button>" +
         "<div class='muted'>Esto cambiará el presupuesto real en Google Ads.</div>"
       : "";
+    var validateApprovalButton = r.approval_validated === true
+      ? ""
+      : "<button class='secondary review-action' data-action='approve_validate' data-id='" + r.id + "'>Validar aplicación</button>" +
+        "<div class='muted'>Esto validará la aplicación, pero no cambiará presupuesto todavía.</div>";
     var reviewButtons = r.is_manual_preview
       ? "<div class='review-actions'>" +
         "<button class='secondary review-action' data-action='reject' data-id='" + r.id + "'>Rechazar</button> " +
         "<button class='secondary review-action' data-action='postpone' data-id='" + r.id + "'>Posponer</button> " +
         "<button class='secondary review-action' data-action='keep_review' data-id='" + r.id + "'>Mantener en revisión</button> " +
-        "<button class='secondary review-action' data-action='approve_validate' data-id='" + r.id + "'>Validar aplicación</button>" +
-        "<div class='muted'>Esto validará la aplicación, pero no cambiará presupuesto todavía.</div>" +
+        validateApprovalButton +
         applyApprovedButton +
         "</div>"
       : "";
