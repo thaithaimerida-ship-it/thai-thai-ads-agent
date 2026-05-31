@@ -187,6 +187,67 @@ def test_update_campaign_budget_preserves_validate_only_on_exception():
 
 # ── TASK 6 ──────────────────────────────────────────────────────────────────
 
+def test_fetch_campaign_budget_info_returns_campaign_status_and_budget_contract():
+    from engine.ads_client import fetch_campaign_budget_info
+
+    mock_client = MagicMock()
+    mock_service = MagicMock()
+    mock_client.get_service.return_value = mock_service
+    row = SimpleNamespace(
+        campaign=SimpleNamespace(
+            id=22839241090,
+            name="Thai Mérida - Delivery",
+            status=SimpleNamespace(name="ENABLED"),
+        ),
+        campaign_budget=SimpleNamespace(
+            amount_micros=50_000_000,
+            resource_name="customers/4021070209/campaignBudgets/999",
+            explicitly_shared=False,
+        ),
+    )
+    mock_service.search.return_value = [row]
+
+    result = fetch_campaign_budget_info(mock_client, "4021070209", "22839241090")
+
+    assert result == {
+        "campaign_id": 22839241090,
+        "campaign_name": "Thai Mérida - Delivery",
+        "campaign_status": "ENABLED",
+        "budget_resource_name": "customers/4021070209/campaignBudgets/999",
+        "current_daily_budget_mxn": 50.0,
+        "budget_explicitly_shared": False,
+    }
+    query = mock_service.search.call_args.kwargs["query"]
+    assert "campaign.status" in query
+    assert "campaign_budget.explicitly_shared" in query
+
+
+def test_fetch_campaign_budget_info_returns_shared_budget_flag():
+    from engine.ads_client import fetch_campaign_budget_info
+
+    mock_client = MagicMock()
+    mock_service = MagicMock()
+    mock_client.get_service.return_value = mock_service
+    row = SimpleNamespace(
+        campaign=SimpleNamespace(
+            id=22839241090,
+            name="Thai Mérida - Delivery",
+            status=SimpleNamespace(name="ENABLED"),
+        ),
+        campaign_budget=SimpleNamespace(
+            amount_micros=50_000_000,
+            resource_name="customers/4021070209/campaignBudgets/999",
+            explicitly_shared=True,
+        ),
+    )
+    mock_service.search.return_value = [row]
+
+    result = fetch_campaign_budget_info(mock_client, "4021070209", "22839241090")
+
+    assert result["campaign_status"] == "ENABLED"
+    assert result["budget_explicitly_shared"] is True
+
+
 def test_disable_protected_conversion_rejected():
     from engine.ads_client import disable_conversion_action
 

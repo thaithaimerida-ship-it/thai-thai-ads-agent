@@ -65,6 +65,8 @@ def mocked_ads(monkeypatch):
         "fetch_campaign_budget_info": MagicMock(return_value={
             "budget_resource_name": "customers/4021070209/campaignBudgets/999",
             "current_daily_budget_mxn": 100.0,
+            "campaign_status": "ENABLED",
+            "budget_explicitly_shared": False,
         }),
         "verify_budget_still_actionable": MagicMock(return_value={
             "ok": True, "reason": "", "guard": "",

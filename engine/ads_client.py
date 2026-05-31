@@ -925,9 +925,11 @@ def fetch_campaign_budget_info(client, customer_id: str, campaign_id: str) -> di
         SELECT
           campaign.id,
           campaign.name,
+          campaign.status,
           campaign.campaign_budget,
           campaign_budget.amount_micros,
-          campaign_budget.resource_name
+          campaign_budget.resource_name,
+          campaign_budget.explicitly_shared
         FROM campaign
         WHERE campaign.id = {campaign_id}
     """
@@ -935,8 +937,12 @@ def fetch_campaign_budget_info(client, customer_id: str, campaign_id: str) -> di
         response = ga_service.search(customer_id=customer_id, query=query)
         for row in response:
             return {
+                "campaign_id": row.campaign.id,
+                "campaign_name": row.campaign.name,
+                "campaign_status": row.campaign.status.name,
                 "budget_resource_name": row.campaign_budget.resource_name,
                 "current_daily_budget_mxn": round(row.campaign_budget.amount_micros / 1_000_000, 2),
+                "budget_explicitly_shared": bool(row.campaign_budget.explicitly_shared),
             }
     except Exception as e:
         return {"error": str(e)}
