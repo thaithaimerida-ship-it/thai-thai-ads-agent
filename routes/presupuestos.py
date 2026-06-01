@@ -109,6 +109,8 @@ _PAGE = """<!doctype html>
             font-size: 1.05rem; line-height: 1.5; }
   #banner.warn { background: #fff8e1; border-color: #f0c000; color: #7a5a00; }
   #banner.err { background: #fde0e0; border-color: #b30000; color: #7a0000; }
+  #historySection { margin-top: 1.2rem; }
+  #historySection h2 { font-size: 1rem; margin: .1rem 0 .5rem; }
 </style>
 </head>
 <body>
@@ -144,6 +146,10 @@ _PAGE = """<!doctype html>
   <button id="applyBtn" hidden disabled title="Selecciona al menos una recomendacion">
     Aplicar seleccionadas
   </button>
+  <section id="historySection">
+    <h2>Historial de presupuestos</h2>
+    <div id="historyWrap"><div id='empty'>Cargando historial...</div></div>
+  </section>
   <div id="banner" hidden></div>
 </div>
 
@@ -152,6 +158,7 @@ _PAGE = """<!doctype html>
 var TOKEN_KEY = "tt_admin_token";
 var rows = [];
 var previewRows = [];
+var historyRows = [];
 var previewCount = 0;
 var latestSavedAt = "n/a";
 
@@ -447,9 +454,26 @@ function load() {
       latestSavedAt = d.latest_at || "n/a";
       updateMeta();
       render();
+      loadHistory();
     })
     .catch(function(e) {
       el("meta").textContent = "Error de red: " + e.message;
+    });
+}
+
+function loadHistory() {
+  fetch("/presupuestos/history?status=all&limit=20")
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.status !== "success") {
+        el("historyWrap").innerHTML = "<div id='empty'>No se pudo cargar el historial de presupuestos.</div>";
+        return;
+      }
+      historyRows = d.history || [];
+      renderHistory(historyRows);
+    })
+    .catch(function() {
+      el("historyWrap").innerHTML = "<div id='empty'>No se pudo cargar el historial de presupuestos.</div>";
     });
 }
 
@@ -583,6 +607,52 @@ function labelReviewStatus(value) {
     manual_preview: "Guardada para revisión"
   };
   return labels[value] || value || "";
+}
+
+function renderHistory(history) {
+  var wrap = el("historyWrap");
+  if (!history.length) {
+    wrap.innerHTML = "<div id='empty'>Sin historial de presupuestos.</div>";
+    return;
+  }
+  var html = "<table><thead><tr>" +
+    "<th>Fecha</th><th>Campaña</th><th>Acción</th><th>Estado</th>" +
+    "<th class='num'>Presupuesto anterior</th><th class='num'>Presupuesto nuevo</th>" +
+    "<th>Resultado</th><th>Detalle</th>" +
+    "</tr></thead><tbody>";
+  for (var i = 0; i < history.length; i++) {
+    var h = history[i];
+    var dateText = h.applied_at || h.approved_at || h.rejected_at || h.postponed_at || h.created_at || "";
+    html += "<tr data-history-id='" + h.id + "'>" +
+      "<td>" + escapeHtml(dateText) + "</td>" +
+      "<td>" + escapeHtml(h.campaign_name || "") + " <small>(" + escapeHtml(h.campaign_id || "") + ")</small></td>" +
+      "<td>" + escapeHtml(h.action_type || "") + "</td>" +
+      "<td>" + escapeHtml(h.review_status_label || h.review_status || "") + "</td>" +
+      "<td class='num'>" + (h.previous_budget_mxn == null ? "<span class='muted'>n/d</span>" : "$" + Number(h.previous_budget_mxn).toFixed(2)) + "</td>" +
+      "<td class='num'>" + (h.applied_budget_mxn == null ? "<span class='muted'>n/d</span>" : "$" + Number(h.applied_budget_mxn).toFixed(2)) + "</td>" +
+      "<td>" + escapeHtml(historyResultLabel(h)) + "</td>" +
+      "<td class='reason'>" + escapeHtml(historyDetailText(h)) + "</td>" +
+      "</tr>";
+  }
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+function historyResultLabel(h) {
+  if (h.apply_status === "success") return "Google Ads OK";
+  if (h.review_status === "rejected") return "Sin cambio";
+  if (h.review_status === "postponed") return "Pendiente";
+  if (h.review_status === "validated_not_applied") return "Validado";
+  return h.apply_status || "";
+}
+
+function historyDetailText(h) {
+  var validateOk = h.validate_only_status === "success";
+  var applyOk = h.apply_status === "success";
+  if (validateOk && applyOk) return "validate_only OK / apply OK";
+  if (validateOk) return "validate_only OK";
+  if (h.latest_review_action) return h.latest_review_action;
+  return "";
 }
 
 function render() {

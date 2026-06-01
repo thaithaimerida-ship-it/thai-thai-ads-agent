@@ -345,6 +345,76 @@ def test_presupuestos_page_has_separate_preview_ui_without_apply_call():
     assert "class='pick'" not in preview_block
 
 
+def test_presupuestos_page_has_read_only_budget_history_section():
+    from routes.presupuestos import _PAGE
+
+    assert "Historial de presupuestos" in _PAGE
+    assert 'fetch("/presupuestos/history?status=all&amp;limit=20")' not in _PAGE
+    assert 'fetch("/presupuestos/history?status=all&limit=20")' in _PAGE
+    assert "function loadHistory()" in _PAGE
+    assert "function renderHistory(history)" in _PAGE
+    assert "Sin historial de presupuestos." in _PAGE
+    assert "No se pudo cargar el historial de presupuestos." in _PAGE
+
+
+def test_presupuestos_history_render_shows_expected_budget_audit_copy():
+    from routes.presupuestos import _PAGE
+
+    history_block = _PAGE.split("function renderHistory(history)", 1)[1]
+    history_block = history_block.split("function historyResultLabel", 1)[0]
+
+    assert "Thai Mérida - Delivery" not in history_block
+    assert "Fecha" in history_block
+    assert "Campaña" in history_block
+    assert "Estado" in history_block
+    assert "Presupuesto anterior" in history_block
+    assert "Presupuesto nuevo" in history_block
+    assert "Resultado" in history_block
+    assert "Detalle" in history_block
+    assert "review_status_label" in history_block
+    assert "previous_budget_mxn" in history_block
+    assert "applied_budget_mxn" in history_block
+    assert "historyResultLabel" in history_block
+    assert "historyDetailText" in history_block
+    assert "$\" + Number(h.previous_budget_mxn).toFixed(2)" in history_block
+    assert "$\" + Number(h.applied_budget_mxn).toFixed(2)" in history_block
+
+
+def test_presupuestos_history_labels_google_ads_success_and_validate_apply_ok():
+    from routes.presupuestos import _PAGE
+
+    assert "Google Ads OK" in _PAGE
+    assert "validate_only OK / apply OK" in _PAGE
+    result_block = _PAGE.split("function historyResultLabel", 1)[1]
+    result_block = result_block.split("function historyDetailText", 1)[0]
+    detail_block = _PAGE.split("function historyDetailText", 1)[1]
+    detail_block = detail_block.split("function render()", 1)[0]
+
+    assert "apply_status === \"success\"" in result_block
+    assert "Google Ads OK" in result_block
+    assert "validate_only_status === \"success\"" in detail_block
+    assert "apply_status === \"success\"" in detail_block
+    assert "validate_only OK / apply OK" in detail_block
+
+
+def test_presupuestos_history_block_has_no_mutating_controls_or_calls():
+    from routes.presupuestos import _PAGE
+
+    history_section = _PAGE.split("<section id=\"historySection\"", 1)[1]
+    history_section = history_section.split("<div id=\"banner\"", 1)[0]
+    history_block = _PAGE.split("function renderHistory(history)", 1)[1]
+    history_block = history_block.split("function historyResultLabel", 1)[0]
+
+    combined = history_section + history_block
+    assert "Aplicar presupuesto" not in combined
+    assert "class='pick'" not in combined
+    assert 'class="pick"' not in combined
+    assert "/budget-recommendations/apply-approved" not in combined
+    assert "/apply-budget-changes" not in combined
+    assert "decision_ids" not in combined
+    assert "<button" not in history_section
+
+
 def test_manual_preview_ui_has_review_buttons_without_apply_language():
     from routes.presupuestos import _PAGE
 
