@@ -230,27 +230,45 @@ class MemorySystem:
             DEDUP_REJECTED_DAYS,
             DEDUP_POSTPONED_DAYS,
         )
-        if action_type == "negative" and key is not None:
-            where_key = " AND keyword = ?"
-            params = (action_type, campaign_id, key)
-        elif action_type == "quality_alert" and key is not None:
-            # No hay columna nativa para alert_type — vive en evidence_json.
-            # LIKE es suficiente para V1; V2 podría agregar columna alert_type.
-            where_key = " AND evidence_json LIKE ?"
-            params = (action_type, campaign_id, f'%"alert_type": "{key}"%')
-        else:
-            where_key = ""
-            params = (action_type, campaign_id)
-        sql = f"""
-            SELECT id, executed, approved_at, rejected_at, postponed_at,
-                   (julianday('now') - julianday(created_at)) AS age_days
-              FROM autonomous_decisions
-             WHERE action_type = ? AND campaign_id = ?{where_key}
-             ORDER BY created_at DESC
-             LIMIT 1
-        """
         with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(sql, params).fetchone()
+            if action_type == "negative" and key is not None:
+                row = conn.execute(
+                    """
+                    SELECT id, executed, approved_at, rejected_at, postponed_at,
+                           (julianday('now') - julianday(created_at)) AS age_days
+                      FROM autonomous_decisions
+                     WHERE action_type = ? AND campaign_id = ? AND keyword = ?
+                     ORDER BY created_at DESC
+                     LIMIT 1
+                    """,
+                    (action_type, campaign_id, key),
+                ).fetchone()
+            elif action_type == "quality_alert" and key is not None:
+                # No hay columna nativa para alert_type — vive en evidence_json.
+                # LIKE es suficiente para V1; V2 podría agregar columna alert_type.
+                row = conn.execute(
+                    """
+                    SELECT id, executed, approved_at, rejected_at, postponed_at,
+                           (julianday('now') - julianday(created_at)) AS age_days
+                      FROM autonomous_decisions
+                     WHERE action_type = ? AND campaign_id = ? AND evidence_json LIKE ?
+                     ORDER BY created_at DESC
+                     LIMIT 1
+                    """,
+                    (action_type, campaign_id, f'%"alert_type": "{key}"%'),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT id, executed, approved_at, rejected_at, postponed_at,
+                           (julianday('now') - julianday(created_at)) AS age_days
+                      FROM autonomous_decisions
+                     WHERE action_type = ? AND campaign_id = ?
+                     ORDER BY created_at DESC
+                     LIMIT 1
+                    """,
+                    (action_type, campaign_id),
+                ).fetchone()
         if not row:
             return (True, None, "no_prior")
         id_, executed, approved_at, rejected_at, postponed_at, age_days = row
@@ -275,16 +293,17 @@ class MemorySystem:
         Retorna el número de propuestas expiradas en este sweep.
         """
         from config.agent_config import PROPOSAL_EXPIRY_HOURS
+        expiry_modifier = f"+{int(PROPOSAL_EXPIRY_HOURS)} hours"
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(f"""
+            cursor = conn.execute("""
                 UPDATE autonomous_decisions
                 SET postponed_at = datetime('now')
                 WHERE decision = 'proposed'
                   AND approved_at   IS NULL
                   AND rejected_at   IS NULL
                   AND postponed_at  IS NULL
-                  AND datetime(created_at, '+{PROPOSAL_EXPIRY_HOURS} hours') < datetime('now')
-            """)
+                  AND datetime(created_at, ?) < datetime('now')
+            """, (expiry_modifier,))
             return cursor.rowcount
 
     def has_pending_proposal(self, keyword: str, campaign_id: str) -> bool:
@@ -296,8 +315,9 @@ class MemorySystem:
         original sigue vigente.
         """
         from config.agent_config import PROPOSAL_EXPIRY_HOURS
+        expiry_modifier = f"+{int(PROPOSAL_EXPIRY_HOURS)} hours"
         with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(f"""
+            row = conn.execute("""
                 SELECT id FROM autonomous_decisions
                 WHERE decision    = 'proposed'
                   AND keyword     = ?
@@ -305,9 +325,9 @@ class MemorySystem:
                   AND approved_at  IS NULL
                   AND rejected_at  IS NULL
                   AND postponed_at IS NULL
-                  AND datetime(created_at, '+{PROPOSAL_EXPIRY_HOURS} hours') >= datetime('now')
+                  AND datetime(created_at, ?) >= datetime('now')
                 LIMIT 1
-            """, (keyword, str(campaign_id))).fetchone()
+            """, (keyword, str(campaign_id), expiry_modifier)).fetchone()
             return row is not None
 
     def mark_proposals_sent(self, decision_ids: list) -> None:
@@ -318,11 +338,18 @@ class MemorySystem:
         """
         if not decision_ids:
             return
-        placeholders = ",".join("?" * len(decision_ids))
+        normalized_ids = []
+        for decision_id in decision_ids:
+            try:
+                normalized_ids.append(int(decision_id))
+            except (TypeError, ValueError):
+                continue
+        if not normalized_ids:
+            return
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                f"UPDATE autonomous_decisions SET proposal_sent = 1 WHERE id IN ({placeholders})",
-                decision_ids,
+            conn.executemany(
+                "UPDATE autonomous_decisions SET proposal_sent = 1 WHERE id = ?",
+                [(decision_id,) for decision_id in normalized_ids],
             )
 
     def get_decision_by_token(self, token: str) -> dict | None:
@@ -1015,22 +1042,22 @@ def get_recent_actions_with_outcomes(days: int = 2) -> list:
         Si falla la consulta: lista vacía (nunca lanza excepción).
     """
     try:
+        days_int = int(days)
         db_path = get_db_path()
-        placeholders = ",".join("?" * len(_BUDGET_ACTION_TYPES))
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                f"""
+                """
                 SELECT action_type, campaign_name, keyword,
                        evidence_json, created_at, decision
                 FROM autonomous_decisions
-                WHERE action_type IN ({placeholders})
+                WHERE action_type IN (?, ?, ?, ?)
                   AND decision IN ('auto_executed', 'approved', 'executed')
                   AND created_at >= datetime('now', ? || ' days')
                 ORDER BY created_at DESC
                 LIMIT 10
                 """,
-                (*_BUDGET_ACTION_TYPES, f"-{days}"),
+                (*_BUDGET_ACTION_TYPES, f"-{days_int}"),
             ).fetchall()
 
         result = []
