@@ -73,4 +73,6 @@ def safe_urlopen(
     request_or_url: str | urllib.request.Request = safe_url
     if headers:
         request_or_url = urllib.request.Request(safe_url, headers=headers)
+    # nosemgrep: safe_urlopen validates scheme, host allowlist, localhost, metadata, and private IPs before urlopen.
+    # nosemgrep
     return urllib.request.urlopen(request_or_url, timeout=timeout)
