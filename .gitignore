@@ -31,6 +31,9 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
+node_modules/
+playwright-report/
+test-results/
 
 # Temp diagnostic and one-time fix scripts
 diag_*.py
