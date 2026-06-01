@@ -154,6 +154,70 @@ def _mark_manual_preview_validated(memory, decision_id: int, *, applied=False) -
         )
 
 
+def _mark_manual_preview_applied(memory, decision_id: int) -> None:
+    with sqlite3.connect(memory.db_path) as conn:
+        row = conn.execute(
+            "SELECT evidence_json FROM autonomous_decisions WHERE id = ?",
+            (decision_id,),
+        ).fetchone()
+        evidence = json.loads(row[0])
+        applied_at = "2026-05-31T23:54:04.984798+00:00"
+        fresh_validate_only_result = {
+            "status": "success",
+            "validate_only": True,
+            "resource_name": None,
+            "message": "validate_only_ok",
+        }
+        apply_result = {
+            "status": "success",
+            "validate_only": False,
+            "resource_name": "customers/4021070209/campaignBudgets/14797861126",
+        }
+        actions = evidence.get("review_actions")
+        if not isinstance(actions, list):
+            actions = []
+        actions.append({
+            "action": "apply_approved",
+            "actor": "admin_api_token",
+            "source": "manual_review",
+            "reason": "Aplicacion real controlada.",
+            "created_at": applied_at,
+            "stage": "apply_real",
+            "current_budget_verified_mxn": 50.0,
+            "requested_budget_mxn": 55.0,
+            "fresh_validate_only_result": fresh_validate_only_result,
+            "apply_result": apply_result,
+            "applied": True,
+        })
+        evidence["review_actions"] = actions
+        evidence["approval_validation"] = {
+            "validated": True,
+            "validated_at": "2026-05-28T21:30:56+00:00",
+            "current_budget_verified_mxn": 50.0,
+            "requested_budget_mxn": 55.0,
+            "validate_only_result": {
+                "success": True,
+                "status": "success",
+                "message": "validate_only_ok",
+                "resource_name": None,
+            },
+            "applied": True,
+            "applied_at": applied_at,
+            "previous_budget_mxn": 50.0,
+            "applied_budget_mxn": 55.0,
+            "fresh_validate_only_result": fresh_validate_only_result,
+            "apply_result": apply_result,
+        }
+        conn.execute(
+            """
+            UPDATE autonomous_decisions
+               SET executed = 1, approved_at = '2026-05-31 23:54:04', evidence_json = ?
+             WHERE id = ?
+            """,
+            (json.dumps(evidence), decision_id),
+        )
+
+
 def _insert_negative(memory) -> int:
     return memory.record_autonomous_decision(
         action_type="negative", risk_level=2, urgency="normal",
@@ -1385,6 +1449,155 @@ class TestDataEndpointContract:
 
         assert r.status_code == 200
         update.assert_not_called()
+
+
+class TestHistoryEndpoint:
+    def test_history_returns_applied_budget_decision_with_audit_fields(
+        self, client, isolated_db, monkeypatch,
+    ):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+        _mark_manual_preview_applied(isolated_db, decision_id)
+        engine_spy = MagicMock()
+        monkeypatch.setattr("main.get_engine_modules", engine_spy)
+
+        r = client.get("/presupuestos/history")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["count"] == 1
+        assert body["limit"] == 20
+        assert body["filter"] == "all"
+        assert engine_spy.call_count == 0
+        item = body["history"][0]
+        assert item["id"] == decision_id
+        assert item["campaign_id"] == "22839241090"
+        assert item["campaign_name"] == "Thai Mérida - Delivery"
+        assert item["action_type"] == "scale"
+        assert item["decision"] == "proposed"
+        assert item["executed"] == 1
+        assert item["approved_at"] == "2026-05-31 23:54:04"
+        assert item["rejected_at"] is None
+        assert item["postponed_at"] is None
+        assert item["review_status"] == "applied"
+        assert item["review_status_label"] == "Aplicado"
+        assert item["latest_review_action"] == "apply_approved"
+        assert item["source"] == "manual_preview"
+        assert item["current_budget_mxn"] == 50.0
+        assert item["new_budget_mxn"] == 55.0
+        assert item["previous_budget_mxn"] == 50.0
+        assert item["applied_budget_mxn"] == 55.0
+        assert item["approval_validated"] is True
+        assert item["approval_applied"] is True
+        assert item["applied_at"] == "2026-05-31T23:54:04.984798+00:00"
+        assert item["validate_only_status"] == "success"
+        assert item["validate_only_ok"] is True
+        assert item["apply_status"] == "success"
+        assert item["apply_ok"] is True
+        assert item["apply_resource_name_present"] is True
+        assert "resource_name" not in item
+
+    def test_history_filters_budget_review_states(self, client, isolated_db):
+        applied_id = _insert_manual_preview_scale(isolated_db, campaign_id="1", campaign_name="Applied")
+        _mark_manual_preview_applied(isolated_db, applied_id)
+        rejected_id = _insert_manual_preview_scale(isolated_db, campaign_id="2", campaign_name="Rejected")
+        postponed_id = _insert_manual_preview_scale(isolated_db, campaign_id="3", campaign_name="Postponed")
+        validated_id = _insert_manual_preview_scale(isolated_db, campaign_id="4", campaign_name="Validated")
+        _mark_manual_preview_validated(isolated_db, validated_id, applied=False)
+        with sqlite3.connect(isolated_db.db_path) as conn:
+            conn.execute(
+                "UPDATE autonomous_decisions SET rejected_at = '2026-06-01 10:00:00' WHERE id = ?",
+                (rejected_id,),
+            )
+            conn.execute(
+                "UPDATE autonomous_decisions SET postponed_at = '2026-06-03 10:00:00' WHERE id = ?",
+                (postponed_id,),
+            )
+
+        cases = {
+            "applied": [applied_id],
+            "rejected": [rejected_id],
+            "postponed": [postponed_id],
+            "validated_not_applied": [validated_id],
+        }
+        for status, expected_ids in cases.items():
+            body = client.get(f"/presupuestos/history?status={status}").json()
+            assert [item["id"] for item in body["history"]] == expected_ids
+            assert body["filter"] == status
+
+    def test_history_invalid_filter_returns_422(self, client, isolated_db):
+        r = client.get("/presupuestos/history?status=weird")
+
+        assert r.status_code == 422
+
+    def test_history_limit_defaults_and_caps_at_50(self, client, isolated_db):
+        for idx in range(55):
+            decision_id = _insert_manual_preview_scale(
+                isolated_db,
+                campaign_id=str(idx),
+                campaign_name=f"Campaign {idx}",
+            )
+            _mark_manual_preview_applied(isolated_db, decision_id)
+
+        default_body = client.get("/presupuestos/history").json()
+        capped_body = client.get("/presupuestos/history?limit=999").json()
+
+        assert default_body["limit"] == 20
+        assert len(default_body["history"]) == 20
+        assert capped_body["limit"] == 50
+        assert len(capped_body["history"]) == 50
+
+    def test_history_corrupt_evidence_json_does_not_break_endpoint(
+        self, client, isolated_db,
+    ):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+        with sqlite3.connect(isolated_db.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE autonomous_decisions
+                   SET executed = 1,
+                       approved_at = '2026-05-31 23:54:04',
+                       evidence_json = '{bad json'
+                 WHERE id = ?
+                """,
+                (decision_id,),
+            )
+
+        body = client.get("/presupuestos/history").json()
+
+        assert body["status"] == "success"
+        assert body["count"] == 1
+        item = body["history"][0]
+        assert item["id"] == decision_id
+        assert item["review_status"] == "applied"
+        assert item["previous_budget_mxn"] is None
+        assert item["applied_budget_mxn"] is None
+        assert item["approval_validated"] is False
+        assert item["approval_applied"] is False
+        assert item["validate_only_status"] is None
+        assert item["apply_status"] is None
+        assert item["apply_resource_name_present"] is False
+
+    def test_history_does_not_change_presupuestos_data_contract(
+        self, client, isolated_db, customer_id_env, monkeypatch,
+    ):
+        pending_id = _insert_manual_preview_scale(isolated_db, campaign_id="pending")
+        applied_id = _insert_manual_preview_scale(isolated_db, campaign_id="applied")
+        _mark_manual_preview_applied(isolated_db, applied_id)
+        engine_stub = {
+            "get_ads_client": MagicMock(return_value=MagicMock()),
+            "fetch_campaign_data": MagicMock(return_value=[
+                {"id": "pending", "daily_budget_mxn": 50.0},
+                {"id": "applied", "daily_budget_mxn": 55.0},
+            ]),
+        }
+        monkeypatch.setattr("main.get_engine_modules", lambda: engine_stub)
+
+        body = client.get("/presupuestos/data").json()
+
+        assert body["status"] == "success"
+        assert body["count"] == 1
+        assert body["recommendations"][0]["id"] == pending_id
 
 
 class TestBatchMixedOutcomes:

@@ -17,7 +17,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -852,6 +852,59 @@ async def presupuestos_data() -> dict[str, Any]:
         "recommendations": recommendations,
         "latest_at": latest_at,
         "count": len(recommendations),
+    }
+
+
+@router.get("/presupuestos/history")
+async def presupuestos_history(
+    status: Literal["all", "applied", "rejected", "postponed", "validated_not_applied"] = "all",
+    limit: int = Query(default=20, ge=1),
+) -> dict[str, Any]:
+    """Historial read-only de decisiones de presupuesto cerradas/auditadas."""
+    effective_limit = min(limit, 50)
+    db_path = get_db_path()
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT id, action_type, campaign_id, campaign_name, decision,
+                       evidence_json, created_at, executed, approved_at,
+                       rejected_at, postponed_at
+                 FROM autonomous_decisions
+                 WHERE action_type IN ('scale', 'reduce', 'budget_action', 'budget_scale')
+                   AND (
+                         executed = 1
+                      OR approved_at IS NOT NULL
+                      OR rejected_at IS NOT NULL
+                      OR postponed_at IS NOT NULL
+                      OR evidence_json LIKE '%"approval_validation"%'
+                      OR evidence_json LIKE '%"review_actions"%'
+                   )
+                 ORDER BY COALESCE(approved_at, rejected_at, postponed_at, created_at) DESC,
+                          id DESC
+                """
+            ).fetchall()
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "history": []}
+
+    history = []
+    for row in rows:
+        item = _budget_history_item(row)
+        if item["review_status"] is None:
+            continue
+        if status != "all" and item["review_status"] != status:
+            continue
+        history.append(item)
+        if len(history) >= effective_limit:
+            break
+
+    return {
+        "status": "success",
+        "history": history,
+        "count": len(history),
+        "limit": effective_limit,
+        "filter": status,
     }
 
 
@@ -1992,6 +2045,97 @@ def _display_budget_action_type(action_type):
     if action_type == "budget_scale":
         return "scale"
     return action_type
+
+
+def _budget_history_item(row: sqlite3.Row) -> dict[str, Any]:
+    evidence = _safe_json(row["evidence_json"])
+    approval_validation = evidence.get("approval_validation") if isinstance(evidence, dict) else {}
+    if not isinstance(approval_validation, dict):
+        approval_validation = {}
+    review_actions = evidence.get("review_actions") if isinstance(evidence, dict) else []
+    if not isinstance(review_actions, list):
+        review_actions = []
+    latest_action = review_actions[-1] if review_actions and isinstance(review_actions[-1], dict) else {}
+    latest_action_name = latest_action.get("action")
+    review_status = _budget_history_status(row, approval_validation, latest_action_name)
+    validate_result = approval_validation.get("fresh_validate_only_result")
+    if not isinstance(validate_result, dict) or not validate_result:
+        validate_result = approval_validation.get("validate_only_result")
+    if not isinstance(validate_result, dict):
+        validate_result = {}
+    apply_result = approval_validation.get("apply_result")
+    if not isinstance(apply_result, dict):
+        apply_result = {}
+    apply_resource_name = apply_result.get("resource_name")
+
+    return {
+        "id": row["id"],
+        "campaign_id": row["campaign_id"],
+        "campaign_name": row["campaign_name"],
+        "action_type": _display_budget_action_type(row["action_type"]),
+        "action_type_original": row["action_type"],
+        "decision": row["decision"],
+        "executed": row["executed"],
+        "created_at": row["created_at"],
+        "approved_at": row["approved_at"],
+        "rejected_at": row["rejected_at"],
+        "postponed_at": row["postponed_at"],
+        "review_status": review_status,
+        "review_status_label": _budget_history_status_label(review_status),
+        "latest_review_action": latest_action_name,
+        "source": evidence.get("source") if isinstance(evidence, dict) else None,
+        "current_budget_mxn": _number(evidence.get("current_budget_mxn")) if isinstance(evidence, dict) else None,
+        "new_budget_mxn": _budget_suggestion_amount(evidence),
+        "previous_budget_mxn": _number(approval_validation.get("previous_budget_mxn")),
+        "applied_budget_mxn": _number(approval_validation.get("applied_budget_mxn")),
+        "approval_validated": approval_validation.get("validated") is True,
+        "approval_applied": approval_validation.get("applied") is True,
+        "applied_at": approval_validation.get("applied_at"),
+        "validate_only_status": validate_result.get("status"),
+        "validate_only_ok": _budget_history_validate_only_ok(validate_result),
+        "apply_status": apply_result.get("status"),
+        "apply_ok": apply_result.get("status") == "success",
+        "apply_resource_name_present": bool(apply_resource_name),
+        "reason": evidence.get("reason") if isinstance(evidence, dict) else None,
+    }
+
+
+def _budget_history_status(
+    row: sqlite3.Row,
+    approval_validation: dict[str, Any],
+    latest_action_name: Any,
+) -> str | None:
+    if row["executed"] == 1 or approval_validation.get("applied") is True or latest_action_name == "apply_approved":
+        return "applied"
+    if row["rejected_at"] is not None or latest_action_name == "reject":
+        return "rejected"
+    if row["postponed_at"] is not None or latest_action_name == "postpone":
+        return "postponed"
+    if (
+        approval_validation.get("validated") is True
+        and approval_validation.get("applied") is False
+        and row["executed"] == 0
+        and row["rejected_at"] is None
+        and row["postponed_at"] is None
+    ):
+        return "validated_not_applied"
+    return None
+
+
+def _budget_history_status_label(status: str | None) -> str | None:
+    labels = {
+        "applied": "Aplicado",
+        "rejected": "Rechazado",
+        "postponed": "Pospuesto",
+        "validated_not_applied": "Validado sin aplicar",
+    }
+    return labels.get(status)
+
+
+def _budget_history_validate_only_ok(result: dict[str, Any]) -> bool:
+    if result.get("validate_only") is True and result.get("status") == "success":
+        return True
+    return result.get("success") is True and result.get("status") == "success"
 
 
 @router.post("/apply-budget-changes", dependencies=[Depends(require_token)])
