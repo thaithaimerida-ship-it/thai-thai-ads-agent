@@ -105,6 +105,10 @@ _PAGE = """<!doctype html>
   .action-reduce { color: #b35900; font-weight: 600; }
   .review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; min-width: 220px; }
   .review-actions .review-action { white-space: nowrap; }
+  .budget-adjust { display: grid; gap: 6px; justify-items: end; min-width: 190px; }
+  .budget-adjust input { width: 110px; text-align: right; }
+  .budget-adjust button { white-space: nowrap; }
+  .budget-adjust .muted { max-width: 210px; text-align: right; line-height: 1.25; }
   .urgency-critical { background: #fde0e0; }
   .urgency-urgent   { background: #fff3c0; }
   td.drift-medium  { background: #fff3c0; font-weight: 600; }
@@ -208,6 +212,11 @@ el("tableWrap").addEventListener("change", function(ev) {
   if (ev.target && ev.target.classList.contains("pick")) updateApplyState();
 });
 el("tableWrap").addEventListener("click", function(ev) {
+  if (ev.target && ev.target.classList.contains("budget-adjust-save")) {
+    var adjustId = parseInt(ev.target.getAttribute("data-id"), 10);
+    if (!isNaN(adjustId)) updateRequestedBudget(adjustId, ev.target);
+    return;
+  }
   if (ev.target && ev.target.classList.contains("review-action")) {
     var id = parseInt(ev.target.getAttribute("data-id"), 10);
     var action = ev.target.getAttribute("data-action");
@@ -337,6 +346,57 @@ function applyApproved(decisionId, button) {
         return;
       }
       showBanner("ok", "Presupuesto aplicado correctamente.");
+      load();
+    })
+    .catch(function(e) {
+      showBanner("err", "Error de red: " + escapeHtml(e.message));
+      if (button) button.disabled = false;
+    });
+}
+
+function updateRequestedBudget(decisionId, button) {
+  var token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    showBanner("warn", "Guardar ajuste requiere token. Pega tu token para actualizar el monto a validar.");
+    return;
+  }
+  var input = document.getElementById("budget-adjust-" + decisionId);
+  if (!input) {
+    showBanner("err", "No se encontró el campo de monto para esta propuesta.");
+    return;
+  }
+  var amount = Number(input.value);
+  if (!Number.isFinite(amount)) {
+    showBanner("err", "Ingresa un monto válido.");
+    return;
+  }
+  var confirmed = window.confirm("Esto NO aplicará presupuesto. Solo guardará el monto para validarlo después.");
+  if (!confirmed) {
+    showBanner("warn", "Ajuste cancelado.");
+    return;
+  }
+  if (button) button.disabled = true;
+  fetch("/budget-recommendations/update-requested-budget", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Token": token },
+    body: JSON.stringify({
+      decision_id: decisionId,
+      requested_budget_mxn: amount,
+      source: "manual_review",
+      reason: "Ajuste manual de presupuesto desde mini-app."
+    }),
+  })
+    .then(function(r) {
+      return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; });
+    })
+    .then(function(res) {
+      if (!res.ok || res.data.status !== "success") {
+        var msg = (res.data && (res.data.detail || res.data.message || res.data.reason)) || ("HTTP " + res.status);
+        showBanner("err", "Error: " + escapeHtml(msg));
+        if (button) button.disabled = false;
+        return;
+      }
+      showBanner("ok", escapeHtml(res.data.message || "Monto ajustado. Requiere nueva validación."));
       load();
     })
     .catch(function(e) {
@@ -691,6 +751,21 @@ function render() {
       ? ""
       : "<button class='secondary review-action' data-action='approve_validate' data-id='" + r.id + "'>Validar aplicación</button>" +
         "<div class='muted'>Esto validará la aplicación, pero no cambiará presupuesto todavía.</div>";
+    var canUpdateRequestedBudget = r.is_manual_preview === true
+      && r.executed === 0
+      && r.approved_at == null
+      && r.rejected_at == null
+      && r.postponed_at == null
+      && r.approval_applied !== true;
+    var newBudgetCell = "$" + Number(r.new_budget_mxn).toFixed(2);
+    if (canUpdateRequestedBudget) {
+      newBudgetCell = "<div class='budget-adjust'>" +
+        "<strong>$" + Number(r.new_budget_mxn).toFixed(2) + "</strong>" +
+        "<input id='budget-adjust-" + r.id + "' class='budget-adjust-input' type=\"number\" step=\"0.01\" min=\"20\" max=\"500\" value=\"" + Number(r.new_budget_mxn).toFixed(2) + "\">" +
+        "<button class='secondary budget-adjust-save' data-action='update_requested_budget' data-id='" + r.id + "'>Guardar ajuste</button>" +
+        "<div class='muted'>Esto no aplica el presupuesto. Solo actualiza el monto a validar.</div>" +
+        "</div>";
+    }
     var reviewButtons = r.is_manual_preview
       ? "<div class='review-actions'>" +
         "<button class='secondary review-action' data-action='reject' data-id='" + r.id + "'>Rechazar</button> " +
@@ -722,7 +797,7 @@ function render() {
         reviewButtons +
       "</td>" +
       currentCell +
-      "<td class='num'>$" + Number(r.new_budget_mxn).toFixed(2) + "</td>" +
+      "<td class='num'>" + newBudgetCell + "</td>" +
       "<td>" + escapeHtml(r.urgency) + "</td>" +
       "<td class='reason' title='" + escapeHtml(r.reason) + "'>" + escapeHtml(r.reason) + "</td>" +
       "<td>" + escapeHtml(r.created_at || "") + "</td>" +

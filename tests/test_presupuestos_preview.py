@@ -486,6 +486,45 @@ def test_manual_preview_validated_applyable_copy_is_final_apply_only():
     assert "decision_ids" not in apply_block
 
 
+def test_manual_preview_ui_has_requested_budget_adjustment_controls():
+    from routes.presupuestos import _PAGE
+
+    assert "Guardar ajuste" in _PAGE
+    assert "Esto no aplica el presupuesto. Solo actualiza el monto a validar." in _PAGE
+    assert "/budget-recommendations/update-requested-budget" in _PAGE
+    assert "Monto ajustado. Requiere nueva validación." in _PAGE
+    assert "button.disabled = true" in _PAGE
+
+    render_block = _PAGE.split("function render()", 1)[1]
+    render_block = render_block.split("function savePreview", 1)[0]
+    assert 'type="number"' in render_block
+    assert 'step="0.01"' in render_block
+    assert 'min="20"' in render_block
+    assert 'max="500"' in render_block
+    assert "budget-adjust-input" in render_block
+    assert "data-action='update_requested_budget'" in render_block
+    manual_preview_row_block = render_block.split("var reviewButtons = r.is_manual_preview", 1)[1]
+    manual_preview_row_block = manual_preview_row_block.split("var actionLabel", 1)[0]
+    assert "class='pick'" not in manual_preview_row_block
+
+
+def test_requested_budget_adjustment_action_is_not_apply_or_batch():
+    from routes.presupuestos import _PAGE
+
+    assert "function updateRequestedBudget(decisionId, button)" in _PAGE
+    update_block = _PAGE.split("function updateRequestedBudget(decisionId, button)", 1)[1]
+    update_block = update_block.split("function updateApplyState", 1)[0]
+
+    assert "/budget-recommendations/update-requested-budget" in update_block
+    assert "source: \"manual_review\"" in update_block
+    assert "Ajuste manual de presupuesto desde mini-app." in update_block
+    assert "/budget-recommendations/apply-approved" not in update_block
+    assert "/apply-budget-changes" not in update_block
+    assert "validate_only" not in update_block
+    assert "decision_ids" not in update_block
+    assert "Esto NO aplicará presupuesto. Solo guardará el monto para validarlo después." in update_block
+
+
 def test_presupuestos_preview_uses_human_copy_for_security_rules():
     from routes.presupuestos import _PAGE
 

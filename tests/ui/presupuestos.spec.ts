@@ -3,8 +3,10 @@ import { expect, test } from "@playwright/test";
 test("presupuestos history renders read-only audit state", async ({ page }) => {
   const forbiddenCalls: string[] = [];
   const forbiddenPaths = [
+    "/budget-recommendations/update-requested-budget",
     "/budget-recommendations/apply-approved",
-    "/apply-budget-changes"
+    "/apply-budget-changes",
+    "/execute-optimization"
   ];
 
   for (const path of forbiddenPaths) {
