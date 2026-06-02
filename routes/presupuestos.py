@@ -761,7 +761,7 @@ function render() {
     if (canUpdateRequestedBudget) {
       newBudgetCell = "<div class='budget-adjust'>" +
         "<strong>$" + Number(r.new_budget_mxn).toFixed(2) + "</strong>" +
-        "<input id='budget-adjust-" + r.id + "' class='budget-adjust-input' type=\"number\" step=\"0.01\" min=\"20\" max=\"500\" value=\"" + Number(r.new_budget_mxn).toFixed(2) + "\">" +
+        "<input id='budget-adjust-" + r.id + "' class='budget-adjust-input' type='number' step='0.01' min='20' max='500' value='" + Number(r.new_budget_mxn).toFixed(2) + "'>" +
         "<button class='secondary budget-adjust-save' data-action='update_requested_budget' data-id='" + r.id + "'>Guardar ajuste</button>" +
         "<div class='muted'>Esto no aplica el presupuesto. Solo actualiza el monto a validar.</div>" +
         "</div>";

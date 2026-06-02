@@ -497,10 +497,10 @@ def test_manual_preview_ui_has_requested_budget_adjustment_controls():
 
     render_block = _PAGE.split("function render()", 1)[1]
     render_block = render_block.split("function savePreview", 1)[0]
-    assert 'type="number"' in render_block
-    assert 'step="0.01"' in render_block
-    assert 'min="20"' in render_block
-    assert 'max="500"' in render_block
+    assert "type='number'" in render_block
+    assert "step='0.01'" in render_block
+    assert "min='20'" in render_block
+    assert "max='500'" in render_block
     assert "budget-adjust-input" in render_block
     assert "data-action='update_requested_budget'" in render_block
     manual_preview_row_block = render_block.split("var reviewButtons = r.is_manual_preview", 1)[1]
