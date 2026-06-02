@@ -350,11 +350,35 @@ def test_presupuestos_page_has_read_only_budget_history_section():
 
     assert "Historial de presupuestos" in _PAGE
     assert 'fetch("/presupuestos/history?status=all&amp;limit=20")' not in _PAGE
-    assert 'fetch("/presupuestos/history?status=all&limit=20")' in _PAGE
+    assert '"/presupuestos/history?status=" + historyFilter + "&limit=" + historyLimit' in _PAGE
     assert "function loadHistory()" in _PAGE
     assert "function renderHistory(history)" in _PAGE
-    assert "Sin historial de presupuestos." in _PAGE
+    assert "Sin historial para este filtro." in _PAGE
     assert "No se pudo cargar el historial de presupuestos." in _PAGE
+
+
+def test_presupuestos_history_has_read_only_filters_and_limit_controls():
+    from routes.presupuestos import _PAGE
+
+    assert "Actualizar historial" in _PAGE
+    assert "Todos" in _PAGE
+    assert "Aplicados" in _PAGE
+    assert "Rechazados" in _PAGE
+    assert "Pospuestos" in _PAGE
+    assert "Validados no aplicados" in _PAGE
+    assert "Últimos 20" in _PAGE
+    assert "Últimos 50" in _PAGE
+    assert 'value="all"' in _PAGE
+    assert 'value="applied"' in _PAGE
+    assert 'value="rejected"' in _PAGE
+    assert 'value="postponed"' in _PAGE
+    assert 'value="validated_not_applied"' in _PAGE
+    assert 'value="20"' in _PAGE
+    assert 'value="50"' in _PAGE
+    assert 'var historyFilter = "all";' in _PAGE
+    assert "var historyLimit = 20;" in _PAGE
+    assert "Mostrando X movimientos" not in _PAGE
+    assert "Mostrando \" + history.length + \" movimientos" in _PAGE
 
 
 def test_presupuestos_history_render_shows_expected_budget_audit_copy():
@@ -411,8 +435,12 @@ def test_presupuestos_history_block_has_no_mutating_controls_or_calls():
     assert 'class="pick"' not in combined
     assert "/budget-recommendations/apply-approved" not in combined
     assert "/apply-budget-changes" not in combined
+    assert "/budget-recommendations/update-requested-budget" not in combined
+    assert "/execute-optimization" not in combined
+    assert "Guardar ajuste" not in combined
     assert "decision_ids" not in combined
-    assert "<button" not in history_section
+    assert "Actualizar historial" in history_section
+    assert history_section.count("<button") == 1
 
 
 def test_manual_preview_ui_has_review_buttons_without_apply_language():

@@ -109,6 +109,9 @@ _PAGE = """<!doctype html>
   .budget-adjust input { width: 110px; text-align: right; }
   .budget-adjust button { white-space: nowrap; }
   .budget-adjust .muted { max-width: 210px; text-align: right; line-height: 1.25; }
+  .history-controls { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .25rem 0 .6rem; }
+  .history-controls label { display: flex; gap: .35rem; align-items: center; color: #666; font-size: .85rem; }
+  #historyMeta { color: #666; font-size: .85rem; }
   .urgency-critical { background: #fde0e0; }
   .urgency-urgent   { background: #fff3c0; }
   td.drift-medium  { background: #fff3c0; font-weight: 600; }
@@ -160,6 +163,25 @@ _PAGE = """<!doctype html>
   </button>
   <section id="historySection">
     <h2>Historial de presupuestos</h2>
+    <div class="history-controls">
+      <label>Filtro
+        <select id="historyFilter">
+          <option value="all">Todos</option>
+          <option value="applied">Aplicados</option>
+          <option value="rejected">Rechazados</option>
+          <option value="postponed">Pospuestos</option>
+          <option value="validated_not_applied">Validados no aplicados</option>
+        </select>
+      </label>
+      <label>Mostrar
+        <select id="historyLimit">
+          <option value="20">Últimos 20</option>
+          <option value="50">Últimos 50</option>
+        </select>
+      </label>
+      <button id="historyRefresh" class="secondary">Actualizar historial</button>
+      <span id="historyMeta">Mostrando 0 movimientos</span>
+    </div>
     <div id="historyWrap"><div id='empty'>Cargando historial...</div></div>
   </section>
   <div id="banner" hidden></div>
@@ -171,6 +193,8 @@ var TOKEN_KEY = "tt_admin_token";
 var rows = [];
 var previewRows = [];
 var historyRows = [];
+var historyFilter = "all";
+var historyLimit = 20;
 var previewCount = 0;
 var latestSavedAt = "n/a";
 
@@ -200,6 +224,16 @@ el("logout").addEventListener("click", function() {
   localStorage.removeItem(TOKEN_KEY); showGate();
 });
 el("load").addEventListener("click", load);
+el("historyFilter").addEventListener("change", function(ev) {
+  historyFilter = ev.target.value || "all";
+  loadHistory();
+});
+el("historyLimit").addEventListener("change", function(ev) {
+  var limit = parseInt(ev.target.value, 10);
+  historyLimit = isNaN(limit) ? 20 : limit;
+  loadHistory();
+});
+el("historyRefresh").addEventListener("click", loadHistory);
 el("previewBtn").addEventListener("click", loadPreview);
 el("applyBtn").addEventListener("click", applySelected);
 el("previewWrap").addEventListener("click", function(ev) {
@@ -530,11 +564,14 @@ function load() {
 }
 
 function loadHistory() {
-  fetch("/presupuestos/history?status=all&limit=20")
+  var url = "/presupuestos/history?status=" + historyFilter + "&limit=" + historyLimit;
+  el("historyMeta").textContent = "Cargando historial...";
+  fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (d.status !== "success") {
         el("historyWrap").innerHTML = "<div id='empty'>No se pudo cargar el historial de presupuestos.</div>";
+        el("historyMeta").textContent = "Filtro: " + historyFilterLabel(historyFilter);
         return;
       }
       historyRows = d.history || [];
@@ -542,6 +579,7 @@ function loadHistory() {
     })
     .catch(function() {
       el("historyWrap").innerHTML = "<div id='empty'>No se pudo cargar el historial de presupuestos.</div>";
+      el("historyMeta").textContent = "Filtro: " + historyFilterLabel(historyFilter);
     });
 }
 
@@ -677,10 +715,23 @@ function labelReviewStatus(value) {
   return labels[value] || value || "";
 }
 
+function historyFilterLabel(value) {
+  var labels = {
+    all: "Todos",
+    applied: "Aplicados",
+    rejected: "Rechazados",
+    postponed: "Pospuestos",
+    validated_not_applied: "Validados no aplicados"
+  };
+  return labels[value] || value || "Todos";
+}
+
 function renderHistory(history) {
   var wrap = el("historyWrap");
+  el("historyMeta").textContent = "Filtro: " + historyFilterLabel(historyFilter) +
+    " · Mostrando " + history.length + " movimientos";
   if (!history.length) {
-    wrap.innerHTML = "<div id='empty'>Sin historial de presupuestos.</div>";
+    wrap.innerHTML = "<div id='empty'>Sin historial para este filtro.</div>";
     return;
   }
   var html = "<table><thead><tr>" +

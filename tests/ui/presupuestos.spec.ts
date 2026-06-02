@@ -21,6 +21,7 @@ test("presupuestos history renders read-only audit state", async ({ page }) => {
 
   await expect(page.getByText("Sin propuestas guardadas pendientes.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Historial de presupuestos" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Actualizar historial" })).toBeVisible();
 
   const history = page.locator("#historyWrap");
   await expect(history).toContainText("Thai Mérida - Delivery");
@@ -32,5 +33,9 @@ test("presupuestos history renders read-only audit state", async ({ page }) => {
 
   await expect(history.locator(".pick")).toHaveCount(0);
   await expect(history.getByRole("button", { name: /Aplicar presupuesto/i })).toHaveCount(0);
+
+  await page.locator("#historyFilter").selectOption("applied");
+  await expect(history).toContainText("Thai Mérida - Delivery");
+  await expect(history).toContainText("Aplicado");
   expect(forbiddenCalls).toEqual([]);
 });
