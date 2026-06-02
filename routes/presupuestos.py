@@ -12,6 +12,7 @@ Solo muestra recomendaciones de las categorías `scale` y `reduce` (decisión #5
 del operador: `negative` → /negativos, `quality_alert` → email).
 """
 import json
+import math
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -69,6 +70,13 @@ class BudgetApplyApprovedRequest(BaseModel):
     decision_id: int
     source: Literal["manual_review"]
     confirmation: str
+    reason: str | None = None
+
+
+class BudgetUpdateRequestedBudgetRequest(BaseModel):
+    decision_id: int
+    requested_budget_mxn: Any = None
+    source: Literal["manual_review"]
     reason: str | None = None
 
 
@@ -1325,6 +1333,86 @@ def _append_budget_apply_approved_action(
     return updated
 
 
+def _valid_budget_number(value: Any) -> float | None:
+    amount = _number(value)
+    if amount is None or not math.isfinite(amount):
+        return None
+    return round(amount, 2)
+
+
+def _requested_budget_guardrail_reason(
+    requested_budget_mxn: float,
+    current_budget_mxn: float,
+) -> str | None:
+    if requested_budget_mxn <= 0:
+        return "invalid_requested_budget_mxn"
+    if requested_budget_mxn < 20.0:
+        return "requested_budget_below_min"
+    if requested_budget_mxn > 500.0:
+        return "requested_budget_above_max"
+    change_pct = (requested_budget_mxn - current_budget_mxn) / current_budget_mxn
+    if change_pct > 0.30:
+        return "requested_budget_increase_too_large"
+    if change_pct < -0.30:
+        return "requested_budget_decrease_too_large"
+    return None
+
+
+def _append_budget_update_requested_action(
+    evidence: dict[str, Any],
+    request: BudgetUpdateRequestedBudgetRequest,
+    *,
+    previous_requested_budget_mxn: float,
+    requested_budget_mxn: float,
+) -> dict[str, Any]:
+    updated = dict(evidence)
+    now = datetime.now(timezone.utc).isoformat()
+    if "original_new_budget_mxn" not in updated:
+        updated["original_new_budget_mxn"] = previous_requested_budget_mxn
+    updated["new_budget_mxn"] = requested_budget_mxn
+    updated["suggested_budget_mxn"] = requested_budget_mxn
+    updated["last_requested_budget_mxn"] = requested_budget_mxn
+    updated["requested_budget_updated_at"] = now
+
+    actions = updated.get("review_actions")
+    if not isinstance(actions, list):
+        actions = []
+    actions.append({
+        "action": "update_requested_budget",
+        "actor": "admin_api_token",
+        "source": request.source,
+        "previous_requested_budget_mxn": previous_requested_budget_mxn,
+        "requested_budget_mxn": requested_budget_mxn,
+        "reason": request.reason or "",
+        "created_at": now,
+    })
+    updated["review_actions"] = actions
+
+    previous_validation = updated.get("approval_validation")
+    if isinstance(previous_validation, dict):
+        updated["approval_validation"] = {
+            "validated": False,
+            "applied": False,
+            "stale": True,
+            "stale_reason": "requested_budget_changed",
+            "previous_requested_budget_mxn": previous_requested_budget_mxn,
+            "requested_budget_mxn": requested_budget_mxn,
+            "previous_validated": previous_validation.get("validated"),
+            "previous_validated_at": previous_validation.get("validated_at"),
+            "previous_validate_only_result": previous_validation.get("validate_only_result"),
+        }
+    else:
+        updated["approval_validation"] = {
+            "validated": False,
+            "applied": False,
+            "stale": True,
+            "stale_reason": "requested_budget_changed",
+            "previous_requested_budget_mxn": previous_requested_budget_mxn,
+            "requested_budget_mxn": requested_budget_mxn,
+        }
+    return updated
+
+
 def _sync_budget_db_to_gcs(warning_code: str) -> dict[str, Any]:
     try:
         from engine.db_sync import upload_to_gcs
@@ -1424,6 +1512,114 @@ async def budget_recommendation_review_action(request: BudgetReviewActionRequest
         "decision_id": request.decision_id,
         "action": request.action,
         "message": _budget_review_message(request.action),
+        **sync_result,
+    }
+
+
+@router.post("/budget-recommendations/update-requested-budget", dependencies=[Depends(require_token)])
+async def budget_recommendation_update_requested_budget(
+    request: BudgetUpdateRequestedBudgetRequest,
+) -> dict[str, Any]:
+    """Actualiza el monto solicitado de una propuesta manual sin tocar Google Ads."""
+    requested_budget_mxn = _valid_budget_number(request.requested_budget_mxn)
+    if requested_budget_mxn is None or requested_budget_mxn <= 0:
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "invalid_requested_budget_mxn",
+        }
+
+    db_path = get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM autonomous_decisions WHERE id = ?",
+            (request.decision_id,),
+        ).fetchone()
+
+    if not row:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "not_found"}
+    if row["executed"] == 1:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "already_executed"}
+    if row["approved_at"] is not None:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "approved"}
+    if row["rejected_at"] is not None:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "rejected"}
+    if row["postponed_at"] is not None:
+        return {"status": "error", "decision_id": request.decision_id, "reason": "postponed"}
+    if row["decision"] != "proposed":
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "wrong_decision_state",
+            "detail": row["decision"],
+        }
+    if row["action_type"] not in ("scale", "reduce"):
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "wrong_action_type",
+            "detail": row["action_type"],
+        }
+
+    evidence = _safe_json(row["evidence_json"])
+    if not _is_manual_preview_evidence(evidence):
+        return {"status": "error", "decision_id": request.decision_id, "reason": "not_manual_preview"}
+    approval_validation = evidence.get("approval_validation")
+    if isinstance(approval_validation, dict) and approval_validation.get("applied") is True:
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "approval_already_applied",
+        }
+    previous_requested_budget_mxn = _valid_budget_number(evidence.get("new_budget_mxn"))
+    if previous_requested_budget_mxn is None or previous_requested_budget_mxn <= 0:
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "invalid_new_budget_mxn",
+        }
+    current_budget_mxn = _valid_budget_number(evidence.get("current_budget_mxn"))
+    if current_budget_mxn is None or current_budget_mxn <= 0:
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": "invalid_current_budget_mxn",
+        }
+
+    guardrail_reason = _requested_budget_guardrail_reason(requested_budget_mxn, current_budget_mxn)
+    if guardrail_reason:
+        return {
+            "status": "error",
+            "decision_id": request.decision_id,
+            "reason": guardrail_reason,
+            "current_budget_mxn": current_budget_mxn,
+            "requested_budget_mxn": requested_budget_mxn,
+        }
+
+    updated_evidence = _append_budget_update_requested_action(
+        evidence,
+        request,
+        previous_requested_budget_mxn=previous_requested_budget_mxn,
+        requested_budget_mxn=requested_budget_mxn,
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE autonomous_decisions SET evidence_json = ? WHERE id = ?",
+            (json.dumps(updated_evidence, ensure_ascii=False), request.decision_id),
+        )
+
+    sync_result = _sync_budget_db_to_gcs("requested_budget_update_saved_locally_but_gcs_sync_failed")
+    return {
+        "status": "success",
+        "decision_id": request.decision_id,
+        "action": "update_requested_budget",
+        "previous_requested_budget_mxn": previous_requested_budget_mxn,
+        "requested_budget_mxn": requested_budget_mxn,
+        "approval_validated": False,
+        "approval_applied": False,
+        "can_apply_approved": False,
+        "message": "Monto ajustado. Requiere nueva validación.",
         **sync_result,
     }
 

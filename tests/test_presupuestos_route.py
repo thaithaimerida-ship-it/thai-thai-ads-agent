@@ -288,6 +288,14 @@ class TestAuth:
         )
         assert r.status_code == 401
 
+    def test_update_requested_budget_without_token_returns_401(self, client, customer_id_env, admin_token, isolated_db):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+        r = client.post(
+            "/budget-recommendations/update-requested-budget",
+            json={"decision_id": decision_id, "requested_budget_mxn": 53.0, "source": "manual_review"},
+        )
+        assert r.status_code == 401
+
 
 class TestValidation:
     def test_apply_empty_decision_ids_returns_422(self, client, admin_token, isolated_db, customer_id_env):
@@ -334,6 +342,15 @@ class TestValidation:
         r = client.post(
             "/budget-recommendations/apply-approved",
             json={"decision_ids": [decision_id], "source": "manual_review", "confirmation": "APLICAR"},
+            headers=HEADERS_OK,
+        )
+        assert r.status_code == 422
+
+    def test_update_requested_budget_invalid_source_returns_422(self, client, admin_token, isolated_db, customer_id_env):
+        decision_id = _insert_manual_preview_scale(isolated_db)
+        r = client.post(
+            "/budget-recommendations/update-requested-budget",
+            json={"decision_id": decision_id, "requested_budget_mxn": 53.0, "source": "ui"},
             headers=HEADERS_OK,
         )
         assert r.status_code == 422
@@ -814,6 +831,218 @@ class TestBudgetValidateApproval:
         assert body["gcs_synced"] is False
         assert body["warning"] == "approval_validation_saved_locally_but_gcs_sync_failed"
         sync.assert_called_once_with()
+
+
+class TestBudgetUpdateRequestedBudget:
+    def _payload(self, decision_id: int, amount=53.0) -> dict:
+        return {
+            "decision_id": decision_id,
+            "requested_budget_mxn": amount,
+            "source": "manual_review",
+            "reason": "Ajuste manual de presupuesto antes de validar.",
+        }
+
+    def test_update_requested_budget_updates_evidence_invalidates_validation_and_syncs_without_ads(
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
+    ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+        decision_id = _insert_manual_preview_scale(isolated_db, new_budget_mxn=55.0)
+        _mark_manual_preview_validated(isolated_db, decision_id)
+
+        r = client.post(
+            "/budget-recommendations/update-requested-budget",
+            json=self._payload(decision_id, 53.0),
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "success"
+        assert body["decision_id"] == decision_id
+        assert body["previous_requested_budget_mxn"] == 55.0
+        assert body["requested_budget_mxn"] == 53.0
+        assert body["approval_validated"] is False
+        assert body["can_apply_approved"] is False
+        assert body["gcs_synced"] is True
+        sync.assert_called_once_with()
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
+        mocked_ads["update_campaign_budget"].assert_not_called()
+
+        with sqlite3.connect(isolated_db.db_path) as conn:
+            row = conn.execute(
+                "SELECT evidence_json FROM autonomous_decisions WHERE id = ?",
+                (decision_id,),
+            ).fetchone()
+        evidence = json.loads(row[0])
+        assert evidence["new_budget_mxn"] == 53.0
+        assert evidence["last_requested_budget_mxn"] == 53.0
+        assert evidence["original_new_budget_mxn"] == 55.0
+        assert evidence["requested_budget_updated_at"]
+        action = evidence["review_actions"][-1]
+        assert action["action"] == "update_requested_budget"
+        assert action["source"] == "manual_review"
+        assert action["previous_requested_budget_mxn"] == 55.0
+        assert action["requested_budget_mxn"] == 53.0
+        assert action["reason"] == "Ajuste manual de presupuesto antes de validar."
+        validation = evidence["approval_validation"]
+        assert validation["validated"] is False
+        assert validation["applied"] is False
+        assert validation["stale"] is True
+        assert validation["stale_reason"] == "requested_budget_changed"
+        assert validation["previous_requested_budget_mxn"] == 55.0
+        assert validation["requested_budget_mxn"] == 53.0
+        assert validation["previous_validated"] is True
+        assert validation["previous_validated_at"] == "2026-05-28T21:30:56+00:00"
+        assert validation["previous_validate_only_result"]["status"] == "success"
+
+    @pytest.mark.parametrize(
+        ("setup", "reason"),
+        [
+            (lambda mem: 99999, "not_found"),
+            (lambda mem: _insert_manual_preview_scale(mem), "already_executed"),
+            (lambda mem: _insert_manual_preview_scale(mem), "approved"),
+            (lambda mem: _insert_manual_preview_scale(mem), "rejected"),
+            (lambda mem: _insert_manual_preview_scale(mem), "postponed"),
+            (lambda mem: _insert_budget_decision(
+                mem,
+                action_type="scale",
+                decision="accepted",
+                evidence={
+                    "source": "manual_preview",
+                    "current_budget_mxn": 50.0,
+                    "new_budget_mxn": 55.0,
+                },
+            ), "wrong_decision_state"),
+            (lambda mem: _insert_budget_decision(
+                mem,
+                action_type="hold",
+                evidence={
+                    "source": "manual_preview",
+                    "current_budget_mxn": 50.0,
+                    "new_budget_mxn": 55.0,
+                },
+            ), "wrong_action_type"),
+            (lambda mem: _insert_scale(mem), "not_manual_preview"),
+            (lambda mem: _insert_manual_preview_scale(mem), "approval_already_applied"),
+        ],
+    )
+    def test_update_requested_budget_rejects_invalid_state_without_ads_or_gcs(
+        self, setup, reason, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
+    ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+        decision_id = setup(isolated_db)
+        if reason == "already_executed":
+            with sqlite3.connect(isolated_db.db_path) as conn:
+                conn.execute("UPDATE autonomous_decisions SET executed = 1 WHERE id = ?", (decision_id,))
+        elif reason == "approved":
+            with sqlite3.connect(isolated_db.db_path) as conn:
+                conn.execute("UPDATE autonomous_decisions SET approved_at = datetime('now') WHERE id = ?", (decision_id,))
+        elif reason == "rejected":
+            with sqlite3.connect(isolated_db.db_path) as conn:
+                conn.execute("UPDATE autonomous_decisions SET rejected_at = datetime('now') WHERE id = ?", (decision_id,))
+        elif reason == "postponed":
+            with sqlite3.connect(isolated_db.db_path) as conn:
+                conn.execute("UPDATE autonomous_decisions SET postponed_at = datetime('now') WHERE id = ?", (decision_id,))
+        elif reason == "approval_already_applied":
+            _mark_manual_preview_validated(isolated_db, decision_id, applied=True)
+
+        r = client.post(
+            "/budget-recommendations/update-requested-budget",
+            json=self._payload(decision_id, 53.0),
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "error"
+        assert r.json()["reason"] == reason
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
+        mocked_ads["update_campaign_budget"].assert_not_called()
+        sync.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("amount", "reason"),
+        [
+            (0, "invalid_requested_budget_mxn"),
+            (-1, "invalid_requested_budget_mxn"),
+            (None, "invalid_requested_budget_mxn"),
+            ("not-a-number", "invalid_requested_budget_mxn"),
+            ("NaN", "invalid_requested_budget_mxn"),
+            (19.99, "requested_budget_below_min"),
+            (500.01, "requested_budget_above_max"),
+            (65.01, "requested_budget_increase_too_large"),
+            (34.99, "requested_budget_decrease_too_large"),
+        ],
+    )
+    def test_update_requested_budget_rejects_invalid_amount_without_ads_or_gcs(
+        self, amount, reason, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
+    ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+        decision_id = _insert_manual_preview_scale(isolated_db, new_budget_mxn=55.0)
+
+        r = client.post(
+            "/budget-recommendations/update-requested-budget",
+            json=self._payload(decision_id, amount),
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "error"
+        assert r.json()["reason"] == reason
+        mocked_ads["fetch_campaign_budget_info"].assert_not_called()
+        mocked_ads["verify_budget_still_actionable"].assert_not_called()
+        mocked_ads["update_campaign_budget"].assert_not_called()
+        sync.assert_not_called()
+
+    def test_update_requested_budget_rejects_missing_current_budget_without_ads_or_gcs(
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
+    ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+        decision_id = _insert_budget_decision(
+            isolated_db,
+            action_type="scale",
+            evidence={"source": "manual_preview", "new_budget_mxn": 55.0},
+        )
+
+        r = client.post(
+            "/budget-recommendations/update-requested-budget",
+            json=self._payload(decision_id, 53.0),
+            headers=HEADERS_OK,
+        )
+
+        assert r.status_code == 200
+        assert r.json()["status"] == "error"
+        assert r.json()["reason"] == "invalid_current_budget_mxn"
+        mocked_ads["update_campaign_budget"].assert_not_called()
+        sync.assert_not_called()
+
+    def test_presupuestos_data_marks_adjusted_budget_as_not_applyable_until_revalidated(
+        self, client, admin_token, customer_id_env, isolated_db, mocked_ads, monkeypatch,
+    ):
+        sync = MagicMock(return_value=True)
+        monkeypatch.setattr("engine.db_sync.upload_to_gcs", sync)
+        monkeypatch.setattr("routes.presupuestos._fetch_current_budgets", lambda ids: {"22839241090": 50.0})
+        decision_id = _insert_manual_preview_scale(isolated_db, new_budget_mxn=55.0)
+        _mark_manual_preview_validated(isolated_db, decision_id)
+
+        client.post(
+            "/budget-recommendations/update-requested-budget",
+            json=self._payload(decision_id, 53.0),
+            headers=HEADERS_OK,
+        )
+
+        r = client.get("/presupuestos/data")
+        rec = r.json()["recommendations"][0]
+        assert rec["id"] == decision_id
+        assert rec["new_budget_mxn"] == 53.0
+        assert rec["approval_validated"] is False
+        assert rec["approval_applied"] is False
+        assert rec["can_apply_approved"] is False
 
 
 class TestBudgetApplyApproved:
