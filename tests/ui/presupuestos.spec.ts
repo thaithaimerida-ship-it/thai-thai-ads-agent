@@ -19,6 +19,8 @@ test("presupuestos history renders read-only audit state", async ({ page }) => {
   await page.goto("/presupuestos");
   await page.getByRole("button", { name: "Solo ver" }).click();
 
+  await expect(page.getByRole("heading", { name: "Estado del módulo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Propuestas pendientes" })).toBeVisible();
   await expect(page.getByText("Sin propuestas guardadas pendientes.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Historial de presupuestos" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Actualizar historial" })).toBeVisible();

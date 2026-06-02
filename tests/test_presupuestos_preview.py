@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
+import subprocess
 from unittest.mock import MagicMock
 
 import pytest
@@ -343,6 +346,54 @@ def test_presupuestos_page_has_separate_preview_ui_without_apply_call():
     preview_block = preview_block.split("function renderPreview", 1)[0]
     assert "/apply-budget-changes" not in preview_block
     assert "class='pick'" not in preview_block
+
+
+def test_presupuestos_page_has_module_status_and_pending_section_copy():
+    from routes.presupuestos import _PAGE
+
+    assert "Estado del módulo" in _PAGE
+    assert "Pendientes:" in _PAGE
+    assert "Historial:" in _PAGE
+    assert "Última actualización:" in _PAGE
+    assert "Modo:" in _PAGE
+    assert "Propuestas pendientes" in _PAGE
+    assert "Puedes generar un preview o revisar el historial." in _PAGE
+    assert "function updateModuleStatus()" in _PAGE
+
+
+def test_presupuestos_page_has_status_badges_and_action_classes():
+    from routes.presupuestos import _PAGE
+
+    for class_name in [
+        "status-badge",
+        "status-applied",
+        "status-validated",
+        "status-pending",
+        "status-rejected",
+        "status-postponed",
+        "readonly-action",
+        "safe-action",
+        "danger-action",
+    ]:
+        assert class_name in _PAGE
+
+
+def test_presupuestos_embedded_script_has_valid_syntax():
+    from routes.presupuestos import _PAGE
+
+    if shutil.which("node") is None:
+        pytest.skip("node is required to validate embedded script syntax")
+
+    script = _PAGE.split("<script>", 1)[1].split("</script>", 1)[0]
+    result = subprocess.run(
+        ["node", "-e", "new Function(process.env.PAGE_SCRIPT)"],
+        env={**os.environ, "PAGE_SCRIPT": script},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_presupuestos_page_has_read_only_budget_history_section():

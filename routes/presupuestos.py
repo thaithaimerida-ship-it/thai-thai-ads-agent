@@ -94,6 +94,9 @@ _PAGE = """<!doctype html>
   select, input, button { font: inherit; padding: .45rem .6rem; border: 1px solid #ccc; border-radius: 6px; }
   button { background: #1f7a1f; color: #fff; border: 0; cursor: pointer; }
   button.secondary { background: #555; }
+  button.readonly-action { background: #555; }
+  button.safe-action { background: #276749; }
+  button.danger-action { background: #9b1c1c; }
   button:disabled { opacity: .5; cursor: not-allowed; }
   a { color: #06c; cursor: pointer; }
   table { border-collapse: collapse; width: 100%; background: #fff; }
@@ -112,6 +115,15 @@ _PAGE = """<!doctype html>
   .history-controls { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .25rem 0 .6rem; }
   .history-controls label { display: flex; gap: .35rem; align-items: center; color: #666; font-size: .85rem; }
   #historyMeta { color: #666; font-size: .85rem; }
+  .module-status { background:#fff;border:1px solid #e7e7e7;border-radius:6px;padding:.85rem 1rem;margin-bottom:1rem; }
+  .module-status h2, .pending-heading { font-size:1rem;margin:.1rem 0 .5rem; }
+  .status-grid { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+  .status-badge { display:inline-flex; align-items:center; gap:.25rem; border-radius:999px; padding:.18rem .55rem; font-size:.78rem; font-weight:600; border:1px solid transparent; white-space:nowrap; }
+  .status-applied { background:#e0f5e0; color:#0a5a0a; border-color:#9bd39b; }
+  .status-validated { background:#e8f0ff; color:#234; border-color:#b8c9ef; }
+  .status-pending { background:#fff8e1; color:#7a5a00; border-color:#efd176; }
+  .status-rejected { background:#fde0e0; color:#7a0000; border-color:#e2a4a4; }
+  .status-postponed { background:#f0e8ff; color:#51317a; border-color:#cdb7ef; }
   .urgency-critical { background: #fde0e0; }
   .urgency-urgent   { background: #fff3c0; }
   td.drift-medium  { background: #fff3c0; font-weight: 600; }
@@ -140,15 +152,25 @@ _PAGE = """<!doctype html>
 
 <div id="app" hidden>
   <div class="bar">
-    <button id="load" class="secondary">Recargar</button>
+    <button id="load" class="secondary readonly-action">Recargar</button>
     <span id="meta"></span>
     <a id="logout">borrar token</a>
   </div>
 
+  <section id="moduleStatus" class="module-status">
+    <h2>Estado del módulo</h2>
+    <div class="status-grid">
+      <span class="status-badge status-pending">Pendientes: <span id="statusPending">0</span></span>
+      <span class="status-badge status-applied">Historial: <span id="statusHistory">0</span></span>
+      <span class="status-badge status-validated">Última actualización: <span id="statusUpdated">n/d</span></span>
+      <span class="status-badge status-pending">Modo: <span id="statusMode">Solo ver</span></span>
+    </div>
+  </section>
+
   <section id="previewSection" style="background:#fff;border:1px solid #eee;border-radius:6px;padding:1rem;margin-bottom:1rem;">
     <h2 style="font-size:1rem;margin:.1rem 0 .4rem;">Generar preview de propuestas</h2>
     <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.6rem;">
-      <button id="previewBtn" class="secondary">Generar preview</button>
+      <button id="previewBtn" class="secondary readonly-action">Generar preview</button>
       <span style="background:#eef3ff;color:#234;padding:.15rem .45rem;border-radius:4px;font-size:.8rem;">Preview, no guardado</span>
       <span class="muted">No aplica cambios</span>
     </div>
@@ -156,9 +178,10 @@ _PAGE = """<!doctype html>
     <div id="previewWrap"></div>
   </section>
 
+  <h2 class="pending-heading">Propuestas pendientes</h2>
   <div id="tableWrap"></div>
 
-  <button id="applyBtn" hidden disabled title="Selecciona al menos una recomendacion">
+  <button id="applyBtn" class="danger-action" hidden disabled title="Selecciona al menos una recomendacion">
     Aplicar seleccionadas
   </button>
   <section id="historySection">
@@ -179,7 +202,7 @@ _PAGE = """<!doctype html>
           <option value="50">Últimos 50</option>
         </select>
       </label>
-      <button id="historyRefresh" class="secondary">Actualizar historial</button>
+      <button id="historyRefresh" class="secondary readonly-action">Actualizar historial</button>
       <span id="historyMeta">Mostrando 0 movimientos</span>
     </div>
     <div id="historyWrap"><div id='empty'>Cargando historial...</div></div>
@@ -197,6 +220,7 @@ var historyFilter = "all";
 var historyLimit = 20;
 var previewCount = 0;
 var latestSavedAt = "n/a";
+var latestRefreshAt = "n/d";
 
 function el(id) { return document.getElementById(id); }
 function escapeHtml(s) {
@@ -205,7 +229,7 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-function showApp() { el("gate").hidden = true; el("app").hidden = false; }
+function showApp() { el("gate").hidden = true; el("app").hidden = false; updateModuleStatus(); }
 function showGate() { el("gate").hidden = false; el("app").hidden = true; }
 
 function init() {
@@ -554,7 +578,9 @@ function load() {
       }
       rows = d.recommendations || [];
       latestSavedAt = d.latest_at || "n/a";
+      latestRefreshAt = new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
       updateMeta();
+      updateModuleStatus();
       render();
       loadHistory();
     })
@@ -575,6 +601,7 @@ function loadHistory() {
         return;
       }
       historyRows = d.history || [];
+      updateModuleStatus();
       renderHistory(historyRows);
     })
     .catch(function() {
@@ -618,7 +645,7 @@ function renderPreview(proposals) {
     var evidence = p.evidence || {};
     var suggestedText = p.is_review_only ? "Sin sugerencia" : "$" + Number(p.suggested_budget_mxn).toFixed(2);
     var saveCell = p.direction === "increase" || p.direction === "decrease"
-      ? "<button class='secondary save-preview' data-index='" + i + "' data-url='/budget-preview/save'>Guardar para revisión</button>"
+      ? "<button class='secondary safe-action save-preview' data-index='" + i + "' data-url='/budget-preview/save'>Guardar para revisión</button>"
       : "<span class='muted'>Solo revisión. No se puede guardar como cambio de presupuesto.</span>";
     html += "<tr>" +
       "<td>" + escapeHtml(p.campaign_name) + " <small>(" + escapeHtml(p.campaign_id) + ")</small></td>" +
@@ -641,6 +668,14 @@ function updateMeta(latestAt) {
   el("meta").textContent = "Propuestas guardadas: " + rows.length +
     " · Preview actual: " + previewCount +
     " · última guardada: " + latestSavedAt;
+}
+
+function updateModuleStatus() {
+  if (!el("statusPending")) return;
+  el("statusPending").textContent = rows.length;
+  el("statusHistory").textContent = historyRows.length;
+  el("statusUpdated").textContent = latestRefreshAt;
+  el("statusMode").textContent = localStorage.getItem(TOKEN_KEY) ? "Con token" : "Solo ver";
 }
 
 function formatMoney(value) {
@@ -726,6 +761,14 @@ function historyFilterLabel(value) {
   return labels[value] || value || "Todos";
 }
 
+function historyStatusClass(value) {
+  if (value === "applied") return "status-applied";
+  if (value === "validated_not_applied") return "status-validated";
+  if (value === "rejected") return "status-rejected";
+  if (value === "postponed") return "status-postponed";
+  return "status-pending";
+}
+
 function renderHistory(history) {
   var wrap = el("historyWrap");
   el("historyMeta").textContent = "Filtro: " + historyFilterLabel(historyFilter) +
@@ -746,7 +789,7 @@ function renderHistory(history) {
       "<td>" + escapeHtml(dateText) + "</td>" +
       "<td>" + escapeHtml(h.campaign_name || "") + " <small>(" + escapeHtml(h.campaign_id || "") + ")</small></td>" +
       "<td>" + escapeHtml(h.action_type || "") + "</td>" +
-      "<td>" + escapeHtml(h.review_status_label || h.review_status || "") + "</td>" +
+      "<td><span class='status-badge " + historyStatusClass(h.review_status) + "'>" + escapeHtml(h.review_status_label || h.review_status || "") + "</span></td>" +
       "<td class='num'>" + (h.previous_budget_mxn == null ? "<span class='muted'>n/d</span>" : "$" + Number(h.previous_budget_mxn).toFixed(2)) + "</td>" +
       "<td class='num'>" + (h.applied_budget_mxn == null ? "<span class='muted'>n/d</span>" : "$" + Number(h.applied_budget_mxn).toFixed(2)) + "</td>" +
       "<td>" + escapeHtml(historyResultLabel(h)) + "</td>" +
@@ -777,8 +820,9 @@ function historyDetailText(h) {
 function render() {
   var wrap = el("tableWrap");
   if (!rows.length) {
-    wrap.innerHTML = "<div id='empty'>Sin propuestas guardadas pendientes.</div>";
+    wrap.innerHTML = "<div id='empty'><strong>Sin propuestas guardadas pendientes.</strong><div class='muted'>Puedes generar un preview o revisar el historial.</div></div>";
     el("applyBtn").hidden = true;
+    updateModuleStatus();
     return;
   }
   var html = "<table><thead><tr>" +
@@ -795,12 +839,12 @@ function render() {
       ? "Lista para aplicación final"
       : labelApplyDisabled(r.apply_disabled_reason || "");
     var applyApprovedButton = r.can_apply_approved === true
-      ? " <button class='secondary review-action' data-action='apply_approved' data-id='" + r.id + "'>Aplicar presupuesto</button>" +
+      ? " <button class='secondary danger-action review-action' data-action='apply_approved' data-id='" + r.id + "'>Aplicar presupuesto</button>" +
         "<div class='muted'>Esto cambiará el presupuesto real en Google Ads.</div>"
       : "";
     var validateApprovalButton = r.approval_validated === true
       ? ""
-      : "<button class='secondary review-action' data-action='approve_validate' data-id='" + r.id + "'>Validar aplicación</button>" +
+      : "<button class='secondary safe-action review-action' data-action='approve_validate' data-id='" + r.id + "'>Validar aplicación</button>" +
         "<div class='muted'>Esto validará la aplicación, pero no cambiará presupuesto todavía.</div>";
     var canUpdateRequestedBudget = r.is_manual_preview === true
       && r.executed === 0
@@ -813,15 +857,15 @@ function render() {
       newBudgetCell = "<div class='budget-adjust'>" +
         "<strong>$" + Number(r.new_budget_mxn).toFixed(2) + "</strong>" +
         "<input id='budget-adjust-" + r.id + "' class='budget-adjust-input' type='number' step='0.01' min='20' max='500' value='" + Number(r.new_budget_mxn).toFixed(2) + "'>" +
-        "<button class='secondary budget-adjust-save' data-action='update_requested_budget' data-id='" + r.id + "'>Guardar ajuste</button>" +
+        "<button class='secondary safe-action budget-adjust-save' data-action='update_requested_budget' data-id='" + r.id + "'>Guardar ajuste</button>" +
         "<div class='muted'>Esto no aplica el presupuesto. Solo actualiza el monto a validar.</div>" +
         "</div>";
     }
     var reviewButtons = r.is_manual_preview
       ? "<div class='review-actions'>" +
-        "<button class='secondary review-action' data-action='reject' data-id='" + r.id + "'>Rechazar</button> " +
-        "<button class='secondary review-action' data-action='postpone' data-id='" + r.id + "'>Posponer</button> " +
-        "<button class='secondary review-action' data-action='keep_review' data-id='" + r.id + "'>Mantener en revisión</button> " +
+        "<button class='secondary safe-action review-action' data-action='reject' data-id='" + r.id + "'>Rechazar</button> " +
+        "<button class='secondary safe-action review-action' data-action='postpone' data-id='" + r.id + "'>Posponer</button> " +
+        "<button class='secondary safe-action review-action' data-action='keep_review' data-id='" + r.id + "'>Mantener en revisión</button> " +
         validateApprovalButton +
         applyApprovedButton +
         "</div>"
