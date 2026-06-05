@@ -190,7 +190,7 @@ def _compute_base_negative_eligible(term: dict) -> bool:
     return (
         term.get("semantic_class") == "red_safe"
         and term.get("entity_status") in {"curated", "clear_red_pattern"}
-        and term.get("conversion_quality") in {"none", "weak_local_action"}
+        and term.get("conversion_quality") == "none"
         and term.get("suggested_match_type") in {"EXACT", "PHRASE"}
     )
 

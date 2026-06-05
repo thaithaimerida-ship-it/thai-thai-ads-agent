@@ -406,7 +406,16 @@ def _validate_block_keyword_gate(action: OptimizationAction, gate_rows: list[dic
     if conversion_quality == "money_action":
         return False, _block_keyword_rejection(
             action, "conversion_quality_money_action", "conversion_quality money_action no permite negativos.", gate_debug)
-    if conversion_quality not in {"none", "weak_local_action"}:
+    # Fase A: weak_local_action implica engagement local (directions, llamadas,
+    # vistas de menu) -> no se negativiza directo; va a revision manual.
+    if conversion_quality == "weak_local_action":
+        return False, _block_keyword_rejection(
+            action,
+            "conversion_quality_weak_local_action",
+            "weak_local_action con engagement local: requiere revision manual, no negativo directo.",
+            gate_debug,
+        )
+    if conversion_quality != "none":
         return False, _block_keyword_rejection(
             action, "conversion_quality_not_allowed", "conversion_quality no permitida.", gate_debug)
 
