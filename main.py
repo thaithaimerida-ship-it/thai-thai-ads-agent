@@ -8,9 +8,10 @@ import json
 import logging
 logging.basicConfig(level=logging.INFO)
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 import random
+from urllib import parse as urlparse, request as urlrequest, error as urlerror
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +328,170 @@ generate_agent_proposals = _strategist.generate_proposals
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
+
+
+# ============================================================================
+# GOOGLE BUSINESS PROFILE — PERFORMANCE READ-ONLY
+# ============================================================================
+
+_GBP_PERFORMANCE_METRICS = [
+    "BUSINESS_IMPRESSIONS_DESKTOP_MAPS",
+    "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH",
+    "BUSINESS_IMPRESSIONS_MOBILE_MAPS",
+    "BUSINESS_IMPRESSIONS_MOBILE_SEARCH",
+    "BUSINESS_CONVERSATIONS",
+    "BUSINESS_DIRECTION_REQUESTS",
+    "CALL_CLICKS",
+    "WEBSITE_CLICKS",
+    "BUSINESS_BOOKINGS",
+    "BUSINESS_FOOD_ORDERS",
+    "BUSINESS_FOOD_MENU_CLICKS",
+]
+
+
+def _gbp_required_env(name: str, default: str = "") -> str:
+    value = os.getenv(name, default).strip()
+    if not value:
+        raise HTTPException(status_code=500, detail=f"Missing required env var: {name}")
+    return value
+
+
+def _gbp_access_token() -> str:
+    """OAuth token exchange only. Does not write to Google Business Profile."""
+    payload = urlparse.urlencode({
+        "client_id": _gbp_required_env("GBP_CLIENT_ID"),
+        "client_secret": _gbp_required_env("GBP_CLIENT_SECRET"),
+        "refresh_token": _gbp_required_env("GBP_REFRESH_TOKEN"),
+        "grant_type": "refresh_token",
+    }).encode("utf-8")
+
+    req = urlrequest.Request(
+        "https://oauth2.googleapis.com/token",
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urlrequest.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urlerror.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        logger.warning("GBP OAuth token exchange failed: status=%s body=%s", exc.code, body[:500])
+        raise HTTPException(status_code=502, detail="GBP OAuth token exchange failed")
+    except Exception as exc:
+        logger.warning("GBP OAuth token exchange unexpected error: %s", exc)
+        raise HTTPException(status_code=502, detail="GBP OAuth token exchange error")
+
+    token = data.get("access_token")
+    if not token:
+        raise HTTPException(status_code=502, detail="GBP OAuth response missing access_token")
+    return token
+
+
+def _gbp_get_json(url: str, token: str, params: list[tuple[str, str]] | None = None) -> tuple[int, dict]:
+    """Read-only GET helper for Google Business Profile APIs."""
+    if params:
+        url = url + "?" + urlparse.urlencode(params, doseq=True)
+
+    req = urlrequest.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urlrequest.urlopen(req, timeout=30) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urlerror.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(body)
+        except Exception:
+            parsed = {"raw": body[:1000]}
+        return exc.code, parsed
+
+
+def _gbp_aggregate_performance(perf_resp: dict) -> dict:
+    aggregate: dict[str, int] = {}
+    for ts in perf_resp.get("multiDailyMetricTimeSeries", []):
+        for dm in ts.get("dailyMetricTimeSeries", []):
+            metric = dm.get("dailyMetric")
+            total = sum(
+                int(p.get("value", 0))
+                for p in dm.get("timeSeries", {}).get("datedValues", [])
+            )
+            if metric:
+                aggregate[metric] = total
+    return aggregate
+
+
+@app.get("/gbp/performance")
+async def gbp_performance(days: int = Query(30, ge=1, le=90)):
+    """
+    Google Business Profile Performance read-only endpoint.
+
+    Does not read reviews, posts, or media.
+    Does not write to Google Business Profile.
+    """
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=days)
+
+    location_id = _gbp_required_env("GBP_LOCATION_ID", "17757029602072738121")
+    location_resource = location_id if location_id.startswith("locations/") else f"locations/{location_id}"
+
+    params = [("dailyMetrics", m) for m in _GBP_PERFORMANCE_METRICS]
+    params += [
+        ("dailyRange.start_date.year", str(start.year)),
+        ("dailyRange.start_date.month", str(start.month)),
+        ("dailyRange.start_date.day", str(start.day)),
+        ("dailyRange.end_date.year", str(today.year)),
+        ("dailyRange.end_date.month", str(today.month)),
+        ("dailyRange.end_date.day", str(today.day)),
+    ]
+
+    token = _gbp_access_token()
+    source_status, raw = _gbp_get_json(
+        f"https://businessprofileperformance.googleapis.com/v1/{location_resource}:fetchMultiDailyMetricsTimeSeries",
+        token,
+        params=params,
+    )
+
+    if source_status != 200:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "error",
+                "source": "google_business_profile",
+                "read_only": True,
+                "source_status": source_status,
+                "error": raw,
+            },
+        )
+
+    aggregate = _gbp_aggregate_performance(raw)
+
+    return {
+        "status": "success",
+        "source": "google_business_profile",
+        "read_only": True,
+        "date_range": {
+            "days": days,
+            "start": start.isoformat(),
+            "end": today.isoformat(),
+        },
+        "account_id": os.getenv("GBP_ACCOUNT_ID", "116182531567733744541"),
+        "location_id": location_resource.split("/")[-1],
+        "location_resource": location_resource,
+        "location_title": os.getenv("GBP_LOCATION_TITLE", "Thai Thai"),
+        "metrics": aggregate,
+    }
 
 @app.get("/health")
 async def health_check():
