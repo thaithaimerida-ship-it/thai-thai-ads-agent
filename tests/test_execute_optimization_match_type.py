@@ -63,7 +63,7 @@ def setup(tmp_path, monkeypatch, captured):
                 "negative_allowed": True,
                 "base_negative_eligible": True,
                 "semantic_class": "red_safe",
-                "conversion_quality": "weak_local_action",
+                "conversion_quality": "none",
                 "already_negative": False,
             },
         ],

@@ -31,7 +31,6 @@ def _classifier_case(
     ("query", "conversion_quality", "expected_match_type"),
     [
         ("hacienda teya", "none", "EXACT"),
-        ("hacienda teya", "weak_local_action", "EXACT"),
         ("casa thai merida", "none", "EXACT"),
         ("receta pad thai", "none", "PHRASE"),
     ],
@@ -51,6 +50,7 @@ def test_red_safe_terms_can_be_base_negative_eligible(query, conversion_quality,
     [
         ("hacienda teya", "unknown"),
         ("hacienda teya", "money_action"),
+        ("hacienda teya", "weak_local_action"),  # Fase A: weak ya no es elegible (engagement local)
     ],
 )
 def test_red_safe_with_unsafe_conversion_quality_is_not_base_eligible(query, conversion_quality):
