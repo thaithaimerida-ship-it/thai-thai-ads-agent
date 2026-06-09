@@ -19,6 +19,7 @@ from engine.search_term_classifier import classify_conversion_quality, classify_
 from engine.search_term_history import aggregate_windows, accumulated_reds
 from engine.ads_client import fetch_negative_keywords, fetch_search_term_conversion_breakdown
 from engine.negative_matcher import find_blocking_negative
+from engine.negatives_preview_v2 import build_negatives_preview_payload
 
 router = APIRouter(tags=["analysis"])
 logger = logging.getLogger(__name__)
@@ -446,6 +447,17 @@ async def search_terms(date_range: str = "LAST_7_DAYS"):
     """
     try:
         return _build_search_terms_payload(date_range)
+    except Exception as e:
+        import traceback
+        return {"status": "error", "message": str(e), "details": traceback.format_exc()}
+
+
+@router.get("/negativos/preview-v2")
+async def negativos_preview_v2(date_range: str = "LAST_7_DAYS"):
+    """Read-only V2 presentation contract for the future /negativos UI."""
+    try:
+        payload = _build_search_terms_payload(date_range)
+        return build_negatives_preview_payload(payload)
     except Exception as e:
         import traceback
         return {"status": "error", "message": str(e), "details": traceback.format_exc()}
