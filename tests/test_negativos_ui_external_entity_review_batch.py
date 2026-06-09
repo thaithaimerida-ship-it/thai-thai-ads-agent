@@ -1,5 +1,4 @@
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -11,117 +10,56 @@ def _slice_between(start, end):
     return _PAGE.split(start, 1)[1].split(end, 1)[0]
 
 
-def test_review_pick_exists_and_external_entity_review_does_not_use_negative_pick():
-    assert "class='review-pick'" in _PAGE
-    assert 'data-review-i=' in _PAGE
-
-    review_row_branch = _slice_between(
-        'if (t.semantic_class === "external_entity_review")',
-        'var pick = canPick(t)',
-    )
-    assert "reviewActions(t, i)" in review_row_branch
-    assert "class='pick'" not in review_row_branch
-
-
-def test_separate_selection_functions_exist():
-    assert "function selectedForReview()" in _PAGE
-    assert "function selectedForNegatives()" in _PAGE
-
-
-def test_red_negative_button_uses_only_selected_for_negatives():
-    add_handler = _slice_between(
-        'el("addBtn").onclick = function ()',
-        "function submit(sel)",
+def test_decision_section_contains_ready_and_external_review_states_only():
+    decision_section = _slice_between(
+        'var decisionItems = items.filter(function (item) {',
+        'var cautionItems = items.filter(function (item) {',
     )
 
-    assert "selectedForNegatives()" in add_handler
-    assert "selectedForReview()" not in add_handler
-    assert 'document.querySelectorAll(".review-pick:checked")' not in add_handler
+    assert 'item.state === "listo_para_bloquear"' in decision_section
+    assert 'item.state === "competidor_por_confirmar"' in decision_section
+    assert 'item.state === "revisar_con_cuidado"' not in decision_section
+    assert 'item.state === "protegido"' not in decision_section
 
 
-def test_batch_proposals_use_only_selected_for_review():
-    batch_fn = _slice_between(
-        "function showBatchReviewProposal(kind)",
-        "function renderTable()",
+def test_caution_section_contains_mixed_signal_states():
+    caution_section = _slice_between(
+        'var cautionItems = items.filter(function (item) {',
+        'var protectedItems = items.filter(function (item) {',
     )
 
-    assert "selectedForReview()" in batch_fn
-    assert "selectedForNegatives()" not in batch_fn
-    assert 'document.querySelectorAll(".pick:checked")' not in batch_fn
+    assert 'item.state === "revisar_con_cuidado"' in caution_section
+    assert 'item.state === "datos_insuficientes"' in caution_section
 
 
-def test_batch_buttons_exist_in_external_entity_review_section():
-    assert "Generar propuestas de competidores seleccionados" in _PAGE
-    assert "Generar propuestas de genéricos útiles seleccionados" in _PAGE
-
-    review_section = _slice_between(
-        'sectionHtml("Revisar entidad ajena"',
-        'sectionHtml("Ambiguos / pueden traer clientes"',
-    )
-    assert "reviewBatchHtml()" in review_section
-
-
-def test_batch_competitors_generates_json_array_with_competitor_proposal():
-    batch_fn = _slice_between(
-        "function showBatchReviewProposal(kind)",
-        "function renderTable()",
+def test_protected_section_contains_non_actionable_states():
+    protected_section = _slice_between(
+        'var protectedItems = items.filter(function (item) {',
+        "renderSection(",
     )
 
-    assert "items.map(function (t) { return competitorProposal(t); })" in batch_fn
-    assert "JSON.stringify(proposals, null, 2)" in batch_fn
-    assert "Esto genera propuestas. No aplica negativos." in _PAGE
-    assert "irrelevant_entities.json" in batch_fn
+    assert 'item.state === "protegido"' in protected_section
+    assert 'item.state === "bloqueado"' in protected_section
+    assert 'item.state === "monitoreo"' in protected_section
 
 
-def test_batch_useful_generics_generates_json_array_with_useful_generic_proposal():
-    batch_fn = _slice_between(
-        "function showBatchReviewProposal(kind)",
-        "function renderTable()",
+def test_external_entity_review_language_is_human_and_not_accusatory():
+    assert "Restaurante o negocio externo por confirmar" in _PAGE
+    assert "Parece otro restaurante o negocio en Mérida. Hugo debe decidir si conviene bloquearlo." in _PAGE
+    assert "competidor directo" not in _PAGE
+    assert "basura" not in _PAGE
+
+
+def test_read_only_detail_does_not_persist_or_fetch():
+    detail_fn = _slice_between(
+        "function openDetail(item)",
+        "function closeDetail()",
     )
 
-    assert "items.map(function (t) { return usefulGenericProposal(t); })" in batch_fn
-    assert "JSON.stringify(proposals, null, 2)" in batch_fn
-    assert "useful_generic_patterns.json" in batch_fn
-
-
-def test_batch_block_has_no_negative_execution_or_persistence():
-    batch_fn = _slice_between(
-        "function showBatchReviewProposal(kind)",
-        "function renderTable()",
-    )
-
-    for forbidden in [
-        "block_keyword",
-        "/execute-optimization",
-        "fetch(",
-        "localStorage",
-        "indexedDB",
-        "sqlite",
-        "gcs",
-        "bucket",
-        "writeFile",
-        "save",
-        "open(",
-    ]:
-        assert forbidden not in batch_fn
-
-
-def test_no_new_endpoint_or_server_persistence_added():
-    assert '@router.post' not in _PAGE
-    assert '@router.get("/external' not in _PAGE
-
-    with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "routes", "negativos_ui.py"), encoding="utf-8") as f:
-        source = f.read()
-
-    assert "APIRouter" in source
-    assert source.count("@router.get(\"/negativos\"") == 1
-    assert "GCS" not in source
-    assert "sqlite3" not in source
-    assert "open(" not in source
-
-
-def test_negative_and_review_checkboxes_are_distinct_selectors():
-    assert 'querySelectorAll(".pick:checked")' in _PAGE
-    assert 'querySelectorAll(".review-pick:checked")' in _PAGE
-    assert "class='review-pick'" in _PAGE
-    assert "<input type='checkbox' class='pick'" in _PAGE
+    assert "Ver detalle" in _PAGE
+    assert "fetch(" not in detail_fn
+    assert "POST" not in detail_fn
+    assert "localStorage" not in detail_fn
+    assert "indexedDB" not in detail_fn
+    assert "writeFile" not in detail_fn
+    assert "block_keyword" not in detail_fn

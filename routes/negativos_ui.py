@@ -1,13 +1,5 @@
-"""
-Mini-app web de revision de search terms -> agregar negativos a Google Ads.
+"""UI read-only para revisar search terms antes de decidir negativos."""
 
-GET /negativos  -> pagina HTML autocontenida (sin build, sin dependencias).
-
-La pagina es publica (no contiene secretos). El token de acceso lo escribe
-el usuario en runtime y se guarda en localStorage del navegador; se manda
-como header X-API-Token solo en la escritura (/execute-optimization).
-Lectura (/search-terms) es abierta, consistente con el resto de endpoints.
-"""
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
@@ -18,611 +10,459 @@ _PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Negativos - Thai Thai Ads</title>
+<title>Negativos - Bandeja V2</title>
 <style>
-  :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-  body { margin: 0; padding: 1.2rem; background: #fafafa; color: #1a1a1a; }
-  h1 { font-size: 1.25rem; margin: 0 0 1rem; }
-  .bar { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
-  select, input, button { font: inherit; padding: .45rem .6rem; border: 1px solid #ccc; border-radius: 6px; }
-  button { background: #d33; color: #fff; border: 0; cursor: pointer; }
-  button.secondary { background: #555; }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  a { color: #06c; cursor: pointer; }
-  table { border-collapse: collapse; width: 100%; background: #fff; }
-  th, td { padding: .45rem .6rem; border-bottom: 1px solid #eee; text-align: left; font-size: .9rem; }
-  th { background: #f0f0f0; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.cand { background: #fde0e0; }
-  tr.conv { background: #e0f0e0; }
-  tr.comp { background: #fef3c7; }
-  tr.blocked { background: #fff1f1; }
-  tr.review { background: #fff7d6; }
-  tr.protected { background: #e9f7ee; }
-  tr.ready { background: #e8f8e8; }
-  h2.sec { font-size: 1.05rem; margin: 1.4rem 0 .4rem; }
-  p.help { color: #666; font-size: .85rem; margin: 0 0 .5rem; }
-  #meta { color: #666; font-size: .85rem; }
-  #confirm { background: #fff8e1; border: 1px solid #f0d000; padding: .8rem; border-radius: 6px; margin: 1rem 0; }
-  .warn { color: #b30000; font-weight: 600; }
-  .ok { color: #0a7a0a; } .err { color: #b30000; }
-  #results div { padding: .25rem 0; font-size: .9rem; }
-  #banner { background: #e0f5e0; border: 2px solid #1f9d1f; color: #0a5a0a;
-            padding: 1rem 1.2rem; border-radius: 8px; margin: 1rem 0;
-            font-size: 1.05rem; line-height: 1.5; }
-  #banner.partial { background: #fff8e1; border-color: #f0c000; color: #7a5a00; }
-  tr.done { opacity: .5; }
-  tr.done td { text-decoration: line-through; }
-  .mt { display: inline-block; font-size: .7rem; font-weight: 700;
-        padding: .05rem .35rem; border-radius: 4px; background: #eef;
-        color: #225; border: 1px solid #ccd; vertical-align: middle; }
-  .badge { display: inline-block; font-size: .7rem; font-weight: 700;
-        padding: .05rem .35rem; border-radius: 4px; background: #f5f5f5;
-        color: #333; border: 1px solid #ddd; vertical-align: middle; }
-  .reason { color: #666; font-size: .8rem; }
-  .review-actions { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .45rem; }
-  .review-actions button { background: #7a5a00; padding: .35rem .45rem; font-size: .78rem; }
-  .review-actions button.secondary { background: #555; }
-  .review-actions button.neutral { background: #777; }
-  .review-batch { display: flex; gap: .45rem; flex-wrap: wrap; margin: .55rem 0 .7rem; }
-  .review-batch button { background: #7a5a00; font-size: .85rem; }
-  .review-pick { width: 1rem; height: 1rem; }
-  #reviewProposal { background: #fff; border: 1px solid #d9c36a; padding: .9rem;
-        border-radius: 6px; margin: 1rem 0; }
-  #reviewProposal textarea { width: 100%; min-height: 13rem; box-sizing: border-box;
-        font: .82rem ui-monospace, SFMono-Regular, Consolas, monospace; margin: .5rem 0; }
-  .proposal-note { color: #7a5a00; font-size: .9rem; font-weight: 600; }
+  :root {
+    --ink: #17201b;
+    --muted: #66736c;
+    --line: #dfe7e2;
+    --paper: #fbfcfa;
+    --panel: #ffffff;
+    --safe: #1d6f54;
+    --safe-soft: #e7f4ee;
+    --warn: #8b5e14;
+    --warn-soft: #fff4d7;
+    --danger: #9b2f2f;
+    --danger-soft: #fbe7e5;
+    --quiet: #eef2f0;
+    --shadow: 0 16px 40px rgba(23, 32, 27, .08);
+    font-family: Georgia, "Times New Roman", serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: linear-gradient(180deg, #f6f8f5 0%, #edf2ef 100%);
+    color: var(--ink);
+  }
+  button, select { font: inherit; }
+  .shell { max-width: 1180px; margin: 0 auto; padding: 28px 18px 96px; }
+  .hero {
+    display: grid;
+    gap: 18px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 22px;
+  }
+  h1 { margin: 0; font-size: clamp(2rem, 5vw, 4.2rem); line-height: .95; letter-spacing: 0; }
+  .subtitle { margin: 12px 0 0; max-width: 760px; color: var(--muted); font: 1rem/1.55 system-ui, sans-serif; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    border: 1px solid #b7d6c7;
+    background: var(--safe-soft);
+    color: #114d38;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font: 700 .82rem/1 system-ui, sans-serif;
+    margin-bottom: 12px;
+  }
+  .controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  select {
+    min-width: 128px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--ink);
+    padding: 10px 12px;
+  }
+  button {
+    border: 1px solid var(--ink);
+    border-radius: 8px;
+    background: var(--ink);
+    color: white;
+    padding: 10px 14px;
+    cursor: pointer;
+  }
+  button.secondary {
+    color: var(--ink);
+    background: var(--panel);
+    border-color: var(--line);
+  }
+  button[disabled] { opacity: .5; cursor: not-allowed; }
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+    margin: 18px 0 20px;
+  }
+  .metric {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 13px 14px;
+    box-shadow: var(--shadow);
+  }
+  .metric strong { display: block; font-size: 1.8rem; line-height: 1; }
+  .metric span { display: block; color: var(--muted); font: 700 .72rem/1.2 system-ui, sans-serif; text-transform: uppercase; letter-spacing: .05em; margin-top: 7px; }
+  .status-line { color: var(--muted); font: .92rem/1.45 system-ui, sans-serif; min-height: 1.4em; }
+  .section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin: 14px 0;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  details.section summary {
+    list-style: none;
+    cursor: pointer;
+  }
+  details.section summary::-webkit-details-marker { display: none; }
+  .section-head {
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .section-head h2 { margin: 0; font-size: 1.12rem; letter-spacing: 0; }
+  .section-head p { margin: 6px 0 0; color: var(--muted); font: .92rem/1.45 system-ui, sans-serif; }
+  .count {
+    min-width: 42px;
+    text-align: center;
+    border-radius: 999px;
+    background: var(--quiet);
+    padding: 6px 10px;
+    font: 800 .9rem/1 system-ui, sans-serif;
+  }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th, td {
+    border-bottom: 1px solid var(--line);
+    padding: 12px 14px;
+    vertical-align: top;
+    text-align: left;
+  }
+  th {
+    color: var(--muted);
+    font: 800 .72rem/1.2 system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    background: #f7f9f7;
+  }
+  td { font: .94rem/1.42 system-ui, sans-serif; }
+  .term { font-weight: 800; color: var(--ink); overflow-wrap: anywhere; }
+  .campaign { color: var(--muted); margin-top: 4px; font-size: .82rem; }
+  .what { font-variant-numeric: tabular-nums; white-space: normal; }
+  .reason { color: #334139; }
+  .tag {
+    display: inline-flex;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    padding: 5px 8px;
+    font: 800 .75rem/1.1 system-ui, sans-serif;
+    background: var(--quiet);
+  }
+  .tag.ready { background: var(--danger-soft); color: var(--danger); border-color: #f1b8b2; }
+  .tag.confirm { background: var(--warn-soft); color: var(--warn); border-color: #ecd38b; }
+  .tag.caution { background: var(--warn-soft); color: var(--warn); border-color: #ecd38b; }
+  .tag.protected { background: var(--safe-soft); color: var(--safe); border-color: #b7d6c7; }
+  .tag.blocked { background: var(--quiet); color: #45524b; }
+  .empty { padding: 18px; color: var(--muted); font: .95rem/1.45 system-ui, sans-serif; }
+  .detail-row td { background: #f7f9f7; }
+  .detail-box {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .detail-box div {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    background: white;
+  }
+  .detail-box b { display: block; font-size: .76rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; }
+  .footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-top: 1px solid var(--line);
+    background: rgba(255, 255, 255, .96);
+    color: #314039;
+    padding: 12px 18px;
+    font: .88rem/1.45 system-ui, sans-serif;
+    box-shadow: 0 -10px 30px rgba(23, 32, 27, .08);
+  }
+  .footer-inner { max-width: 1180px; margin: 0 auto; }
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; align-items: start; }
+    .controls { justify-content: flex-start; }
+    .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    table, thead, tbody, tr, th, td { display: block; }
+    thead { display: none; }
+    tr { border-bottom: 1px solid var(--line); padding: 10px 0; }
+    td { border: 0; padding: 7px 14px; }
+    td::before {
+      content: attr(data-label);
+      display: block;
+      color: var(--muted);
+      font: 800 .68rem/1.2 system-ui, sans-serif;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      margin-bottom: 3px;
+    }
+    .detail-box { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
-<h1>Search Terms &rarr; Negativos (match type por termino: EXACT / PHRASE)</h1>
-
-<div id="gate" hidden>
-  <p>Pega tu token de acceso:</p>
-  <input id="tokenInput" type="password" size="44" autocomplete="off">
-  <button id="tokenSave">Guardar</button>
-</div>
-
-<div id="app" hidden>
-  <div class="bar">
-    <label>Rango:
+<main class="shell">
+  <section class="hero">
+    <div>
+      <div class="badge">Modo seguro - Solo lectura</div>
+      <h1>Bandeja de revisión de términos</h1>
+      <p class="subtitle">Revisa búsquedas antes de bloquearlas en Google Ads. Bloquear es la excepción, no la regla.</p>
+    </div>
+    <div class="controls">
+      <label for="range">Rango</label>
       <select id="range">
-        <option>LAST_7_DAYS</option>
-        <option>TODAY</option>
-        <option>YESTERDAY</option>
-        <option>LAST_14_DAYS</option>
-        <option>LAST_30_DAYS</option>
-        <option>THIS_MONTH</option>
-        <option>LAST_MONTH</option>
+        <option value="YESTERDAY">Ayer</option>
+        <option value="LAST_7_DAYS" selected>7 días</option>
+        <option value="LAST_14_DAYS">14 días</option>
+        <option value="LAST_30_DAYS">30 días</option>
       </select>
-    </label>
-    <button id="load" class="secondary">Cargar</button>
-    <span id="meta"></span>
-    <a id="logout">borrar token</a>
-  </div>
+      <button id="refresh">Actualizar</button>
+      <button class="secondary" disabled>Próxima fase: confirmar decisión</button>
+    </div>
+  </section>
 
-  <div id="tableWrap"></div>
+  <section class="summary" aria-label="Resumen">
+    <div class="metric"><strong id="mTotal">0</strong><span>Términos revisados</span></div>
+    <div class="metric"><strong id="mDecision">0</strong><span>Necesitan tu decisión</span></div>
+    <div class="metric"><strong id="mCaution">0</strong><span>Revisar con cuidado</span></div>
+    <div class="metric"><strong id="mProtected">0</strong><span>Protegidos</span></div>
+    <div class="metric"><strong id="mBlocked">0</strong><span>Ya bloqueados</span></div>
+  </section>
 
-  <button id="addBtn" hidden>Agregar como negativos</button>
-  <div id="confirm" hidden></div>
-  <div id="banner" hidden></div>
-  <div id="results"></div>
-  <div id="reviewProposal" hidden></div>
-</div>
+  <p id="status" class="status-line">Cargando bandeja...</p>
+
+  <section class="section" id="decisionSection">
+    <div class="section-head">
+      <div>
+        <h2>Necesitan tu decisión</h2>
+        <p>Estos términos requieren revisión humana antes de cualquier acción.</p>
+      </div>
+      <span class="count" id="decisionCount">0</span>
+    </div>
+    <div id="decisionBody"></div>
+  </section>
+
+  <details class="section" id="cautionSection">
+    <summary class="section-head">
+      <div>
+        <h2>Revisar con cuidado</h2>
+        <p>Cuidado: aquí hay señales mixtas. Bloquear podría costarte clientes.</p>
+      </div>
+      <span class="count" id="cautionCount">0</span>
+    </summary>
+    <div id="cautionBody"></div>
+  </details>
+
+  <details class="section" id="protectedSection">
+    <summary class="section-head">
+      <div>
+        <h2>Protegidos · no se tocan</h2>
+        <p>Estos NO se tocan: son tu marca, comida tailandesa, búsquedas útiles o términos ya protegidos.</p>
+      </div>
+      <span class="count" id="protectedCount">0</span>
+    </summary>
+    <div id="protectedBody"></div>
+  </details>
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">Solo bloqueamos términos sin pedidos y con suficientes clics. Tu marca, comida tailandesa y búsquedas útiles están protegidas. Todo se aplicará uno por uno en una fase posterior.</div>
+</footer>
 
 <script>
 "use strict";
-var TOKEN_KEY = "tt_admin_token";
-var rows = [];
+
+var expandedTerm = null;
 
 function el(id) { return document.getElementById(id); }
-function token() { return localStorage.getItem(TOKEN_KEY) || ""; }
 
-function showGate(msg) {
-  el("app").hidden = true;
-  el("gate").hidden = false;
-  if (msg) alert(msg);
-}
-function showApp() {
-  el("gate").hidden = true;
-  el("app").hidden = false;
-}
-
-el("tokenSave").onclick = function () {
-  var v = el("tokenInput").value.trim();
-  if (!v) return;
-  localStorage.setItem(TOKEN_KEY, v);
-  el("tokenInput").value = "";
-  showApp();
-};
-el("logout").onclick = function () {
-  localStorage.removeItem(TOKEN_KEY);
-  showGate();
-};
-
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, function (c) {
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   });
 }
 
-function normalizeReviewText(s) {
-  return String(s || "")
-    .normalize("NFD").replace(/[\\u0300-\\u036f]/g, "")
-    .toLowerCase().replace(/\\s+/g, " ").trim();
+function money(value) {
+  var amount = Number(value || 0);
+  return "$" + amount.toLocaleString("es-MX", { maximumFractionDigits: 0 });
 }
 
-function addUnique(out, value) {
-  value = String(value || "").replace(/\\s+/g, " ").trim();
-  if (!value) return;
-  var key = normalizeReviewText(value);
-  for (var i = 0; i < out.length; i++) {
-    if (normalizeReviewText(out[i]) === key) return;
+function number(value) {
+  return Number(value || 0).toLocaleString("es-MX");
+}
+
+function stateLabel(state) {
+  var labels = {
+    listo_para_bloquear: "Listo para revisar bloqueo",
+    competidor_por_confirmar: "Restaurante o negocio externo por confirmar",
+    revisar_con_cuidado: "Revisar con cuidado",
+    datos_insuficientes: "Datos insuficientes",
+    protegido: "Protegido",
+    bloqueado: "Ya bloqueado",
+    monitoreo: "Monitoreo"
+  };
+  return labels[state] || "Monitoreo";
+}
+
+function stateClass(state) {
+  var classes = {
+    listo_para_bloquear: "ready",
+    competidor_por_confirmar: "confirm",
+    revisar_con_cuidado: "caution",
+    datos_insuficientes: "caution",
+    protegido: "protected",
+    bloqueado: "blocked",
+    monitoreo: "blocked"
+  };
+  return classes[state] || "blocked";
+}
+
+function humanReason(item) {
+  if (item.state === "competidor_por_confirmar") {
+    return "Parece otro restaurante o negocio en Mérida. Hugo debe decidir si conviene bloquearlo.";
   }
-  out.push(value);
-}
-
-function canonicalForReview(t) {
-  return normalizeReviewText(t.suggested_negative || t.query);
-}
-
-function aliasesForReview(t) {
-  var aliases = [];
-  var q = String(t.query || "").replace(/\\s+/g, " ").trim();
-  var canonical = canonicalForReview(t);
-  addUnique(aliases, q);
-  addUnique(aliases, canonical);
-  if (canonical && canonical.indexOf("restaurante ") !== 0) {
-    addUnique(aliases, "restaurante " + canonical);
+  if (item.state === "revisar_con_cuidado") {
+    var text = "Algunas personas pidieron cómo llegar, llamaron o interactuaron en Maps. Puede ser un cliente real comparando opciones.";
+    if (String(item.term || "").toLowerCase().indexOf("hacienda teya") >= 0) {
+      return "Restaurante externo con señales locales. Requiere revisión humana. " + text;
+    }
+    return text;
   }
-  if (q && normalizeReviewText(q) !== canonical && normalizeReviewText(q).indexOf("restaurante ") !== 0) {
-    addUnique(aliases, "restaurante " + q);
+  return item.reason_human || "Sin nota adicional.";
+}
+
+function whatHappened(item) {
+  return number(item.clicks) + " clics &middot; " + money(item.cost_mxn) + " &middot; " + number(item.conversions) + " pedidos";
+}
+
+function rowHtml(item) {
+  var termKey = encodeURIComponent(String(item.term || ""));
+  var open = expandedTerm === termKey;
+  var label = stateLabel(item.state);
+  var html = "<tr>" +
+    "<td data-label='Término'><div class='term'>" + esc(item.term) + "</div><div class='campaign'>" + esc(item.campaign) + "</div></td>" +
+    "<td data-label='Qué pasó' class='what'>" + whatHappened(item) + "</td>" +
+    "<td data-label='Por qué aparece aquí' class='reason'>" + esc(humanReason(item)) + "</td>" +
+    "<td data-label='Estado'><span class='tag " + stateClass(item.state) + "'>" + esc(label) + "</span><br><button class='secondary' data-detail='" + termKey + "'>Ver detalle</button></td>" +
+    "</tr>";
+  if (open) {
+    html += detailRowHtml(item);
   }
-  return aliases;
+  return html;
 }
 
-// Match type aplicable que envia el clasificador (suggested_match_type).
-// Solo EXACT/PHRASE son negativizables desde /negativos; BROAD/None => null
-// (no seleccionable). El servidor /execute-optimization fail-closea igual.
-function applyMt(t) {
-  var m = String(t.suggested_match_type || "").toUpperCase();
-  return (m === "EXACT" || m === "PHRASE") ? m : null;
+function detailRowHtml(item) {
+  return "<tr class='detail-row'><td colspan='4'><div class='detail-box'>" +
+    "<div><b>Lectura</b>" + esc(stateLabel(item.state)) + "</div>" +
+    "<div><b>Piso de datos</b>" + (item.enough_data ? "Suficiente" : "Insuficiente") + "</div>" +
+    "<div><b>Permiso visual</b>" + (item.block_allowed ? "Requiere revisión uno por uno en fase posterior" : "No se puede bloquear desde esta pantalla") + "</div>" +
+    "</div></td></tr>";
 }
 
-function canPick(t) {
-  return t.negative_allowed === true &&
-    !!applyMt(t) &&
-    t.already_negative === false &&
-    !!t.campaign_id;
+function tableHtml(items, emptyText) {
+  if (!items.length) return "<div class='empty'>" + esc(emptyText) + "</div>";
+  return "<table><thead><tr><th>Término</th><th>Qué pasó</th><th>Por qué aparece aquí</th><th>Estado</th></tr></thead><tbody>" +
+    items.map(rowHtml).join("") +
+    "</tbody></table>";
 }
 
-function blockReason(t) {
-  if (t.already_negative === true) return "Ya negativo";
-  if (t.negative_allowed === true && !applyMt(t)) return "Match type no permitido";
-  if (t.negative_allowed === true && !t.campaign_id) return "Falta campaign_id";
-  if (t.negative_allowed === true && t.already_negative !== false) return "Estado de negativo no confiable";
-  if (t.conversion_quality === "unknown") return "Conversion no identificada";
-  if (t.conversion_quality === "money_action") return "Tuvo accion de dinero";
-  if (!t.campaign_id) return "Falta campaign_id";
-  if (!applyMt(t) && t.semantic_class === "red_safe") return "Match type no permitido";
-  if (t.base_negative_eligible !== true && t.semantic_class === "red_safe") return "No cumple elegibilidad base";
-  if (t.semantic_class === "external_entity_review") return "Entidad ajena no curada: revisar";
-  if (t.semantic_class === "ambiguous_useful") return "Puede traer clientes";
-  if (t.semantic_class === "brand_protected" || t.semantic_class === "thai_intent") return "Protegido";
-  return "Monitoreo";
+function bindDetailButtons() {
+  document.querySelectorAll("[data-detail]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      openDetail({ key: button.getAttribute("data-detail") });
+    });
+  });
 }
 
-function sectionFor(t) {
-  if (t.already_negative === true) return "already";
-  if (canPick(t)) return "ready";
-  if (t.semantic_class === "red_safe") return "blocked";
-  if (t.semantic_class === "external_entity_review") return "review";
-  if (t.semantic_class === "ambiguous_useful") return "ambiguous";
-  if (t.semantic_class === "brand_protected" || t.semantic_class === "thai_intent") return "protected";
-  return "monitoring";
+function openDetail(item) {
+  expandedTerm = expandedTerm === item.key ? null : item.key;
+  if (window.__lastPreviewData) render(window.__lastPreviewData);
 }
 
-el("load").onclick = loadTerms;
+function closeDetail() {
+  expandedTerm = null;
+  if (window.__lastPreviewData) render(window.__lastPreviewData);
+}
+
+function setMetric(id, value) {
+  el(id).textContent = number(value);
+}
+
+function render(data) {
+  window.__lastPreviewData = data;
+  var items = data.items || [];
+  var counts = data.state_counts || {};
+
+  var decisionItems = items.filter(function (item) {
+    return item.state === "listo_para_bloquear" || item.state === "competidor_por_confirmar";
+  });
+  var cautionItems = items.filter(function (item) {
+    return item.state === "revisar_con_cuidado" || item.state === "datos_insuficientes";
+  });
+  var protectedItems = items.filter(function (item) {
+    return item.state === "protegido" || item.state === "bloqueado" || item.state === "monitoreo";
+  });
+
+  setMetric("mTotal", data.total || items.length);
+  setMetric("mDecision", decisionItems.length);
+  setMetric("mCaution", cautionItems.length);
+  setMetric("mProtected", counts.protegido || 0);
+  setMetric("mBlocked", counts.bloqueado || 0);
+  el("decisionCount").textContent = number(decisionItems.length);
+  el("cautionCount").textContent = number(cautionItems.length);
+  el("protectedCount").textContent = number(protectedItems.length);
+
+  renderSection("decisionBody", decisionItems, "Hoy no hay términos seguros para bloquear.");
+  renderSection("cautionBody", cautionItems, "No hay términos con señales mixtas en este rango.");
+  renderSection("protectedBody", protectedItems, "No hay términos protegidos para mostrar.");
+
+  var floor = data.data_floor || {};
+  el("status").textContent = "Datos solo lectura. Piso: " + number(floor.clicks_min || 0) + " clics y " + money(floor.cost_min_mxn || 0) + ".";
+  bindDetailButtons();
+}
+
+function renderSection(targetId, items, emptyText) {
+  el(targetId).innerHTML = tableHtml(items, emptyText);
+}
 
 function loadTerms() {
-  el("confirm").hidden = true;
-  el("results").innerHTML = "";
-  el("addBtn").hidden = true;
-  el("meta").textContent = "Cargando...";
-  var r = el("range").value;
-  fetch("/search-terms?date_range=" + encodeURIComponent(r))
-    .then(function (resp) { return resp.json(); })
+  var range = el("range").value;
+  var url = "/negativos/preview-v2?date_range=" + encodeURIComponent(range);
+  el("status").textContent = "Cargando bandeja...";
+  fetch(url)
+    .then(function (response) { return response.json(); })
     .then(function (data) {
-      if (data.status !== "success") { el("meta").textContent = "Error: " + (data.message || data.status); return; }
-      rows = data.search_terms || [];
-      el("meta").textContent = data.total + " terminos - " + data.negative_candidates +
-        " candidatos a negativo - " + (data.competitor_terms || 0) + " de competidores";
-      renderTable();
-    })
-    .catch(function (e) { el("meta").textContent = "Error de red: " + e; });
-}
-
-var HEAD = "<table><thead><tr><th></th><th>Query</th><th>Campana</th>" +
-           "<th>Clics</th><th>Impr.</th><th>Costo</th><th>Conv.</th><th>Estado</th></tr></thead><tbody>";
-
-function legacyRowHtml(t, i, cls) {
-  if (t.already_negative) {
-    var note = t.negative_smart_uncertain ? " (Smart: efectividad incierta)" : "";
-    var bb = t.blocked_by ? (esc(t.blocked_by.text) + " " + esc(t.blocked_by.match_type)) : "";
-    return "<tr class='" + cls + " done' title='ya negativo: " + bb + note + "'>" +
-      "<td>✅</td>" +
-      "<td>" + esc(t.query) + " <small>✅ ya negativo" + note + "</small></td>" +
-      "<td>" + esc(t.campaign_name) + "</td>" +
-      "<td class='num'>" + t.clicks + "</td>" +
-      "<td class='num'>" + t.impressions + "</td>" +
-      "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
-      "<td class='num'>" + t.conversions + "</td></tr>";
-  }
-  var amt = applyMt(t);
-  var disabled, badge;
-  if (!t.campaign_id) {
-    disabled = "disabled title='sin campaign_id'"; badge = "";
-  } else if (!amt) {
-    disabled = "disabled title='sin match type sugerido — no negativizable'"; badge = "";
-  } else {
-    disabled = ""; badge = " <span class='mt'>" + amt + "</span>";
-  }
-  return "<tr class='" + cls + "'>" +
-    "<td></td>" +
-    "<td>" + esc(t.query) + badge + "</td>" +
-    "<td>" + esc(t.campaign_name) + "</td>" +
-    "<td class='num'>" + t.clicks + "</td>" +
-    "<td class='num'>" + t.impressions + "</td>" +
-    "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
-    "<td class='num'>" + t.conversions + "</td></tr>";
-}
-
-function sectionHtml(title, help, items, cls, extraHtml) {
-  if (!items.length) return "";
-  var body = "";
-  items.forEach(function (entry) {
-    body += rowHtml(entry.term, entry.index, cls);
-  });
-  return "<h2 class='sec'>" + esc(title) + " (" + items.length + ")</h2>" +
-    "<p class='help'>" + esc(help) + "</p>" +
-    (extraHtml || "") +
-    HEAD + body + "</tbody></table>";
-}
-
-function rowHtml(t, i, cls) {
-  var amt = applyMt(t);
-  var badge = amt ? " <span class='mt'>" + amt + "</span>" : "";
-  var state = "<span class='badge'>" + esc(t.semantic_class || "sin clase") + "</span> " +
-              "<span class='badge'>" + esc(t.conversion_quality || "sin conversion") + "</span><br>" +
-              "<span class='reason'>" + esc(blockReason(t)) + "</span>";
-  if (t.already_negative) {
-    var note = t.negative_smart_uncertain ? " (Smart: efectividad incierta)" : "";
-    var bb = t.blocked_by ? (esc(t.blocked_by.text) + " " + esc(t.blocked_by.match_type)) : "";
-    return "<tr class='" + cls + " done' title='ya negativo: " + bb + note + "'>" +
-      "<td></td>" +
-      "<td>" + esc(t.query) + badge + " <small>Ya negativo" + note + "</small></td>" +
-      "<td>" + esc(t.campaign_name) + "</td>" +
-      "<td class='num'>" + t.clicks + "</td>" +
-      "<td class='num'>" + t.impressions + "</td>" +
-      "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
-      "<td class='num'>" + t.conversions + "</td>" +
-      "<td>" + state + "</td></tr>";
-  }
-  if (t.semantic_class === "external_entity_review") {
-    return "<tr class='" + cls + "'>" +
-      "<td>" + reviewPick(i) + "</td>" +
-      "<td>" + esc(t.query) + badge + "</td>" +
-      "<td>" + esc(t.campaign_name) + "</td>" +
-      "<td class='num'>" + t.clicks + "</td>" +
-      "<td class='num'>" + t.impressions + "</td>" +
-      "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
-      "<td class='num'>" + t.conversions + "</td>" +
-      "<td>" + state + reviewActions(t, i) + "</td></tr>";
-  }
-  var pick = canPick(t)
-    ? "<input type='checkbox' class='pick' data-i='" + i + "'>"
-    : "";
-  return "<tr class='" + cls + "'>" +
-    "<td>" + pick + "</td>" +
-    "<td>" + esc(t.query) + badge + "</td>" +
-    "<td>" + esc(t.campaign_name) + "</td>" +
-    "<td class='num'>" + t.clicks + "</td>" +
-    "<td class='num'>" + t.impressions + "</td>" +
-    "<td class='num'>$" + Number(t.cost).toFixed(2) + "</td>" +
-    "<td class='num'>" + t.conversions + "</td>" +
-    "<td>" + state + "</td></tr>";
-}
-
-function reviewPick(i) {
-  return "<input type='checkbox' class='review-pick' data-review-i='" + i + "'>";
-}
-
-function reviewActions(t, i) {
-  return "<div class='review-actions' data-review-i='" + i + "'>" +
-    "<button onclick='showReviewProposal(\\"competitor\\"," + i + ")'>Confirmar competidor</button>" +
-    "<button class='secondary' onclick='showReviewProposal(\\"generic\\"," + i + ")'>Marcar como genérico útil</button>" +
-    "<button class='neutral' onclick='showReviewProposal(\\"keep\\"," + i + ")'>Mantener en revisión</button>" +
-    "</div>";
-}
-
-function reviewMeta(t, decision) {
-  return {
-    source_query: String(t.query || ""),
-    decision: decision,
-    confirmed_by: "hugo",
-    confirmed_at: new Date().toISOString(),
-    notes: ""
-  };
-}
-
-function competitorProposal(t) {
-  return {
-    canonical: canonicalForReview(t),
-    aliases: aliasesForReview(t),
-    category: "restaurante_ajeno",
-    confidence: "media",
-    suggested_match_type: "EXACT",
-    auto_apply: false,
-    review: reviewMeta(t, "confirmar_competidor")
-  };
-}
-
-function usefulGenericProposal(t) {
-  return {
-    pattern: String(t.query || ""),
-    normalized_pattern: normalizeReviewText(t.query),
-    classification_target: "ambiguous_useful",
-    reason: "Consulta generica o util para demanda potencial; no debe caer como entidad ajena.",
-    confidence: "media",
-    review: reviewMeta(t, "marcar_generico_util")
-  };
-}
-
-function reviewBatchHtml() {
-  return "<div class='review-batch'>" +
-    "<button onclick='showBatchReviewProposal(\\"competitor\\")'>Generar propuestas de competidores seleccionados</button>" +
-    "<button class='secondary' onclick='showBatchReviewProposal(\\"generic\\")'>Generar propuestas de genéricos útiles seleccionados</button>" +
-    "</div>";
-}
-
-function showReviewProposal(kind, index) {
-  var t = rows[index];
-  var box = el("reviewProposal");
-  if (!t) return;
-
-  if (kind === "keep") {
-    box.innerHTML = "<p class='proposal-note'>Esto genera una propuesta. No aplica negativos.</p>" +
-      "<h3>Mantener en revisión</h3>" +
-      "<p>No cambia nada, no genera payload y no guarda en producción.</p>" +
-      "<button id='closeReview' class='secondary'>Cerrar</button>";
-    box.hidden = false;
-    el("closeReview").onclick = function () { box.hidden = true; };
-    box.scrollIntoView({ behavior: "smooth", block: "center" });
-    return;
-  }
-
-  var proposal = kind === "competitor" ? competitorProposal(t) : usefulGenericProposal(t);
-  var targetFile = kind === "competitor" ? "irrelevant_entities.json" : "useful_generic_patterns.json";
-  var title = kind === "competitor" ? "Propuesta para entidad curada" : "Propuesta para genérico útil";
-  var json = JSON.stringify(proposal, null, 2);
-  box.innerHTML = "<p class='proposal-note'>Esto genera una propuesta. No aplica negativos.</p>" +
-    "<h3>" + esc(title) + "</h3>" +
-    "<p class='help'>Destino sugerido para commit manual: <strong>" + esc(targetFile) + "</strong></p>" +
-    "<textarea id='proposalJson' readonly>" + esc(json) + "</textarea>" +
-    "<button id='copyProposal'>Copiar propuesta JSON</button> " +
-    "<button id='closeReview' class='secondary'>Cerrar</button>";
-  box.hidden = false;
-  el("copyProposal").onclick = function () {
-    var textarea = el("proposalJson");
-    textarea.select();
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(textarea.value);
-    } else {
-      document.execCommand("copy");
-    }
-  };
-  el("closeReview").onclick = function () { box.hidden = true; };
-  box.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-function showBatchReviewProposal(kind) {
-  var items = selectedForReview();
-  if (!items.length) { alert("No seleccionaste ningun termino en revision."); return; }
-
-  var proposals = kind === "competitor"
-    ? items.map(function (t) { return competitorProposal(t); })
-    : items.map(function (t) { return usefulGenericProposal(t); });
-  var targetFile = kind === "competitor" ? "irrelevant_entities.json" : "useful_generic_patterns.json";
-  var title = kind === "competitor" ? "Propuestas de competidores seleccionados" : "Propuestas de genéricos útiles seleccionados";
-  var json = JSON.stringify(proposals, null, 2);
-  var box = el("reviewProposal");
-  box.innerHTML = "<p class='proposal-note'>Esto genera propuestas. No aplica negativos.</p>" +
-    "<h3>" + esc(title) + "</h3>" +
-    "<p class='help'>Destino sugerido para commit manual: <strong>" + esc(targetFile) + "</strong></p>" +
-    "<textarea id='proposalJson' readonly>" + esc(json) + "</textarea>" +
-    "<button id='copyProposal'>Copiar propuesta JSON</button> " +
-    "<button id='closeReview' class='secondary'>Cerrar</button>";
-  box.hidden = false;
-  el("copyProposal").onclick = function () {
-    var textarea = el("proposalJson");
-    textarea.select();
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(textarea.value);
-    } else {
-      document.execCommand("copy");
-    }
-  };
-  el("closeReview").onclick = function () { box.hidden = true; };
-  box.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-function renderTable() {
-  if (!rows.length) {
-    el("tableWrap").innerHTML = "<p>Sin search terms en este rango.</p>";
-    el("addBtn").hidden = true;
-    return;
-  }
-  var sections = {
-    ready: [], blocked: [], review: [], ambiguous: [],
-    protected: [], monitoring: [], already: []
-  };
-  rows.forEach(function (t, i) {
-    sections[sectionFor(t)].push({ term: t, index: i });
-  });
-  el("tableWrap").innerHTML =
-    sectionHtml("Listos para aplicar", "Unica seccion seleccionable. Requiere negative_allowed=true, EXACT/PHRASE, campaign_id y already_negative=false.", sections.ready, "ready") +
-    sectionHtml("Rojo bloqueado", "Terminos rojos que no pasan alguna guarda de seguridad.", sections.blocked, "blocked") +
-    sectionHtml("Ya negativos", "Terminos que ya tienen un negativo bloqueandolos.", sections.already, "done") +
-    sectionHtml("Revisar entidad ajena", "Posibles restaurantes, negocios o lugares externos no curados. Sin checkbox de negativo.", sections.review, "review", reviewBatchHtml()) +
-    sectionHtml("Ambiguos / pueden traer clientes", "Genericos u otras cocinas que pueden representar demanda util. Sin checkbox.", sections.ambiguous, "comp") +
-    sectionHtml("Protegidos", "Marca propia o intencion Thai clara. Sin checkbox.", sections.protected, "protected") +
-    sectionHtml("Monitoreo", "Terminos neutrales. Sin checkbox.", sections.monitoring, "");
-  el("addBtn").hidden = false;
-}
-
-function selectedForNegatives() {
-  var out = [];
-  document.querySelectorAll(".pick:checked").forEach(function (cb) {
-    out.push(rows[parseInt(cb.getAttribute("data-i"), 10)]);
-  });
-  return out;
-}
-
-function selectedForReview() {
-  var out = [];
-  document.querySelectorAll(".review-pick:checked").forEach(function (cb) {
-    out.push(rows[parseInt(cb.getAttribute("data-review-i"), 10)]);
-  });
-  return out;
-}
-
-function selected() {
-  return selectedForNegatives();
-}
-
-el("addBtn").onclick = function () {
-  var sel = selectedForNegatives();
-  if (!sel.length) { alert("No seleccionaste ningun termino."); return; }
-
-  // Google Ads: keyword maximo 80 caracteres. Los que excedan se EXCLUYEN
-  // del envio a /execute-optimization; se avisa antes de confirmar.
-  var tooLong = sel.filter(function (t) { return String(t.query).length > 80; });
-  sel = sel.filter(function (t) { return String(t.query).length <= 80; });
-
-  var warnHtml = "";
-  if (tooLong.length) {
-    warnHtml = "<p class='warn'>\\u26A0\\uFE0F " + tooLong.length +
-      " termino(s) excluido(s) por ser demasiado largo(s) para Google Ads " +
-      "(max. 80 caracteres):</p><ul>";
-    tooLong.forEach(function (t) {
-      warnHtml += "<li>" + esc(t.query) + " <em>(" + String(t.query).length +
-        " car.)</em></li>";
-    });
-    warnHtml += "</ul>";
-  }
-
-  if (!sel.length) {
-    var cw = el("confirm");
-    cw.innerHTML = warnHtml +
-      "<p>No queda ningun termino valido para enviar.</p>" +
-      "<button id='cancel' class='secondary'>Cerrar</button>";
-    cw.hidden = false;
-    el("cancel").onclick = function () { cw.hidden = true; };
-    return;
-  }
-
-  var brand = sel.filter(function (t) { return /thai/i.test(t.query); });
-  var html = warnHtml +
-    "<strong>Vas a agregar " + sel.length + " negativo(s):</strong><ul>";
-  sel.forEach(function (t) {
-    html += "<li>" + esc(t.query) + " &rarr; " + esc(t.campaign_name) +
-            " <span class='mt'>" + (applyMt(t) || "?") + "</span></li>";
-  });
-  html += "</ul>";
-  if (brand.length) {
-    html += "<p class='warn'>OJO: " + brand.length +
-      " termino(s) contienen \\"thai\\" - parecen de marca. NO bloquees tu propia marca.</p>";
-  }
-  html += "<button id='go'>Confirmar y enviar</button> " +
-          "<button id='cancel' class='secondary'>Cancelar</button>";
-  var c = el("confirm");
-  c.innerHTML = html;
-  c.hidden = false;
-  el("cancel").onclick = function () { c.hidden = true; };
-  el("go").onclick = function () { submit(sel); };
-};
-
-function submit(sel) {
-  el("go").disabled = true;
-  var actions = sel.map(function (t) {
-    return { type: "block_keyword", keyword: t.query, campaign_id: String(t.campaign_id),
-             campaign_name: t.campaign_name, match_type: applyMt(t),
-             reason: "manual UI negativos" };
-  });
-  fetch("/execute-optimization", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-API-Token": token() },
-    body: JSON.stringify({ actions: actions })
-  }).then(function (resp) {
-    if (resp.status === 401) { showGate("Token invalido o ausente. Pega un token valido."); return null; }
-    return resp.json();
-  }).then(function (data) {
-    if (!data) return;
-    el("confirm").hidden = true;
-    var r = el("results");
-    if (data.status !== "success") { r.innerHTML = "<div class='err'>Error: " + esc(data.message || "") + "</div>"; return; }
-    var res = data.results || [];
-    var okList = res.filter(function (x) { return x.status === "executed"; });
-    var failList = res.filter(function (x) { return x.status !== "executed"; });
-
-    // Banner prominente de exito (visible y claro, no solo filas OK)
-    var b = el("banner");
-    if (okList.length) {
-      b.className = failList.length ? "partial" : "";
-      b.innerHTML =
-        "\\u2705 <strong>" + okList.length + " palabra(s) negativa(s) agregada(s) " +
-        "exitosamente a Google Ads.</strong> Estas busquedas ya no activaran tus " +
-        "anuncios en el futuro. Los terminos seguiran apareciendo en el historial " +
-        "de los proximos 7 dias \\u2014 eso es normal." +
-        (failList.length ? "<br><span class='warn'>" + failList.length +
-          " no se pudo(eron) agregar (ver detalle abajo).</span>" : "");
-      b.hidden = false;
-      b.scrollIntoView({ behavior: "smooth", block: "center" });
-    } else {
-      b.hidden = true;
-    }
-
-    // Detalle por termino
-    var out = "<h3>Detalle</h3>";
-    res.forEach(function (x) {
-      var ok = x.status === "executed";
-      out += "<div class='" + (ok ? "ok" : "err") + "'>" +
-        (ok ? "OK" : "FALLO") + " - " + esc(x.target || "") +
-        (x.message ? " (" + esc(x.message) + ")" : "") + "</div>";
-    });
-    r.innerHTML = out;
-
-    // Marcar filas ya bloqueadas. NO se recarga la tabla: el historico no
-    // cambia al instante y recargar borraria este feedback (bug anterior).
-    var blocked = {};
-    okList.forEach(function (x) { blocked[x.target] = true; });
-    document.querySelectorAll(".pick").forEach(function (cb) {
-      var t = rows[parseInt(cb.getAttribute("data-i"), 10)];
-      if (t && blocked[t.query]) {
-        var tr = cb.closest("tr");
-        tr.className = "done";
-        cb.checked = false;
-        cb.disabled = true;
-        cb.parentNode.textContent = "\\u2713";
+      if (data.status !== "success") {
+        el("status").textContent = "No se pudo cargar la bandeja.";
+        return;
       }
+      expandedTerm = null;
+      render(data);
+    })
+    .catch(function () {
+      el("status").textContent = "Error de red al cargar la bandeja.";
     });
-  }).catch(function (e) {
-    el("confirm").hidden = true;
-    el("results").innerHTML = "<div class='err'>Error de red: " + esc(e) + "</div>";
-  });
 }
 
-if (token()) showApp(); else showGate();
+el("refresh").addEventListener("click", loadTerms);
+el("range").addEventListener("change", loadTerms);
+loadTerms();
 </script>
 </body>
 </html>"""
@@ -630,5 +470,5 @@ if (token()) showApp(); else showGate();
 
 @router.get("/negativos", response_class=HTMLResponse)
 async def negativos_ui():
-    """Sirve la mini-app de revision de search terms."""
+    """Sirve la bandeja read-only de revisión de términos."""
     return HTMLResponse(content=_PAGE)
