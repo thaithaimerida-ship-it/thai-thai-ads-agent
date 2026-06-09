@@ -9,77 +9,96 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from routes.negativos_ui import _PAGE
 
 
-def test_negativos_ui_route_serves_page():
+def test_negativos_ui_route_serves_read_only_v2_page():
     from main import app
 
     response = TestClient(app).get("/negativos")
 
     assert response.status_code == 200
-    assert "Listos para aplicar" in response.text
+    assert "Bandeja de revisión de términos" in response.text
+    assert "Modo seguro" in response.text
+    assert "Solo lectura" in response.text
+    assert "/negativos/preview-v2" in response.text
 
 
-def test_checkbox_guard_uses_negative_allowed_and_visual_fail_closed_conditions():
-    assert "function canPick(t)" in _PAGE
-    assert "t.negative_allowed === true" in _PAGE
-    assert "!!applyMt(t)" in _PAGE
-    assert "t.already_negative === false" in _PAGE
-    assert "!!t.campaign_id" in _PAGE
-
-
-def test_checkbox_is_only_rendered_through_can_pick():
-    assert '? "<input type=\'checkbox\' class=\'pick\'' in _PAGE
-    assert ": \"\";" in _PAGE
-
-    checkbox_occurrences = re.findall(r"<input type='checkbox' class='pick'", _PAGE)
-    assert len(checkbox_occurrences) == 1
-
-
-def test_sections_required_by_phase_4_exist():
-    for title in [
-        "Listos para aplicar",
-        "Rojo bloqueado",
-        "Revisar entidad ajena",
-        "Ambiguos / pueden traer clientes",
+def test_negativos_ui_v2_header_summary_and_sections_exist():
+    for text in [
+        "Bandeja de revisión de términos",
+        "Revisa búsquedas antes de bloquearlas en Google Ads",
+        "Bloquear es la excepción, no la regla.",
+        "Términos revisados",
+        "Necesitan tu decisión",
+        "Revisar con cuidado",
         "Protegidos",
-        "Monitoreo",
-        "Ya negativos",
+        "Ya bloqueados",
+        "Necesitan tu decisión",
+        "Revisar con cuidado",
+        "Protegidos · no se tocan",
+        "Hoy no hay términos seguros para bloquear.",
     ]:
-        assert title in _PAGE
+        assert text in _PAGE
 
 
-def test_sectioning_does_not_decide_by_legacy_classification():
-    section_for = _PAGE.split("function sectionFor(t)", 1)[1].split("el(\"load\").onclick", 1)[0]
+def test_negativos_ui_v2_uses_only_preview_endpoint_for_data():
+    fetch_calls = re.findall(r"fetch\(([^)]+)\)", _PAGE)
 
-    assert "classification" not in section_for
-    assert "base_negative_eligible" not in section_for
-    assert "recommended_action" not in section_for
-    assert "canPick(t)" in section_for
+    assert fetch_calls
+    assert fetch_calls == ["url"]
+    assert "/negativos/preview-v2?date_range=" in _PAGE
+    assert "/search-terms" not in _PAGE
+    assert "/execute-optimization" not in _PAGE
+    assert "/apply-budget-changes" not in _PAGE
 
 
-def test_block_reasons_cover_required_fail_closed_cases():
-    for reason in [
-        "Ya negativo",
-        "Match type no permitido",
-        "Falta campaign_id",
-        "Estado de negativo no confiable",
-        "Conversion no identificada",
-        "Tuvo accion de dinero",
-        "No cumple elegibilidad base",
+def test_negativos_ui_v2_has_no_write_token_or_post_contract():
+    for forbidden in [
+        "X-API-Token",
+        "localStorage",
+        "tt_admin_token",
+        "method: \"POST\"",
+        "method: 'POST'",
+        "block_keyword",
+        "Aplicar todos",
+        "Confirmar bloqueo",
+        "Bloquear termino",
+        "Confirmar competidor",
+        "Agregar como negativos",
+        "Confirmar y enviar",
     ]:
-        assert reason in _PAGE
+        assert forbidden not in _PAGE
 
 
-def test_payload_contract_still_sends_keyword_campaign_and_match_type():
-    assert 'keyword: t.query' in _PAGE
-    assert 'campaign_id: String(t.campaign_id)' in _PAGE
-    assert 'match_type: applyMt(t)' in _PAGE
-    assert 'fetch("/execute-optimization"' in _PAGE
+def test_negativos_ui_v2_hides_raw_taxonomy_from_operator():
+    for forbidden in [
+        "semantic_class",
+        "negative_allowed",
+        "base_negative_eligible",
+        "weak_local_action",
+        "red_safe",
+        "already_negative",
+    ]:
+        assert forbidden not in _PAGE
 
 
-def test_execute_optimization_is_not_changed_by_ui_contract():
+def test_negativos_ui_v2_shows_only_four_operator_columns():
+    for column in [
+        "<th>Término</th>",
+        "<th>Qué pasó</th>",
+        "<th>Por qué aparece aquí</th>",
+        "<th>Estado</th>",
+    ]:
+        assert column in _PAGE
+
+    assert "<th>Campana</th>" not in _PAGE
+    assert "<th>Clics</th>" not in _PAGE
+    assert "<th>Impr.</th>" not in _PAGE
+    assert "<th>Conv.</th>" not in _PAGE
+
+
+def test_execute_optimization_server_gate_remains_unchanged():
     with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "routes", "analysis.py"), encoding="utf-8") as f:
         analysis = f.read()
 
-    assert 'mt = (action.match_type or "").strip().upper()' in analysis
+    assert "@router.post(\"/execute-optimization\"" in analysis
     assert 'mt == "BROAD"' in analysis
-    assert 'match_type=mt' in analysis
+    assert "conversion_quality_weak_local_action" in analysis
