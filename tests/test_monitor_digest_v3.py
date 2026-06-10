@@ -243,6 +243,46 @@ def test_monitor_digest_endpoint_is_read_only_and_uses_search_terms_payload(monk
     assert result["decisions"][0]["term"] == "vips cerca de mi"
 
 
+def test_monitor_digest_route_accepts_valid_date_range(monkeypatch):
+    import routes.monitor as monitor
+
+    calls = []
+
+    def fake_build(date_range="LAST_7_DAYS"):
+        calls.append(date_range)
+        return _payload([
+            _term(query="vips cerca de mi", clicks=2, cost=40, conversion_quality="none")
+        ], date_range=date_range)
+
+    monkeypatch.setattr(monitor, "_build_search_terms_payload", fake_build)
+
+    result = asyncio.run(monitor.monitor_digest(date_range="LAST_7_DAYS"))
+
+    assert calls == ["LAST_7_DAYS"]
+    assert result["status"] == "success"
+
+
+def test_monitor_digest_route_rejects_invalid_date_range(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    import routes.monitor as monitor
+
+    calls = []
+
+    def fake_build(date_range="LAST_7_DAYS"):
+        calls.append(date_range)
+        return _payload([], date_range=date_range)
+
+    monkeypatch.setattr(monitor, "_build_search_terms_payload", fake_build)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(monitor.monitor_digest(date_range="BAD_RANGE"))
+
+    assert exc.value.status_code == 400
+    assert "date_range invalido" in exc.value.detail
+    assert calls == []
+
+
 def test_campaign_rows_exist():
     from engine.monitor_digest_v3 import build_monitor_digest
 
