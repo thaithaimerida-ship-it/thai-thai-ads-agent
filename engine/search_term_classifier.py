@@ -120,11 +120,11 @@ _HIGH_FP_AMBIGUOUS = ("curry",)
 MONEY_ACTION_NAMES = {
     _normalize("reserva_completada_directa"),
     _normalize("Pedido GloriaFood Online"),
-    _normalize("click_pedir_online"),
-    _normalize("click_whatsapp"),
 }
 
 WEAK_LOCAL_ACTION_NAMES = {
+    _normalize("click_pedir_online"),
+    _normalize("click_whatsapp"),
     _normalize("Local actions - Directions"),
     _normalize("Store visits"),
     _normalize("Local actions - Website visits"),

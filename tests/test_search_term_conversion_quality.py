@@ -20,8 +20,6 @@ def test_no_conversions_maps_to_none():
     [
         "reserva_completada_directa",
         "Pedido GloriaFood Online",
-        "click_pedir_online",
-        "click_whatsapp",
     ],
 )
 def test_allowlisted_money_actions_map_to_money_action(name):
@@ -33,6 +31,8 @@ def test_allowlisted_money_actions_map_to_money_action(name):
 @pytest.mark.parametrize(
     "name",
     [
+        "click_pedir_online",
+        "click_whatsapp",
         "Local actions - Directions",
         "Store visits",
         "Local actions - Website visits",

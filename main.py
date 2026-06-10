@@ -315,6 +315,8 @@ from routes.presupuestos import router as presupuestos_router
 app.include_router(presupuestos_router)
 from routes.ai_recommendations import router as ai_recommendations_router
 app.include_router(ai_recommendations_router)
+from routes.monitor import router as monitor_router
+app.include_router(monitor_router)
 
 # Strategy functions delegated to agents/strategist.py
 from agents.strategist import Strategist as _Strategist
