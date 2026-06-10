@@ -1,0 +1,96 @@
+{
+  "identity_labels": {
+    "marca_propia": "Marca propia",
+    "intencion_thai": "Intencion Thai",
+    "categoria_asiatica": "Categoria asiatica relacionada",
+    "generico_util": "Busqueda util",
+    "restaurante_externo": "Restaurante externo",
+    "negocio_no_relacionado": "Negocio no relacionado",
+    "basura": "Basura clara",
+    "desconocido": "Desconocido"
+  },
+  "behavior_labels": {
+    "senal_dinero": "Senal de dinero",
+    "senal_local": "Senal local",
+    "sin_conversion": "Sin conversion",
+    "desconocida": "Senal desconocida"
+  },
+  "decision_copy": {
+    "negative_leak": "Termino externo o basura con gasto y sin senales utiles. Revisar uno por uno antes de cualquier bloqueo.",
+    "external_review": "Parece otro restaurante o negocio. Hugo debe confirmar si conviene bloquearlo.",
+    "tracking_review": "Hay conversiones o senales no clasificadas. Revisar tracking antes de decidir.",
+    "local_signal": "Hay rutas, llamadas, Maps u otra senal local. Puede ser cliente real comparando opciones.",
+    "protected": "Marca, intencion Thai o busqueda util protegida. No bloquear."
+  },
+  "term_groups": {
+    "confirmed_competitors": [
+      "casa thai",
+      "casa thai merida",
+      "casa thai mérida",
+      "bangkok casa thai",
+      "bangkok casa thai merida",
+      "bangkok casa thai mérida",
+      "bankok casa thai",
+      "bankok casa thai merida",
+      "bankok casa thai mérida"
+    ],
+    "casa_thai_variants": [
+      "casa thai",
+      "casa thai merida",
+      "casa thai mérida",
+      "bangkok casa thai",
+      "bangkok casa thai merida",
+      "bangkok casa thai mérida",
+      "bankok casa thai",
+      "bankok casa thai merida",
+      "bankok casa thai mérida"
+    ],
+    "own_brand": [
+      "thai thai",
+      "thaithai",
+      "thai thai merida",
+      "thai thai mérida",
+      "restaurante thai thai"
+    ],
+    "thai_intent": [
+      "comida tailandesa",
+      "comida tailandesa merida",
+      "comida tailandesa mérida",
+      "thai food merida",
+      "thai food mérida",
+      "restaurante tailandes",
+      "restaurante tailandés",
+      "restaurante thai"
+    ],
+    "asian_category": [
+      "comida japonesa",
+      "comida japonesa merida",
+      "comida japonesa mérida",
+      "comida china",
+      "comida china cerca de mi",
+      "chinese food",
+      "sushi",
+      "ramen"
+    ],
+    "useful_generic": [
+      "comida asiatica",
+      "comida asiática",
+      "restaurante cerca de mi",
+      "restaurantes near me",
+      "food near me",
+      "comida cerca de mi",
+      "lugares comida cerca de mi"
+    ]
+  },
+  "high_priority_entities": [
+    "casa thai",
+    "casa thai merida",
+    "casa thai mérida",
+    "bangkok casa thai",
+    "bangkok casa thai merida",
+    "bangkok casa thai mérida",
+    "bankok casa thai",
+    "bankok casa thai merida",
+    "bankok casa thai mérida"
+  ]
+}
