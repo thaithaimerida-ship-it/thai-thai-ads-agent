@@ -1,5 +1,41 @@
 # Thai Thai Ads Agent — CLAUDE.md
 
+---
+
+## 🔒 REGLAS PERMANENTES — FASE DE CIERRE MONITOR (leer primero)
+
+> Vigentes durante la fase de cierre `thai-thai-monitor` (renderer + digest completo).
+> MODO SEGURO SIEMPRE: cero mutaciones a Google Ads, cero escritura en APIs externas,
+> cero deploys sin autorización explícita de Hugo.
+
+**Código intocable (solo importar, jamás modificar):**
+- NUNCA tocar `/execute-optimization` ni el engine de `preview-v2`/`preview-v3` (solo importar).
+- NUNCA tocar `ReservationModal.jsx` ni el sistema de reservas.
+- NUNCA tocar Meta CAPI (`meta_capi.py`) ni la integración GloriaFood.
+
+**Google Ads:**
+- NUNCA crear un endpoint POST de escritura hacia Google Ads.
+- Campañas nuevas: SIEMPRE `PAUSED`.
+- Negativos: JAMÁS `BROAD`, JAMÁS en batch.
+
+**Datos — separación sagrada:**
+- Dinero (`Pedido GloriaFood Online`, `reserva_completada_directa`) y señales locales
+  JAMÁS se suman en un mismo número.
+
+**Infra:**
+- Cloud Run: SIEMPRE `--update-env-vars`, NUNCA `--set-env-vars` solo.
+- Stack: Python puro + `requests`. Sin frameworks nuevos. Sin LLM en runtime del monitor.
+
+**Herramientas (ver `docs/entorno.md`):**
+- CodeRabbit, Semgrep y Playwright corren en **WSL**, no en PowerShell.
+- pytest corre en **Windows / py313** (venv `env/`) — la suite ya pasa verde ahí.
+
+**Autorización (gate humano):**
+- NO commit, NO push, NO PR, NO deploy, NO `clasp push`, NO triggers,
+  NO correos reales — sin autorización explícita de Hugo.
+
+---
+
 ## Qué hace
 FastAPI (Python 3.13) — agente semi-autónomo de optimización para Google Ads + GA4 + Sheets del restaurante Thai Thai Mérida. El cerebro de decisión es Claude Haiku 4.5 (decisiones de presupuesto y keywords). Claude Sonnet 4.6 se usa para análisis e insights narrativos.
 
@@ -188,8 +224,36 @@ gcloud run services update thai-thai-ads-agent \
 | `CALLMEBOT_APIKEY` | `8710152` |
 | `META_PIXEL_ID` | ID del pixel de Meta (Conversions API) — usado por `meta_capi.py` |
 | `META_CAPI_ACCESS_TOKEN` | Token de acceso Meta Conversions API — usado por `meta_capi.py` |
+| `PAGESPEED_API_KEY` | Key de PageSpeed Insights (SEO del monitor). Está en `.env` local (tomada del `Config.gs` del Apps Script viejo). **Pendiente: rotarla y subir la nueva a Cloud Run** (la actual está hardcodeada en Apps Script). Sin esta key, el bloque SEO del digest cae a "en reparación". |
+
+### Pendientes de deploy — Fase Monitor (F2R)
+- **`ACTIONS_TOKEN`** (Secret Manager): token de las páginas protegidas de acciones (`/acciones/bloqueo`, `/acciones/resenas`). Los botones del correo lo llevan en el link. Mientras no exista, los links usan `PENDIENTE_PARTE_B` (las páginas se construyen en Parte B / branch `fase-g-acciones-confirmadas`).
+Cuando se despliegue el digest completo:
+- **`PAGESPEED_API_KEY`** — **rotada 2026-06-10** (la nueva ya está en `.env` local, gitignored). Falta subir la nueva a Cloud Run (`--update-env-vars`). La vieja (hardcodeada en `Config.gs` del Apps Script) debe darse de baja.
+- **Search Console**: ✅ cableado (2026-06-10) a la propiedad **URL-prefix** `https://thaithaimerida.com/` (la de dominio está SIN VERIFICAR — NO usar `sc-domain:`). SA con permiso Total ya agregado. Query en `engine/monitor_sources.build_search_console_context()`. Pendiente de deploy: confirmar que la **Search Console API** esté habilitada en el proyecto `thai-thai-ads-master-agent`. Override opcional con `SEARCH_CONSOLE_SITE_URL`.
+- **Verificar presupuestos** del digest en prod contra los reales (Local $158, Delivery $55, Delivery Search $75, Experiencia $158 al 2026-06-10).
+
+### Pendientes de deploy — Fase G (módulo Reseñas 5★)
+- **`ACCIONES_TOKEN`** (Secret Manager): token de `/acciones/resenas`. Sin token / token inválido / var no seteada → 403 (fail-closed). Es el mismo concepto que `ACTIONS_TOKEN` del digest; unificar al desplegar.
+- **`DRY_RUN_RESENAS=true`** por default (no llama a `updateReply` de GBP). Solo cambiar a `false` post-deploy con autorización explícita de Hugo.
+- **`ACCIONES_EMAIL_ENABLED=true`** en **producción** — gate ÚNICO del correo de confirmación de acciones (reseñas **y** bloqueo). Hugo lo quiere por cada acción real. `RESENAS_EMAIL_ENABLED` queda como alias legacy (ambos los lee `engine/acciones_email.email_habilitado`). Default `false` en local/build.
+- **`GBP_ACCOUNT_ID` / `GBP_LOCATION_ID`** (opcionales): hay defaults a la cuenta/ubicación de Thai Thai. Credenciales GBP (`GBP_CLIENT_ID/SECRET/REFRESH_TOKEN`) ya en Cloud Run.
+- Log inmutable de acciones en `data/acciones_log.jsonl` (append-only; sync a GCS como el resto de `data/`).
+
+### Pendientes de deploy — Fase B1 (página de bloqueo de negativos)
+- **`ACCIONES_TOKEN`** (Secret Manager): mismo token que reseñas para `/acciones/bloqueo`, fail-closed 403.
+- **`DRY_RUN_NEGATIVOS=true`** por default (todo menos la llamada de escritura a Google Ads). Solo `false` post-deploy con autorización explícita de Hugo.
+- **`GOOGLE_ADS_CUSTOMER_ID`** (default `4021070209`). Aplica EXACT en SEARCH (Delivery Search / Experiencia 2026) vía `ads_client.add_negative_keyword(match_type="EXACT")`. **JAMÁS BROAD, JAMÁS batch.** Smart (Local/Delivery): guarda de marca/categoría (thai/tailand*/bangkok/thaithai) → si la contiene, el theme se prohíbe; sin API confiable para negativos en Smart → `manual_required` (aplicar en UI). "Dejar" agrega el término a `acknowledged_external_roots` en `term_dictionary.json` (no toca Ads).
+
+### Hallazgo GloriaFood (2026-06-10)
+- Los pedidos GloriaFood se guardan en SQLite `gloriafood_orders` (sync a GCS); 13 pedidos/$6,910 en 7 días, campos completos (cliente+items). Ver `docs/inventario_pedidos_gloriafood.md`.
+- `money=$0` en Delivery es **limitación estructural conocida** (iframe no medible + UPLOAD_CLICKS no confiable), NO regresión. Reemplazo = tienda en línea propia. Ver `docs/diagnostico_dinero.md`.
+- El webhook sube Enhanced Conversions (email/teléfono hasheados, SIN gclid) a `Pedido GloriaFood Online` (7572944047, UPLOAD_CLICKS). La API las **acepta** (`conversion_sent=1` = intento aceptado, NO atribuida) pero Google **no las cuenta** (0/90d) por falta de clic de anuncio macheable. La conversión se pierde en la **atribución**, no en el envío. `Pedido completado Gloria Food` (7543665061) está **REMOVED** (sus 3 son históricas). Pipeline completo: `docs/diagnostico_pipeline_conversiones.md`.
+- `reserva_completada_directa` (id 7569100920) ENABLED, gtag base presente, 0 conversiones/90d = sin volumen (no roto).
 
 ### Renovar refresh token Google Ads
+> **Última renovación local: 2026-06-10** (próximo vencimiento ~2026-06-17, expira ~7 días por app OAuth en "Testing"). El flujo OOB (`urn:ietf:wg:oauth:2.0:oob`) ya está **muerto** (`invalid_request`) — usar el flujo de **servidor local** (`InstalledAppFlow.run_local_server`, redirect `http://localhost`) como en `generate_refresh_token.py`. Nota: el `client_secret` del `.env` local está desactualizado (da `invalid_client`); el correcto vive en `google-ads.yaml`.
+
 Si aparece `invalid_grant` en logs:
 ```bash
 # IMPORTANTE: Usar cuenta thaithaimerida@gmail.com (está en test users)

@@ -705,6 +705,41 @@ def fetch_search_term_conversion_breakdown(
         print(f"Error fetching search term conversion breakdown: {e}")
         return None
 
+
+def fetch_campaign_conversion_breakdown(client, customer_id: str, date_range: str = "LAST_7_DAYS"):
+    """Read-only per-campaign conversion-action breakdown (money vs local split).
+
+    Returns {campaign_id: {"name", "actions": [{name, all_conversions, conversions}]}}
+    or None if the segmented query is rejected (so callers degrade conservatively).
+    """
+    query = f"""
+        SELECT
+          campaign.id,
+          campaign.name,
+          segments.conversion_action_name,
+          metrics.all_conversions,
+          metrics.conversions
+        FROM campaign
+        WHERE campaign.status = 'ENABLED'
+          AND segments.date DURING {date_range}
+    """
+    try:
+        ga_service = client.get_service("GoogleAdsService")
+        out: dict = {}
+        for row in ga_service.search(customer_id=customer_id, query=query):
+            cid = str(row.campaign.id)
+            entry = out.setdefault(cid, {"name": row.campaign.name, "actions": []})
+            entry["actions"].append({
+                "name": row.segments.conversion_action_name,
+                "all_conversions": float(row.metrics.all_conversions or 0),
+                "conversions": float(row.metrics.conversions or 0),
+            })
+        return out
+    except Exception as e:
+        print(f"Error fetching campaign conversion breakdown: {e}")
+        return None
+
+
 # IDs de advertising_channel_type que NO soportan campaign_criterion KEYWORD
 # negative de forma confiable. Smart Campaigns aceptan la mutación sin error
 # pero el matching algorithm puede ignorar el criterion. Ver:

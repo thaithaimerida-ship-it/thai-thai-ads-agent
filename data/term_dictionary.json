@@ -80,8 +80,22 @@
       "food near me",
       "comida cerca de mi",
       "lugares comida cerca de mi"
+    ],
+    "acknowledged_externals": [
+      "vips",
+      "vips cerca de mi",
+      "vips merida",
+      "yakuza",
+      "yakuza merida"
     ]
   },
+  "acknowledged_external_roots": [
+    "vips",
+    "yakuza"
+  ],
+  "competitor_roots": [
+    "casa thai"
+  ],
   "high_priority_entities": [
     "casa thai",
     "casa thai merida",

@@ -317,6 +317,10 @@ from routes.ai_recommendations import router as ai_recommendations_router
 app.include_router(ai_recommendations_router)
 from routes.monitor import router as monitor_router
 app.include_router(monitor_router)
+from routes.acciones_resenas import router as acciones_resenas_router
+app.include_router(acciones_resenas_router)
+from routes.acciones_bloqueo import router as acciones_bloqueo_router
+app.include_router(acciones_bloqueo_router)
 
 # Strategy functions delegated to agents/strategist.py
 from agents.strategist import Strategist as _Strategist

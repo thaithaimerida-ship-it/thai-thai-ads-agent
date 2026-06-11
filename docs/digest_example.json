@@ -1,0 +1,614 @@
+{
+  "status": "success",
+  "source": "monitor_digest_v3",
+  "read_only": true,
+  "date_range": "LAST_7_DAYS",
+  "generated_date": "lunes 9 de junio de 2026",
+  "links": {
+    "ads": "https://ads.google.com/aw/overview",
+    "bloqueo_base": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo",
+    "token": "PENDIENTE_PARTE_B",
+    "resenas": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/resenas?token=PENDIENTE_PARTE_B",
+    "revision": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?token=PENDIENTE_PARTE_B"
+  },
+  "pedidos_gloriafood_interno": {
+    "pedidos_7d": 13,
+    "monto_mxn_7d": 6910.0,
+    "fuente": "registro interno (DB webhook)",
+    "pedido_real_mxn": 37.31
+  },
+  "max_decisions": 5,
+  "summary": {
+    "terms_reviewed": 100,
+    "money_signal_cost_mxn": 0.0,
+    "local_signal_cost_mxn": 644.71,
+    "negative_leak_cost_mxn": 0.0,
+    "protected_cost_mxn": 209.69,
+    "decisions_count": 5
+  },
+  "identity_counts": {
+    "restaurante_externo": 45,
+    "generico_util": 13,
+    "intencion_thai": 3,
+    "marca_propia": 6,
+    "desconocido": 32,
+    "categoria_asiatica": 1
+  },
+  "behavior_counts": {
+    "senal_local": 73,
+    "desconocida": 7,
+    "sin_conversion": 20
+  },
+  "v3_state_counts": {
+    "Señal local: revisar con cuidado": 66,
+    "Marca protegida": 9,
+    "Ya bloqueado": 2,
+    "Restaurante externo por confirmar": 13,
+    "Búsqueda útil": 4,
+    "Datos insuficientes": 6
+  },
+  "campaign_rows": [
+    {
+      "campaign_name": "Thai Mérida - Local",
+      "spend_mxn": 1230.44,
+      "all_conversions": 2062.19,
+      "money_conversions": 0.0,
+      "money_cpa_mxn": null,
+      "local_signals": 2062.19,
+      "local_signal_cost_mxn": null,
+      "clicks": 699,
+      "impressions": 30154,
+      "daily_budget_mxn": 158.0,
+      "all_conversions_30d": 8404.77,
+      "local_signals_30d": 8404.77,
+      "ctr_30d": 2.28,
+      "status_human": "",
+      "recommendation_human": "Monitorear. No escalar automáticamente.",
+      "tipo": "smart",
+      "objetivo_humano": "Visibilidad y acciones en Maps",
+      "mide_local": true,
+      "gasto_7d": 1230.44,
+      "conversiones_dinero": 0.0,
+      "etiqueta_conversion": "acciones locales",
+      "cpa_dinero": null,
+      "conv_por_mxn": 0.6,
+      "ctr": 2.32,
+      "senales_locales": 2062.19,
+      "salud": 75,
+      "salud_label": "salud",
+      "salud_color": "verde",
+      "presupuesto_diario_mxn": 158.0,
+      "sugerencia_presupuesto": {
+        "accion": "mantener",
+        "detalle": "0%",
+        "razon_humana": "Genera acciones locales. Mantener y seguir vigilando."
+      },
+      "nota_vigilancia": "Campaña local: se mide por acciones en Maps (rutas, llamadas, menú), no por ventas web.",
+      "link_ads": "https://ads.google.com/aw/overview"
+    },
+    {
+      "campaign_name": "Thai Mérida - Experiencia 2026",
+      "spend_mxn": 1165.0,
+      "all_conversions": 635.73,
+      "money_conversions": 0.0,
+      "money_cpa_mxn": null,
+      "local_signals": 635.73,
+      "local_signal_cost_mxn": null,
+      "clicks": 261,
+      "impressions": 2906,
+      "daily_budget_mxn": 158.0,
+      "all_conversions_30d": 2420.12,
+      "local_signals_30d": 2420.12,
+      "ctr_30d": 7.94,
+      "status_human": "",
+      "recommendation_human": "Monitorear. No escalar automáticamente.",
+      "tipo": "search",
+      "objetivo_humano": "Reservaciones (experiencia)",
+      "mide_local": false,
+      "gasto_7d": 1165.0,
+      "conversiones_dinero": 0.0,
+      "etiqueta_conversion": "reservas",
+      "cpa_dinero": null,
+      "conv_por_mxn": 1.83,
+      "ctr": 8.98,
+      "senales_locales": 635.73,
+      "salud": 73,
+      "salud_label": "provisional",
+      "salud_color": "verde",
+      "presupuesto_diario_mxn": 158.0,
+      "sugerencia_presupuesto": {
+        "accion": "mantener",
+        "detalle": "0%",
+        "razon_humana": "Sin conversiones de dinero medibles (revisar tracking). No mover el presupuesto aún."
+      },
+      "nota_vigilancia": "Sin reservas atribuidas esta semana.",
+      "link_ads": "https://ads.google.com/aw/overview"
+    },
+    {
+      "campaign_name": "Thai Mérida - Delivery Search",
+      "spend_mxn": 553.08,
+      "all_conversions": 225.27,
+      "money_conversions": 0.0,
+      "money_cpa_mxn": null,
+      "local_signals": 225.27,
+      "local_signal_cost_mxn": null,
+      "clicks": 107,
+      "impressions": 1345,
+      "daily_budget_mxn": 75.0,
+      "all_conversions_30d": 746.56,
+      "local_signals_30d": 746.56,
+      "ctr_30d": 7.04,
+      "status_human": "",
+      "recommendation_human": "Monitorear. No escalar automáticamente.",
+      "tipo": "search",
+      "objetivo_humano": "Pedidos a domicilio (búsqueda)",
+      "mide_local": false,
+      "gasto_7d": 553.08,
+      "conversiones_dinero": 0.0,
+      "etiqueta_conversion": "pedidos",
+      "cpa_dinero": null,
+      "conv_por_mxn": 2.46,
+      "ctr": 7.96,
+      "senales_locales": 225.27,
+      "salud": 79,
+      "salud_label": "provisional",
+      "salud_color": "verde",
+      "presupuesto_diario_mxn": 75.0,
+      "sugerencia_presupuesto": {
+        "accion": "mantener",
+        "detalle": "0%",
+        "razon_humana": "Sin conversiones de dinero medibles (revisar tracking). No mover el presupuesto aún."
+      },
+      "nota_vigilancia": "La atribución por Ads no es posible con GloriaFood (sin gclid); medición completa con la tienda en línea propia.",
+      "link_ads": "https://ads.google.com/aw/overview"
+    },
+    {
+      "campaign_name": "Thai Mérida - Delivery",
+      "spend_mxn": 485.01,
+      "all_conversions": 902.0,
+      "money_conversions": 0.0,
+      "money_cpa_mxn": null,
+      "local_signals": 902.0,
+      "local_signal_cost_mxn": null,
+      "clicks": 275,
+      "impressions": 13801,
+      "daily_budget_mxn": 55.0,
+      "all_conversions_30d": 2994.56,
+      "local_signals_30d": 2994.56,
+      "ctr_30d": 2.66,
+      "status_human": "",
+      "recommendation_human": "Monitorear. No escalar automáticamente.",
+      "tipo": "smart",
+      "objetivo_humano": "Pedidos a domicilio (Gloria Food)",
+      "mide_local": false,
+      "gasto_7d": 485.01,
+      "conversiones_dinero": 0.0,
+      "etiqueta_conversion": "pedidos",
+      "cpa_dinero": null,
+      "conv_por_mxn": 0.54,
+      "ctr": 1.99,
+      "senales_locales": 902.0,
+      "salud": 66,
+      "salud_label": "provisional",
+      "salud_color": "amarillo",
+      "presupuesto_diario_mxn": 55.0,
+      "sugerencia_presupuesto": {
+        "accion": "mantener",
+        "detalle": "0%",
+        "razon_humana": "Sin conversiones de dinero medibles (revisar tracking). No mover el presupuesto aún."
+      },
+      "nota_vigilancia": "La atribución por Ads no es posible con GloriaFood (sin gclid); medición completa con la tienda en línea propia.",
+      "link_ads": "https://ads.google.com/aw/overview",
+      "pedidos_gloriafood_interno": {
+        "pedidos_7d": 13,
+        "monto_mxn_7d": 6910.0,
+        "fuente": "registro interno (DB webhook)",
+        "pedido_real_mxn": 37.31
+      },
+      "pedido_real_mxn": 37.31
+    }
+  ],
+  "search_terms_summary": {
+    "terminos_revisados": 100,
+    "marca_intencion_thai_protegida": 9,
+    "busquedas_utiles": 13,
+    "busquedas_relacionadas": 1,
+    "restaurantes_externos_por_confirmar": 13,
+    "senales_locales": 73,
+    "decisiones_pendientes": 5,
+    "desperdicio_confirmado_mxn": 0
+  },
+  "search_terms_cards": {
+    "marca_protegida": {
+      "terminos": 9,
+      "conversiones": 8.0
+    },
+    "pueden_traer_clientes": 14,
+    "externos_revision_mensual": 45,
+    "desperdicio_confirmado_mxn": 0,
+    "por_confirmar_mxn": 58.16,
+    "link": null
+  },
+  "gbp_summary": {
+    "data_broken": false,
+    "periodo_dias": 30,
+    "metricas": {
+      "vistas_maps": {
+        "valor": 17904,
+        "delta_pct": null
+      },
+      "rutas": {
+        "valor": 1053,
+        "delta_pct": null
+      },
+      "clics_menu": {
+        "valor": 349,
+        "delta_pct": null
+      },
+      "llamadas": {
+        "valor": 65,
+        "delta_pct": null
+      },
+      "clics_web": {
+        "valor": 141,
+        "delta_pct": null
+      },
+      "vistas_busqueda_movil": {
+        "valor": 671,
+        "delta_pct": null
+      },
+      "vistas_maps_desktop": {
+        "valor": 489,
+        "delta_pct": null
+      },
+      "vistas_busqueda_desktop": {
+        "valor": 401,
+        "delta_pct": null
+      }
+    },
+    "alerta_caida": false
+  },
+  "reviews_summary": {
+    "data_broken": false,
+    "promedio_general": 4.7,
+    "nuevas_semana": {
+      "total": 6,
+      "cinco": 5,
+      "cuatro": 0,
+      "tres_o_menos": 1
+    },
+    "cinco_sin_responder": 5,
+    "requieren_atencion": [
+      {
+        "estrellas": 1,
+        "extracto_corto": "Una mala experiencia y mal servicio",
+        "link": null
+      }
+    ],
+    "borradores_ia_disponibles": false
+  },
+  "ads_quality_summary": {
+    "data_broken": false,
+    "total_activos": 20,
+    "todos_aprobados": true,
+    "rechazados": [],
+    "distribucion": {
+      "excelente": 2,
+      "bueno": 1,
+      "promedio": 7,
+      "pobre": 4,
+      "sin_datos": 6
+    },
+    "caballos_de_batalla": [
+      {
+        "titulo_corto": "Thai Thai Mérida | Pide Online",
+        "campana": "Thai Mérida - Delivery Search",
+        "calidad": "Promedio",
+        "ctr": "8.0%",
+        "clics": 107,
+        "impresiones": 1345,
+        "conversiones": 66.0
+      },
+      {
+        "titulo_corto": "Restaurante Tailandés Mérida",
+        "campana": "Thai Mérida - Experiencia 2026",
+        "calidad": "Excelente",
+        "ctr": "13.1%",
+        "clics": 57,
+        "impresiones": 435,
+        "conversiones": 45.0
+      },
+      {
+        "titulo_corto": "Thai Restaurant Merida",
+        "campana": "Thai Mérida - Experiencia 2026",
+        "calidad": "Promedio",
+        "ctr": "7.9%",
+        "clics": 70,
+        "impresiones": 890,
+        "conversiones": 39.7
+      },
+      {
+        "titulo_corto": "Comida Tailandesa Auténtica",
+        "campana": "Thai Mérida - Experiencia 2026",
+        "calidad": "Excelente",
+        "ctr": "7.4%",
+        "clics": 30,
+        "impresiones": 405,
+        "conversiones": 24.0
+      }
+    ],
+    "pobres_sin_impresiones": {
+      "cantidad": 12,
+      "dias": 7,
+      "titulos": [
+        "(sin título)",
+        "(sin título)",
+        "(sin título)",
+        "(sin título)",
+        "(sin título)"
+      ],
+      "diagnostico_humano": "12 anuncios sin impresiones en 7 días. Conviene revisar pujas/segmentación o rotar el texto."
+    },
+    "necesitan_trabajo": {
+      "smart_sin_impresiones": 6,
+      "search": [
+        {
+          "titulo_corto": "Thai Thai Mérida 2026",
+          "campana": "Thai Mérida - Experiencia 2026",
+          "razon": "sin impresiones",
+          "variantes": 1
+        },
+        {
+          "titulo_corto": "Thai Thai Mérida Oficial",
+          "campana": "Thai Mérida - Experiencia 2026",
+          "razon": "sin impresiones",
+          "variantes": 1
+        },
+        {
+          "titulo_corto": "Restaurante Tailandés Mérida",
+          "campana": "Thai Mérida - Experiencia 2026",
+          "razon": "sin impresiones",
+          "variantes": 4
+        }
+      ]
+    }
+  },
+  "seo_summary": {
+    "data_broken": false,
+    "score": 83,
+    "componentes": {
+      "performance": 58,
+      "seo_tecnico": 100,
+      "on_page": 100,
+      "web_vitals": 62,
+      "accesibilidad": 96
+    },
+    "movil": {
+      "perf": 58,
+      "lcp_s": 9.3,
+      "cls": 0.0
+    },
+    "escritorio": {
+      "perf": 90,
+      "lcp_s": 1.5,
+      "cls": 0.0
+    },
+    "checks_onpage": "10/10",
+    "oportunidad_principal": "Mejorar la velocidad en móvil (comprimir imágenes y diferir JS)."
+  },
+  "search_console": {
+    "data_broken": false,
+    "dias": 7,
+    "start_date": "2026-06-01",
+    "end_date": "2026-06-08",
+    "impresiones": 388,
+    "clics": 4,
+    "ctr": 1.03,
+    "posicion_promedio": 6.2,
+    "top_queries": [
+      {
+        "query": "thai thai",
+        "clics": 2
+      },
+      {
+        "query": "thai thai mérida",
+        "clics": 1
+      },
+      {
+        "query": "best thai food near me",
+        "clics": 0
+      }
+    ]
+  },
+  "decisions": [
+    {
+      "decision_type": "external_review",
+      "term": "almar restaurante merida",
+      "campaign": "Thai Mérida - Experiencia 2026",
+      "clicks": 1,
+      "cost_mxn": 16.12,
+      "conversions": 0.0,
+      "all_conversions": 0.0,
+      "identity_axis": "restaurante_externo",
+      "identity_label": "Restaurante externo",
+      "behavior_axis": "sin_conversion",
+      "behavior_label": "Sin conversion",
+      "data_axis": "insuficiente",
+      "state_ui": "Restaurante externo por confirmar",
+      "reason_human": "Parece otro restaurante o negocio. Aún no hay datos suficientes para decidir bloqueo.",
+      "digest_reason": "Parece otro restaurante o negocio. Hugo debe confirmar si conviene bloquearlo.",
+      "recommended_action": "confirm_identity",
+      "write_action": null,
+      "block_allowed": false,
+      "suggested_match_type": null,
+      "already_negative": false,
+      "confirmado_por_hugo": false,
+      "alta_prioridad": false,
+      "variantes": [
+        "almar restaurante merida"
+      ],
+      "variantes_count": 1,
+      "campaigns": [
+        "Thai Mérida - Experiencia 2026"
+      ],
+      "link_bloquear": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=almar%20restaurante%20merida&token=PENDIENTE_PARTE_B&accion=bloquear",
+      "link_dejar": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=almar%20restaurante%20merida&token=PENDIENTE_PARTE_B&accion=dejar"
+    },
+    {
+      "decision_type": "external_review",
+      "term": "restaurante la rueda cerca de mi",
+      "campaign": "Thai Mérida - Delivery Search",
+      "clicks": 1,
+      "cost_mxn": 14.32,
+      "conversions": 0.0,
+      "all_conversions": 0.0,
+      "identity_axis": "restaurante_externo",
+      "identity_label": "Restaurante externo",
+      "behavior_axis": "sin_conversion",
+      "behavior_label": "Sin conversion",
+      "data_axis": "insuficiente",
+      "state_ui": "Restaurante externo por confirmar",
+      "reason_human": "Parece otro restaurante o negocio. Aún no hay datos suficientes para decidir bloqueo.",
+      "digest_reason": "Parece otro restaurante o negocio. Hugo debe confirmar si conviene bloquearlo.",
+      "recommended_action": "confirm_identity",
+      "write_action": null,
+      "block_allowed": false,
+      "suggested_match_type": null,
+      "already_negative": false,
+      "confirmado_por_hugo": false,
+      "alta_prioridad": false,
+      "variantes": [
+        "restaurante la rueda cerca de mi"
+      ],
+      "variantes_count": 1,
+      "campaigns": [
+        "Thai Mérida - Delivery Search"
+      ],
+      "link_bloquear": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20la%20rueda%20cerca%20de%20mi&token=PENDIENTE_PARTE_B&accion=bloquear",
+      "link_dejar": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20la%20rueda%20cerca%20de%20mi&token=PENDIENTE_PARTE_B&accion=dejar"
+    },
+    {
+      "decision_type": "external_review",
+      "term": "restaurante yucateco merida",
+      "campaign": "Thai Mérida - Experiencia 2026",
+      "clicks": 1,
+      "cost_mxn": 7.88,
+      "conversions": 0.0,
+      "all_conversions": 0.0,
+      "identity_axis": "restaurante_externo",
+      "identity_label": "Restaurante externo",
+      "behavior_axis": "sin_conversion",
+      "behavior_label": "Sin conversion",
+      "data_axis": "insuficiente",
+      "state_ui": "Restaurante externo por confirmar",
+      "reason_human": "Parece otro restaurante o negocio. Aún no hay datos suficientes para decidir bloqueo.",
+      "digest_reason": "Parece otro restaurante o negocio. Hugo debe confirmar si conviene bloquearlo.",
+      "recommended_action": "confirm_identity",
+      "write_action": null,
+      "block_allowed": false,
+      "suggested_match_type": null,
+      "already_negative": false,
+      "confirmado_por_hugo": false,
+      "alta_prioridad": false,
+      "variantes": [
+        "restaurante yucateco merida"
+      ],
+      "variantes_count": 1,
+      "campaigns": [
+        "Thai Mérida - Experiencia 2026"
+      ],
+      "link_bloquear": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20yucateco%20merida&token=PENDIENTE_PARTE_B&accion=bloquear",
+      "link_dejar": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20yucateco%20merida&token=PENDIENTE_PARTE_B&accion=dejar"
+    },
+    {
+      "decision_type": "external_review",
+      "term": "casa chaya merida",
+      "campaign": "Thai Mérida - Experiencia 2026",
+      "clicks": 1,
+      "cost_mxn": 7.67,
+      "conversions": 0.0,
+      "all_conversions": 0.0,
+      "identity_axis": "restaurante_externo",
+      "identity_label": "Restaurante externo",
+      "behavior_axis": "sin_conversion",
+      "behavior_label": "Sin conversion",
+      "data_axis": "insuficiente",
+      "state_ui": "Restaurante externo por confirmar",
+      "reason_human": "Parece otro restaurante o negocio. Aún no hay datos suficientes para decidir bloqueo.",
+      "digest_reason": "Parece otro restaurante o negocio. Hugo debe confirmar si conviene bloquearlo.",
+      "recommended_action": "confirm_identity",
+      "write_action": null,
+      "block_allowed": false,
+      "suggested_match_type": null,
+      "already_negative": false,
+      "confirmado_por_hugo": false,
+      "alta_prioridad": false,
+      "variantes": [
+        "casa chaya merida"
+      ],
+      "variantes_count": 1,
+      "campaigns": [
+        "Thai Mérida - Experiencia 2026"
+      ],
+      "link_bloquear": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=casa%20chaya%20merida&token=PENDIENTE_PARTE_B&accion=bloquear",
+      "link_dejar": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=casa%20chaya%20merida&token=PENDIENTE_PARTE_B&accion=dejar"
+    },
+    {
+      "decision_type": "external_review",
+      "term": "restaurante siqueff merida",
+      "campaign": "Thai Mérida - Delivery Search",
+      "clicks": 2,
+      "cost_mxn": 12.17,
+      "conversions": 0.0,
+      "all_conversions": 0.0,
+      "identity_axis": "restaurante_externo",
+      "identity_label": "Restaurante externo",
+      "behavior_axis": "sin_conversion",
+      "behavior_label": "Sin conversion",
+      "data_axis": "insuficiente",
+      "state_ui": "Restaurante externo por confirmar",
+      "reason_human": "Parece otro restaurante o negocio. Aún no hay datos suficientes para decidir bloqueo.",
+      "digest_reason": "Parece otro restaurante o negocio. Hugo debe confirmar si conviene bloquearlo.",
+      "recommended_action": "confirm_identity",
+      "write_action": null,
+      "block_allowed": false,
+      "suggested_match_type": null,
+      "already_negative": false,
+      "confirmado_por_hugo": false,
+      "alta_prioridad": false,
+      "variantes": [
+        "restaurante siqueff merida",
+        "restaurante siqueff"
+      ],
+      "variantes_count": 2,
+      "campaigns": [
+        "Thai Mérida - Delivery Search",
+        "Thai Mérida - Experiencia 2026"
+      ],
+      "link_bloquear": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20siqueff%20merida&token=PENDIENTE_PARTE_B&accion=bloquear",
+      "link_dejar": "https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20siqueff%20merida&token=PENDIENTE_PARTE_B&accion=dejar"
+    }
+  ],
+  "anomalies": [],
+  "warnings": [
+    {
+      "type": "data_broken",
+      "detected": false,
+      "reason_human": "No se detectaron datos rotos en el payload recibido."
+    },
+    {
+      "type": "conversion_mapping_incomplete",
+      "detected": true,
+      "reason_human": "El digest recibe conversion_quality ya calculado; el contrato todavía no expone el detalle por acción de conversión."
+    }
+  ],
+  "safety": {
+    "writes_google_ads": false,
+    "calls_execute_optimization": false,
+    "touches_budgets": false,
+    "post_required": false
+  },
+  "subject_email": "🍜 Thai Thai — 5 decisiones esta semana",
+  "html_email": "<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>body{font-family:Arial,Helvetica,sans-serif;background:#f0ede6;color:#1a1a1a;margin:0;padding:14px 8px;}.box{max-width:600px;margin:0 auto;background:#fff;border:1px solid #ddd6c8;border-radius:10px;overflow:hidden;}.head{padding:14px 16px;border-bottom:1px solid #eee;}.head h1{font-size:17px;margin:0;font-weight:600;}.section{padding:14px 16px;border-bottom:1px solid #f0f0f0;}h2{font-size:13.5px;margin:0 0 8px;font-weight:600;}p,li{font-size:12px;line-height:1.5;}.footer{padding:12px 16px;font-size:10.5px;color:#999;text-align:center;}</style></head><body><div class=\"box\"><div class=\"head\"><h1>Thai Thai Monitor</h1></div><div class=\"section\"><p style=\"font-size:12px;color:#777;margin:0;\">Tu resumen semanal de Google Ads, Maps y tu web.</p><p style=\"font-size:10.5px;color:#999;margin:4px 0 0;\">lunes 9 de junio de 2026 · 3 min</p><div style=\"background:#E7F0FA;border-radius:6px;padding:8px 10px;margin-top:10px;\"><div style=\"font-size:13px;font-weight:bold;color:#114277;\">💰 Ventas registradas: 13 pedidos · $6,910 MXN · $37 por pedido real</div><div style=\"font-size:11px;color:#185FA5;\">Registro interno GloriaFood, últimos 7 días</div></div></div><div class=\"section\"><div style=\"border:1px solid #e8b4b4;border-radius:8px;padding:12px;\"><p style=\"font-size:12.5px;font-weight:bold;color:#A32D2D;margin:0 0 4px;\">⚠ Posibles bloqueos — necesitan tu confirmación</p><p style=\"font-size:10.5px;color:#666;margin:0 0 10px;line-height:1.5;\">Estas búsquedas dispararon tus anuncios pero parecen ser de otros negocios. Si confirmas, se bloquean: tu anuncio deja de aparecer (y de pagar) cuando alguien las busque.</p><div style=\"background:#f6f3ec;border-radius:6px;padding:10px 12px;margin-bottom:8px;\"><p style=\"font-size:13px;margin:0;\"><b>1. \"almar restaurante merida\"</b> — $16 gastados<br><span style=\"font-size:11px;color:#666;\">Apareció en: Thai Mérida - Experiencia 2026</span></p><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:8px;\"><tr><td width=\"58%\" style=\"padding-right:6px;\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=almar%20restaurante%20merida&amp;token=PENDIENTE_PARTE_B&amp;accion=bloquear\" style=\"display:block;text-align:center;background:#2d2a26;color:#fff;border:1px solid #2d2a26;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Revisar y bloquear →</a></td><td width=\"42%\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=almar%20restaurante%20merida&amp;token=PENDIENTE_PARTE_B&amp;accion=dejar\" style=\"display:block;text-align:center;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Dejar</a></td></tr></table></div><div style=\"background:#f6f3ec;border-radius:6px;padding:10px 12px;margin-bottom:8px;\"><p style=\"font-size:13px;margin:0;\"><b>2. \"restaurante la rueda cerca de mi\"</b> — $14 gastados<br><span style=\"font-size:11px;color:#666;\">Apareció en: Thai Mérida - Delivery Search</span></p><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:8px;\"><tr><td width=\"58%\" style=\"padding-right:6px;\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20la%20rueda%20cerca%20de%20mi&amp;token=PENDIENTE_PARTE_B&amp;accion=bloquear\" style=\"display:block;text-align:center;background:#2d2a26;color:#fff;border:1px solid #2d2a26;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Revisar y bloquear →</a></td><td width=\"42%\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20la%20rueda%20cerca%20de%20mi&amp;token=PENDIENTE_PARTE_B&amp;accion=dejar\" style=\"display:block;text-align:center;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Dejar</a></td></tr></table></div><div style=\"background:#f6f3ec;border-radius:6px;padding:10px 12px;margin-bottom:8px;\"><p style=\"font-size:13px;margin:0;\"><b>3. \"restaurante yucateco merida\"</b> — $8 gastados<br><span style=\"font-size:11px;color:#666;\">Apareció en: Thai Mérida - Experiencia 2026</span></p><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:8px;\"><tr><td width=\"58%\" style=\"padding-right:6px;\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20yucateco%20merida&amp;token=PENDIENTE_PARTE_B&amp;accion=bloquear\" style=\"display:block;text-align:center;background:#2d2a26;color:#fff;border:1px solid #2d2a26;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Revisar y bloquear →</a></td><td width=\"42%\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20yucateco%20merida&amp;token=PENDIENTE_PARTE_B&amp;accion=dejar\" style=\"display:block;text-align:center;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Dejar</a></td></tr></table></div><div style=\"background:#f6f3ec;border-radius:6px;padding:10px 12px;margin-bottom:8px;\"><p style=\"font-size:13px;margin:0;\"><b>4. \"casa chaya merida\"</b> — $8 gastados<br><span style=\"font-size:11px;color:#666;\">Apareció en: Thai Mérida - Experiencia 2026</span></p><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:8px;\"><tr><td width=\"58%\" style=\"padding-right:6px;\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=casa%20chaya%20merida&amp;token=PENDIENTE_PARTE_B&amp;accion=bloquear\" style=\"display:block;text-align:center;background:#2d2a26;color:#fff;border:1px solid #2d2a26;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Revisar y bloquear →</a></td><td width=\"42%\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=casa%20chaya%20merida&amp;token=PENDIENTE_PARTE_B&amp;accion=dejar\" style=\"display:block;text-align:center;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Dejar</a></td></tr></table></div><div style=\"background:#f6f3ec;border-radius:6px;padding:10px 12px;margin-bottom:8px;\"><p style=\"font-size:13px;margin:0;\"><b>5. \"restaurante siqueff merida\"</b> <span style=\"font-size:10.5px;color:#999;\">(2 variantes)</span> — $12 gastados<br><span style=\"font-size:11px;color:#666;\">Apareció en: Thai Mérida - Delivery Search, Thai Mérida - Experiencia 2026</span></p><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:8px;\"><tr><td width=\"58%\" style=\"padding-right:6px;\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20siqueff%20merida&amp;token=PENDIENTE_PARTE_B&amp;accion=bloquear\" style=\"display:block;text-align:center;background:#2d2a26;color:#fff;border:1px solid #2d2a26;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Revisar y bloquear →</a></td><td width=\"42%\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?term=restaurante%20siqueff%20merida&amp;token=PENDIENTE_PARTE_B&amp;accion=dejar\" style=\"display:block;text-align:center;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Dejar</a></td></tr></table></div><p style=\"font-size:10.5px;color:#999;margin-top:9px;line-height:1.5;\">\"Revisar y bloquear\" abre una página segura: ves variantes, campañas y gasto, y confirmas. Solo ahí se ejecuta. \"Dejar\" lo marca válido y no se vuelve a preguntar.</p></div></div><div class=\"section\"><h2>📊 Campañas — últimos 7 días</h2><p style=\"font-size:10.5px;color:#666;margin:0 0 10px;\">Conversiones en dos columnas: 💰 dinero y 📍 señales. Nunca sumadas.</p><div style=\"border:1px solid #e2dccf;border-radius:8px;padding:12px;margin-bottom:10px;background:#fff;\"><table role=\"presentation\" width=\"100%\"><tr><td valign=\"top\"><p style=\"font-size:14px;font-weight:bold;margin:0;\">Thai Mérida - Local</p><p style=\"font-size:10.5px;color:#999;margin:0;\">Visibilidad y acciones en Maps</p></td><td width=\"64\" align=\"center\" valign=\"top\"><div style=\"font-size:22px;font-weight:bold;line-height:1;color:#3B6D11;\">75</div><div style=\"font-size:9.5px;color:#999;\">salud</div></td></tr></table><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f6f3ec;border-radius:6px;padding:8px 2px;margin-top:8px;\"><tr><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">Gasto</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">$1,230</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">Conv.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">2,062</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">$/conv.</div><div style=\"font-size:11.5px;font-weight:bold;color:#3B6D11;\">$0.60</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">2.3%</div></td></tr></table><p style=\"text-align:center;font-size:11.5px;margin:6px 0 0;\"><span style=\"color:#777;\">De esas 2,062:</span> <b>💰 0 ventas</b> · <b style=\"color:#534AB7;\">📍 2,062 señales</b> <span style=\"font-size:10.5px;color:#999;\">(rutas, llamadas, menú)</span></p><table role=\"presentation\" width=\"100%\" style=\"margin-top:8px;\"><tr><td style=\"font-size:12px;\">📅 $158/día</td><td align=\"right\"><span style=\"background:#FAEEDA;color:#633806;font-size:11px;padding:2px 9px;border-radius:10px;font-weight:bold;\">Sugerencia: mantener · manual</span></td></tr></table></div><div style=\"border:1px solid #e2dccf;border-radius:8px;padding:12px;margin-bottom:10px;background:#fff;\"><table role=\"presentation\" width=\"100%\"><tr><td valign=\"top\"><p style=\"font-size:14px;font-weight:bold;margin:0;\">Thai Mérida - Experiencia 2026</p><p style=\"font-size:10.5px;color:#999;margin:0;\">Reservaciones (experiencia)</p></td><td width=\"64\" align=\"center\" valign=\"top\"><div style=\"font-size:22px;font-weight:bold;line-height:1;color:#3B6D11;\">73</div><div style=\"font-size:9.5px;color:#999;\">provisional</div></td></tr></table><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f6f3ec;border-radius:6px;padding:8px 2px;margin-top:8px;\"><tr><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">Gasto</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">$1,165</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">Conv.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">636</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">$/conv.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">$1.83</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">9.0%</div></td></tr></table><p style=\"text-align:center;font-size:11.5px;margin:6px 0 0;\"><span style=\"color:#777;\">De esas 636:</span> <b>💰 0 reservas</b> · <b style=\"color:#534AB7;\">📍 636 señales</b> <span style=\"font-size:10.5px;color:#999;\">(rutas, llamadas, menú)</span></p><table role=\"presentation\" width=\"100%\" style=\"margin-top:8px;\"><tr><td style=\"font-size:12px;\">📅 $158/día</td><td align=\"right\"><span style=\"background:#FAEEDA;color:#633806;font-size:11px;padding:2px 9px;border-radius:10px;font-weight:bold;\">Sugerencia: mantener · manual</span></td></tr></table></div><div style=\"border:1px solid #e2dccf;border-radius:8px;padding:12px;margin-bottom:10px;background:#fff;\"><table role=\"presentation\" width=\"100%\"><tr><td valign=\"top\"><p style=\"font-size:14px;font-weight:bold;margin:0;\">Thai Mérida - Delivery Search</p><p style=\"font-size:10.5px;color:#999;margin:0;\">Pedidos a domicilio (búsqueda)</p></td><td width=\"64\" align=\"center\" valign=\"top\"><div style=\"font-size:22px;font-weight:bold;line-height:1;color:#3B6D11;\">79</div><div style=\"font-size:9.5px;color:#999;\">provisional</div></td></tr></table><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f6f3ec;border-radius:6px;padding:8px 2px;margin-top:8px;\"><tr><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">Gasto</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">$553</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">Conv.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">225</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">$/conv.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">$2.46</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">8.0%</div></td></tr></table><p style=\"text-align:center;font-size:11.5px;margin:6px 0 0;\"><span style=\"color:#777;\">De esas 225:</span> <b>💰 0 ventas</b> · <b style=\"color:#534AB7;\">📍 225 señales</b> <span style=\"font-size:10.5px;color:#999;\">(rutas, llamadas, menú)</span></p><table role=\"presentation\" width=\"100%\" style=\"margin-top:8px;\"><tr><td style=\"font-size:12px;\">📅 $75/día</td><td align=\"right\"><span style=\"background:#FAEEDA;color:#633806;font-size:11px;padding:2px 9px;border-radius:10px;font-weight:bold;\">Sugerencia: mantener · manual</span></td></tr></table></div><div style=\"border:1px solid #e2dccf;border-radius:8px;padding:12px;margin-bottom:10px;background:#fff;\"><table role=\"presentation\" width=\"100%\"><tr><td valign=\"top\"><p style=\"font-size:14px;font-weight:bold;margin:0;\">Thai Mérida - Delivery</p><p style=\"font-size:10.5px;color:#999;margin:0;\">Pedidos a domicilio (Gloria Food)</p></td><td width=\"64\" align=\"center\" valign=\"top\"><div style=\"font-size:22px;font-weight:bold;line-height:1;color:#854F0B;\">66</div><div style=\"font-size:9.5px;color:#999;\">provisional</div></td></tr></table><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f6f3ec;border-radius:6px;padding:8px 2px;margin-top:8px;\"><tr><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">Gasto</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">$485</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">Conv.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">902</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">$/conv.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">$0.54</div></td><td align=\"center\" valign=\"top\" width=\"25%\" style=\"padding:0 1px;\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">2.0%</div></td></tr></table><p style=\"text-align:center;font-size:11.5px;margin:6px 0 0;\"><span style=\"color:#777;\">De esas 902:</span> <b>💰 0 ventas</b> · <b style=\"color:#534AB7;\">📍 902 señales</b> <span style=\"font-size:10.5px;color:#999;\">(rutas, llamadas, menú)</span></p><p style=\"font-size:10.5px;color:#999;margin:6px 0 0;\">Pedidos no atribuibles por Google (GloriaFood) — ver ventas registradas arriba.</p><table role=\"presentation\" width=\"100%\" style=\"margin-top:8px;\"><tr><td style=\"font-size:12px;\">📅 $55/día</td><td align=\"right\"><span style=\"background:#FAEEDA;color:#633806;font-size:11px;padding:2px 9px;border-radius:10px;font-weight:bold;\">Sugerencia: mantener · manual</span></td></tr></table></div><p style=\"font-size:10.5px;color:#999;line-height:1.5;\">\"Conv.\" y \"$/conv.\" cuadran con Google Ads ($/conv. SIEMPRE con dos decimales). El costo por venta real se medirá cuando la tienda propia atribuya ventas. Salud y sugerencias usan solo dinero/señales separados.</p></div><div class=\"section\"><h2>🔎 Qué buscó la gente para ver tus anuncios</h2><p style=\"font-size:10.5px;color:#666;margin:0 0 10px;\">Google registra cada búsqueda que hace aparecer tus anuncios. Esta semana fueron 100 distintas; el sistema las clasifica así:</p><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"border:1px solid #e2dccf;border-left:3px solid #1D9E75;border-radius:6px;padding:9px 11px;background:#fff;height:100%;box-sizing:border-box;\"><div style=\"font-size:19px;font-weight:bold;color:#0F6E56;\">9</div><div style=\"font-size:10.5px;color:#555;line-height:1.4;\">buscaban Thai Thai o comida thai — protegidas</div></div></td><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"border:1px solid #e2dccf;border-left:3px solid #639922;border-radius:6px;padding:9px 11px;background:#fff;height:100%;box-sizing:border-box;\"><div style=\"font-size:19px;font-weight:bold;color:#3B6D11;\">14</div><div style=\"font-size:10.5px;color:#555;line-height:1.4;\">&#x27;restaurante cerca de mí&#x27; y similares — pueden traer clientes</div></div></td></tr><tr><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"border:1px solid #e2dccf;border-left:3px solid #EF9F27;border-radius:6px;padding:9px 11px;background:#fff;height:100%;box-sizing:border-box;\"><div style=\"font-size:19px;font-weight:bold;color:#854F0B;\">45</div><div style=\"font-size:10.5px;color:#555;line-height:1.4;\">parecen otros negocios — se revisan al mes</div></div></td><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"border:1px solid #e2dccf;border-left:3px solid #EF9F27;border-radius:6px;padding:9px 11px;background:#fff;height:100%;box-sizing:border-box;\"><div style=\"font-size:19px;font-weight:bold;color:#854F0B;\">$58</div><div style=\"font-size:10.5px;color:#555;line-height:1.4;\">gastado en esas búsquedas dudosas — por confirmar</div></div></td></tr></table><p style=\"margin-top:8px;\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/bloqueo?token=PENDIENTE_PARTE_B\" style=\"color:#1a5276;font-size:11.5px;\">Ver las 100 búsquedas en la bandeja de revisión →</a></p></div><div class=\"section\"><h2>⭐ Reseñas</h2><div style=\"background:#EEEDFE;border-radius:8px;padding:14px;\"><table role=\"presentation\" width=\"100%\"><tr><td width=\"90\" align=\"center\" valign=\"top\"><div style=\"font-size:34px;font-weight:bold;color:#26215C;line-height:1;\">4.7</div><div style=\"font-size:12px;color:#534AB7;\">★★★★½</div><div style=\"font-size:10.5px;color:#534AB7;\">promedio general</div></td><td valign=\"top\"><p style=\"font-size:11.5px;color:#3C3489;font-weight:bold;margin:0 0 5px;\">6 nuevas esta semana:</p><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td width=\"30\" style=\"font-size:11.5px;color:#3C3489;\">5★</td><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;background:#CECBF6;border-radius:3px;\"><tr><td height=\"6\" width=\"83%\" style=\"background:#534AB7;border-radius:3px;font-size:0;line-height:0;\">&nbsp;</td><td height=\"6\" style=\"font-size:0;line-height:0;\">&nbsp;</td></tr></table></td><td width=\"18\" align=\"right\" style=\"font-size:11.5px;color:#3C3489;\">5</td></tr><tr><td width=\"30\" style=\"font-size:11.5px;color:#3C3489;\">4★</td><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;background:#CECBF6;border-radius:3px;\"><tr><td height=\"6\" width=\"0%\" style=\"background:#534AB7;border-radius:3px;font-size:0;line-height:0;\">&nbsp;</td><td height=\"6\" style=\"font-size:0;line-height:0;\">&nbsp;</td></tr></table></td><td width=\"18\" align=\"right\" style=\"font-size:11.5px;color:#3C3489;\">0</td></tr><tr><td width=\"30\" style=\"font-size:11.5px;color:#3C3489;\">≤3★</td><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;background:#CECBF6;border-radius:3px;\"><tr><td height=\"6\" width=\"17%\" style=\"background:#534AB7;border-radius:3px;font-size:0;line-height:0;\">&nbsp;</td><td height=\"6\" style=\"font-size:0;line-height:0;\">&nbsp;</td></tr></table></td><td width=\"18\" align=\"right\" style=\"font-size:11.5px;color:#3C3489;\">1</td></tr></table></td></tr></table><p style=\"font-size:11.5px;color:#791F1F;margin-top:10px;\">⚠️ 1★ requiere tu atención: \"Una mala experiencia y mal servicio\"</p><div style=\"margin-top:10px;\"><a href=\"https://thai-thai-ads-agent-624172071613.us-central1.run.app/acciones/resenas?token=PENDIENTE_PARTE_B\" style=\"display:block;text-align:center;background:#2d2a26;color:#fff;border:1px solid #2d2a26;border-radius:6px;padding:7px 10px;font-size:12px;text-decoration:none;font-weight:bold;\">Responder las 5 de 5★ con IA →</a></div><p style=\"font-size:10.5px;color:#534AB7;margin-top:6px;line-height:1.5;\">Abre una página segura: cada reseña con su respuesta redactada por IA, ajustas si quieres y publicas una por una. La de 1★ solo se muestra — esa la respondes tú directo en Google.</p></div></div><div class=\"section\"><h2>📍 Tu negocio en Maps — 30 días</h2><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"border:1px solid #e2dccf;border-left:3px solid #378ADD;border-radius:6px;padding:9px 11px;background:#fff;height:100%;box-sizing:border-box;\"><div style=\"font-size:10.5px;color:#666;\">Vistas en Maps</div><div style=\"font-size:19px;font-weight:bold;color:#185FA5;\">17,904</div></div></td><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"border:1px solid #e2dccf;border-left:3px solid #639922;border-radius:6px;padding:9px 11px;background:#fff;height:100%;box-sizing:border-box;\"><div style=\"font-size:10.5px;color:#666;\">Rutas pedidas</div><div style=\"font-size:19px;font-weight:bold;color:#3B6D11;\">1,053</div></div></td></tr><tr><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"border:1px solid #e2dccf;border-left:3px solid #EF9F27;border-radius:6px;padding:9px 11px;background:#fff;height:100%;box-sizing:border-box;\"><div style=\"font-size:10.5px;color:#666;\">Clics al menú</div><div style=\"font-size:19px;font-weight:bold;color:#854F0B;\">349</div></div></td><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"border:1px solid #e2dccf;border-left:3px solid #7F77DD;border-radius:6px;padding:9px 11px;background:#fff;height:100%;box-sizing:border-box;\"><div style=\"font-size:10.5px;color:#666;\">Llamadas</div><div style=\"font-size:19px;font-weight:bold;color:#534AB7;\">65</div></div></td></tr></table><p style=\"font-size:11.5px;color:#777;margin-top:8px;\">Clics web 141 · Búsqueda móvil 671 · Maps escritorio 489 · Búsqueda escritorio 401</p></div><div class=\"section\"><h2>📢 Anuncios — 20 activos, todos aprobados</h2><p style=\"font-size:12px;font-weight:bold;color:#3B6D11;margin:0 0 6px;\">Los que más producen</p><div style=\"border:1px solid #e2dccf;border-radius:8px;padding:9px 11px;margin-bottom:10px;\"><p style=\"font-size:12.5px;font-weight:bold;margin:0 0 6px;\">Thai Thai Mérida | Pide Online</p><table role=\"presentation\" width=\"100%\"><tr><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">8.0%</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Clics</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">107</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Impr.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">1,345</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">📍 Señales</div><div style=\"font-size:11.5px;font-weight:bold;color:#534AB7;\">66</div></td></tr></table></div><div style=\"border:1px solid #e2dccf;border-radius:8px;padding:9px 11px;margin-bottom:10px;\"><p style=\"font-size:12.5px;font-weight:bold;margin:0 0 6px;\">Restaurante Tailandés Mérida</p><table role=\"presentation\" width=\"100%\"><tr><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">13.1%</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Clics</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">57</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Impr.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">435</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">📍 Señales</div><div style=\"font-size:11.5px;font-weight:bold;color:#534AB7;\">45</div></td></tr></table></div><div style=\"border:1px solid #e2dccf;border-radius:8px;padding:9px 11px;margin-bottom:10px;\"><p style=\"font-size:12.5px;font-weight:bold;margin:0 0 6px;\">Thai Restaurant Merida</p><table role=\"presentation\" width=\"100%\"><tr><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">7.9%</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Clics</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">70</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Impr.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">890</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">📍 Señales</div><div style=\"font-size:11.5px;font-weight:bold;color:#534AB7;\">40</div></td></tr></table></div><div style=\"border:1px solid #e2dccf;border-radius:8px;padding:9px 11px;margin-bottom:10px;\"><p style=\"font-size:12.5px;font-weight:bold;margin:0 0 6px;\">Comida Tailandesa Auténtica</p><table role=\"presentation\" width=\"100%\"><tr><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">7.4%</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Clics</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">30</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Impr.</div><div style=\"font-size:11.5px;font-weight:bold;color:#1a1a1a;\">405</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">📍 Señales</div><div style=\"font-size:11.5px;font-weight:bold;color:#534AB7;\">24</div></td></tr></table></div><div style=\"border:1px solid #e8b4b4;border-radius:8px;padding:11px 12px;\"><p style=\"font-size:12.5px;color:#A32D2D;font-weight:bold;margin:0 0 6px;\">Los que necesitan trabajo (6) — sin impresiones 7+ días</p><p style=\"font-size:11.5px;line-height:1.6;margin:0 0 3px;\">· \"Thai Thai Mérida 2026\" — Thai Mérida - Experiencia 2026<br>· \"Thai Thai Mérida Oficial\" — Thai Mérida - Experiencia 2026<br>· \"Restaurante Tailandés Mérida\" (×4 variantes) — Thai Mérida - Experiencia 2026<br></p><p style=\"font-size:11px;color:#666;margin:0;\">Razón: títulos casi idénticos entre sí — Google elige no mostrarlos. <a href=\"https://ads.google.com/aw/overview\" style=\"color:#1a5276;\">Ver en Ads →</a></p></div><p style=\"font-size:10.5px;color:#999;margin-top:8px;\">Local y Delivery (smart): 6 anuncios automáticos sin impresiones — Google los gestiona.</p><p style=\"font-size:10.5px;color:#999;line-height:1.5;\">La \"calidad\" de Google (excelente/promedio/pobre) mide la variedad del texto, no los resultados — un anuncio \"promedio\" puede ser tu mejor productor. Aquí mandan los resultados.</p></div><div class=\"section\"><h2>🌐 SEO de tu web</h2><table role=\"presentation\" width=\"100%\"><tr><td width=\"80\" align=\"center\" valign=\"top\"><div style=\"font-size:34px;font-weight:bold;line-height:1;color:#3B6D11;\">83</div><div style=\"font-size:10.5px;color:#999;\">de 100<br>checks 10/10</div></td><td valign=\"top\"><table role=\"presentation\" width=\"100%\"><tr><td width=\"82\" style=\"font-size:11px;color:#777;\">Velocidad</td><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;background:#eee;border-radius:3px;\"><tr><td height=\"6\" width=\"58%\" style=\"background:#EF9F27;border-radius:3px;font-size:0;line-height:0;\">&nbsp;</td><td height=\"6\" style=\"font-size:0;line-height:0;\">&nbsp;</td></tr></table></td><td width=\"26\" align=\"right\" style=\"font-size:11px;\"><b>58</b></td></tr><tr><td width=\"82\" style=\"font-size:11px;color:#777;\">SEO técnico</td><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;background:#eee;border-radius:3px;\"><tr><td height=\"6\" width=\"100%\" style=\"background:#639922;border-radius:3px;font-size:0;line-height:0;\">&nbsp;</td><td height=\"6\" style=\"font-size:0;line-height:0;\">&nbsp;</td></tr></table></td><td width=\"26\" align=\"right\" style=\"font-size:11px;\"><b>100</b></td></tr><tr><td width=\"82\" style=\"font-size:11px;color:#777;\">On-page</td><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;background:#eee;border-radius:3px;\"><tr><td height=\"6\" width=\"100%\" style=\"background:#639922;border-radius:3px;font-size:0;line-height:0;\">&nbsp;</td><td height=\"6\" style=\"font-size:0;line-height:0;\">&nbsp;</td></tr></table></td><td width=\"26\" align=\"right\" style=\"font-size:11px;\"><b>100</b></td></tr><tr><td width=\"82\" style=\"font-size:11px;color:#777;\">Web Vitals</td><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;background:#eee;border-radius:3px;\"><tr><td height=\"6\" width=\"62%\" style=\"background:#EF9F27;border-radius:3px;font-size:0;line-height:0;\">&nbsp;</td><td height=\"6\" style=\"font-size:0;line-height:0;\">&nbsp;</td></tr></table></td><td width=\"26\" align=\"right\" style=\"font-size:11px;\"><b>62</b></td></tr><tr><td width=\"82\" style=\"font-size:11px;color:#777;\">Accesibilidad</td><td><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;background:#eee;border-radius:3px;\"><tr><td height=\"6\" width=\"96%\" style=\"background:#639922;border-radius:3px;font-size:0;line-height:0;\">&nbsp;</td><td height=\"6\" style=\"font-size:0;line-height:0;\">&nbsp;</td></tr></table></td><td width=\"26\" align=\"right\" style=\"font-size:11px;\"><b>96</b></td></tr></table></td></tr></table><table role=\"presentation\" width=\"100%\" style=\"margin-top:8px;\"><tr><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"background:#FCEBEB;border-radius:6px;padding:10px 12px;\"><p style=\"font-size:11px;color:#791F1F;margin:0;\">📱 Móvil — lento</p><p style=\"font-size:17px;font-weight:bold;color:#A32D2D;margin:2px 0 0;\">58</p><p style=\"font-size:10.5px;color:#791F1F;margin:0;\">tarda 9.3s en cargar</p></div></td><td width=\"50%\" valign=\"top\" style=\"padding:4px;\"><div style=\"background:#EAF3DE;border-radius:6px;padding:10px 12px;\"><p style=\"font-size:11px;color:#27500A;margin:0;\">🖥 Escritorio — bien</p><p style=\"font-size:17px;font-weight:bold;color:#3B6D11;margin:2px 0 0;\">90</p><p style=\"font-size:10.5px;color:#27500A;margin:0;\">carga en 1.5s</p></div></td></tr></table><p style=\"font-size:11.5px;color:#633806;background:#FAEEDA;border-radius:6px;padding:8px 12px;margin-top:8px;\">💡 Mejorar la velocidad en móvil (comprimir imágenes y diferir JS).</p></div><div class=\"section\"><h2>🔍 Search Console · 7 días (2026-06-01 → 2026-06-08)</h2><p style=\"font-size:11.5px;color:#555;\">388 personas te vieron en los resultados de Google esta semana; 4 entraron a tu sitio.</p><table role=\"presentation\" width=\"100%\" style=\"background:#f6f3ec;border-radius:6px;padding:8px 4px;margin:8px 0;\"><tr><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Te vieron</div><div style=\"font-size:13px;font-weight:bold;\">388</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Entraron</div><div style=\"font-size:13px;font-weight:bold;\">4</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">CTR</div><div style=\"font-size:13px;font-weight:bold;\">1.0%</div></td><td align=\"center\" width=\"25%\"><div style=\"font-size:9px;color:#999;\">Posición</div><div style=\"font-size:13px;font-weight:bold;\">6.2</div></td></tr></table><p style=\"font-size:11px;font-weight:bold;color:#666;margin:0 0 3px;\">Cómo te encuentran:</p><p style=\"font-size:11.5px;color:#555;margin:0;\">\"thai thai\" (2) · \"thai thai mérida\" (1)</p><p style=\"font-size:10.5px;color:#999;margin-top:4px;\">Solo queries con clics &gt; 0.</p></div><div class=\"footer\">🔒 Nada se ejecuta sin tu confirmación · Protegido: marca, términos thai, reservas.</div></div></body></html>",
+  "text_email": "Thai Thai Monitor\nTu resumen semanal de Google Ads, Maps y tu web.\nlunes 9 de junio de 2026 · 3 min\n\n💰 Ventas registradas: 13 pedidos · $6,910 MXN · $37 por pedido real (registro interno GloriaFood, últimos 7 días)\n\nPosibles bloqueos — necesitan tu confirmación\n• 1. \"almar restaurante merida\" — $16 gastados — Apareció en: Thai Mérida - Experiencia 2026 [Revisar y bloquear]/[Dejar]\n• 2. \"restaurante la rueda cerca de mi\" — $14 gastados — Apareció en: Thai Mérida - Delivery Search [Revisar y bloquear]/[Dejar]\n• 3. \"restaurante yucateco merida\" — $8 gastados — Apareció en: Thai Mérida - Experiencia 2026 [Revisar y bloquear]/[Dejar]\n• 4. \"casa chaya merida\" — $8 gastados — Apareció en: Thai Mérida - Experiencia 2026 [Revisar y bloquear]/[Dejar]\n• 5. \"restaurante siqueff merida\" — $12 gastados — Apareció en: Thai Mérida - Delivery Search, Thai Mérida - Experiencia 2026 [Revisar y bloquear]/[Dejar]\n\nCampañas — últimos 7 días\nThai Mérida - Local (salud 75): Gasto $1,230 · Conv. 2,062 · CPA — · $/conv. $0.60 · 💰 0 · 📍 2,062\nThai Mérida - Experiencia 2026 (provisional 73): Gasto $1,165 · Conv. 636 · CPA — · $/conv. $1.83 · 💰 0 · 📍 636\nThai Mérida - Delivery Search (provisional 79): Gasto $553 · Conv. 225 · CPA — · $/conv. $2.46 · 💰 0 · 📍 225\nThai Mérida - Delivery (provisional 66): Gasto $485 · Conv. 902 · CPA — · $/conv. $0.54 · 💰 0 · 📍 902\n\nBúsquedas: 100 distintas · 9 protegidas · 14 útiles · 45 otros · por confirmar $58\n\nReseñas: promedio 4.7 · 6 nuevas · 5 de 5★ sin responder\n\nMaps: 17,904 vistas · 1,053 rutas · 65 llamadas\n\nAnuncios: 20 activos, todos aprobados · 6 de búsqueda necesitan trabajo · 6 smart sin impresiones\n\nSEO: 83/100\n\nSearch Console (2026-06-01–2026-06-08): 388 te vieron · 4 entraron\n\n🔒 Nada se ejecuta sin tu confirmación · Protegido: marca, términos thai, reservas."
+}

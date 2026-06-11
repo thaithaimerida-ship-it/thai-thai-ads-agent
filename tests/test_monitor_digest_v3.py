@@ -101,17 +101,19 @@ def test_casa_thai_todas_las_variantes_competidor_confirmado():
         _term(query=variant, cost=10 + i, clicks=35 + i, conversion_quality="none")
         for i, variant in enumerate(variants)
     ]))
-    decisions = {d["term"]: d for d in digest["decisions"]}
 
-    assert len(digest["decisions"]) == 5
-    for decision in digest["decisions"]:
-        assert decision["decision_type"] == "negative_leak"
-        assert decision["identity_axis"] == "restaurante_externo"
-        assert decision["confirmado_por_hugo"] is True
-        assert decision["alta_prioridad"] is True
-        assert decision["suggested_match_type"] == "EXACT"
-        assert decision["write_action"] is None
-        assert decision["block_allowed"] is False
+    # B-4: all Casa Thai variants collapse into ONE grouped decision.
+    assert len(digest["decisions"]) == 1
+    decision = digest["decisions"][0]
+    assert decision["decision_type"] == "negative_leak"
+    assert decision["identity_axis"] == "restaurante_externo"
+    assert decision["confirmado_por_hugo"] is True
+    assert decision["alta_prioridad"] is True
+    assert decision["suggested_match_type"] == "EXACT"
+    assert decision["write_action"] is None
+    assert decision["block_allowed"] is False
+    assert decision["variantes_count"] == len(variants)
+    assert "bankok casa thai" in decision["variantes"]
 
     dictionary = load_term_dictionary()
     groups = dictionary["term_groups"]
@@ -119,7 +121,6 @@ def test_casa_thai_todas_las_variantes_competidor_confirmado():
     assert len(groups["casa_thai_variants"]) == 9
     assert "bankok casa thai" in groups["casa_thai_variants"]
     assert "casa thai mérida" in groups["casa_thai_variants"]
-    assert decisions
 
 
 def test_negativo_con_fuga_detectado():
@@ -230,17 +231,18 @@ def test_monitor_digest_endpoint_is_read_only_and_uses_search_terms_payload(monk
     def fake_build(date_range="LAST_7_DAYS"):
         calls.append(date_range)
         return _payload([
-            _term(query="vips cerca de mi", clicks=2, cost=40, conversion_quality="none")
+            _term(query="almar restaurante merida", clicks=2, cost=40, conversion_quality="none")
         ], date_range=date_range)
 
     monkeypatch.setattr(monitor, "_build_search_terms_payload", fake_build)
+    monkeypatch.setattr(monitor, "_build_context", lambda date_range, mode: {"mode": "monday", "links": {}})
 
     result = asyncio.run(monitor.monitor_digest(date_range="LAST_14_DAYS"))
 
     assert calls == ["LAST_14_DAYS"]
     assert result["status"] == "success"
     assert result["read_only"] is True
-    assert result["decisions"][0]["term"] == "vips cerca de mi"
+    assert result["decisions"][0]["term"] == "almar restaurante merida"
 
 
 def test_monitor_digest_route_accepts_valid_date_range(monkeypatch):
@@ -255,6 +257,7 @@ def test_monitor_digest_route_accepts_valid_date_range(monkeypatch):
         ], date_range=date_range)
 
     monkeypatch.setattr(monitor, "_build_search_terms_payload", fake_build)
+    monkeypatch.setattr(monitor, "_build_context", lambda date_range, mode: {"mode": "monday", "links": {}})
 
     result = asyncio.run(monitor.monitor_digest(date_range="LAST_7_DAYS"))
 
