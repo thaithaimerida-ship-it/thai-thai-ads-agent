@@ -126,11 +126,37 @@ def test_smart_manual_required_pending_y_receta(monkeypatch, tmp_path):
     assert registro["pending_manual"] == ["Thai Merida - Local"]
 
 
-def test_no_bloquear_dos_veces_mismo_termino(monkeypatch, tmp_path):
-    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "true")
+def test_dry_run_no_consume_termino_pero_real_si(monkeypatch, tmp_path):
+    # BUG 1: simulacros repetibles; solo el bloqueo REAL (applied=True) consume el término.
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
     p = _payload()
-    primera = negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)
-    assert primera["status"] == "ok" and primera["dry_run"] is True
-    segunda = negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)
-    assert segunda["status"] == "rechazada" and segunda["motivo"] == "ya_bloqueado"
+    # 1) dos simulacros → ambos proceden
+    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "true")
+    assert negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)["status"] == "ok"
+    assert negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)["status"] == "ok"
+    # 2) bloqueo REAL → procede (no estaba consumido)
+    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "false")
+    monkeypatch.setattr(negativos_apply, "_client", lambda: object())
+    monkeypatch.setattr(negativos_apply.ads_client, "add_negative_keyword",
+                        lambda *a, **k: {"status": "success", "match_type": "EXACT"})
+    real = negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)
+    assert real["status"] == "ok" and real["dry_run"] is False
+    # 3) segundo bloqueo REAL → rechazado
+    seg = negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)
+    assert seg["status"] == "rechazada" and seg["motivo"] == "ya_bloqueado"
+
+
+def test_termino_bloqueado_real_muestra_estado_no_boton(monkeypatch, tmp_path):
+    # BUG 1b: un término ya bloqueado de verdad llega a la página como ESTADO, no botón.
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    acciones_log.registrar({"accion": "bloquear", "term": "bankok casa thai", "applied": True, "resultado": "ok"})
+    ctx = negativos_service.contexto_bloqueo("bankok casa thai", payload=_payload())
+    assert ctx["ya_bloqueado_ts"] is not None
+    html = acciones_bloqueo.render_bloqueo(ctx, "TOK")
+    assert "Ya bloqueado el" in html and "disabled" in html
+
+
+def test_cosmetico_variante_singular_plural():
+    assert acciones_bloqueo._variantes(1) == "1 variante"
+    assert acciones_bloqueo._variantes(2) == "2 variantes"
+    assert acciones_bloqueo._variantes(0) == "0 variantes"

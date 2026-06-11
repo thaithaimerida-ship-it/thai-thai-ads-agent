@@ -53,6 +53,11 @@ def _esc(v) -> str:
     return html.escape(str(v if v is not None else ""), quote=True)
 
 
+def _variantes(n: int) -> str:
+    n = int(n or 0)
+    return f"{n} variante" if n == 1 else f"{n} variantes"
+
+
 def render_bloqueo(ctx: dict, token: str) -> str:
     term = _esc(ctx.get("term"))
     variantes = ctx.get("variantes") or []
@@ -73,10 +78,21 @@ def render_bloqueo(ctx: dict, token: str) -> str:
     campos = "".join(filas) or "<div class='nota'>No se encontraron campañas para este término.</div>"
     dry = ctx.get("dry_run")
     dry_badge = "<span class='pill dry'>DRY-RUN: nada se aplica de verdad</span>" if dry else ""
+
+    ya_ts = ctx.get("ya_bloqueado_ts")
+    if ya_ts:
+        fecha = _esc(str(ya_ts)[:10])
+        estado = f"<div class='estado'>✓ Ya bloqueado el {fecha}. No es necesario volver a aplicarlo.</div>"
+        confirm_dis = "disabled"
+    else:
+        estado = ""
+        confirm_dis = ""
+
     return _PAGE.replace("__TERM__", term).replace("__TOKEN__", _esc(token)) \
-        .replace("__VARS__", var_html).replace("__VARN__", str(ctx.get("variantes_count", 0))) \
+        .replace("__VARS__", var_html).replace("__VARTXT__", _esc(_variantes(ctx.get("variantes_count", 0)))) \
         .replace("__GASTO__", str(round(float(ctx.get("gasto_total") or 0)))) \
-        .replace("__CAMPOS__", campos).replace("__DRY__", dry_badge)
+        .replace("__CAMPOS__", campos).replace("__DRY__", dry_badge) \
+        .replace("__ESTADO__", estado).replace("__CONFIRMDIS__", confirm_dis)
 
 
 _PAGE = """<!doctype html>
@@ -104,20 +120,22 @@ _PAGE = """<!doctype html>
   .btn[disabled]{opacity:.5;cursor:not-allowed;}
   #msg{margin-top:10px;font-size:13px;font-weight:bold;}
   .ok{color:#1a7f37;} .err{color:#9b2f2f;}
+  .estado{background:#EAF3DE;color:#27500A;border-radius:8px;padding:11px 12px;font-size:13px;font-weight:bold;margin-bottom:10px;}
   .footer{font-size:10.5px;color:#999;text-align:center;padding:12px;}
 </style></head><body><div class="box">
 <div class="card">
   <h1>🚫 Revisar y bloquear</h1>
   <p class="muted">Bloquear es la excepción. Revisa exactamente qué se aplicará antes de confirmar. __DRY__</p>
   <div class="term">"__TERM__"</div>
-  <div class="kpi">__VARN__ variantes · gasto acumulado <b>$__GASTO__</b></div>
+  <div class="kpi">__VARTXT__ · gasto acumulado <b>$__GASTO__</b></div>
   <div class="muted">Variantes: __VARS__</div>
 </div>
 <div class="card">
+  __ESTADO__
   <p class="muted"><b>Qué se aplicará</b> (marca las campañas):</p>
   __CAMPOS__
   <div class="row">
-    <button class="btn" id="confirmar" onclick="confirmar()">Confirmar bloqueo</button>
+    <button class="btn" id="confirmar" onclick="confirmar()" __CONFIRMDIS__>Confirmar bloqueo</button>
     <button class="btn-sec" onclick="dejar()">Dejar (es búsqueda válida)</button>
   </div>
   <div id="msg"></div>

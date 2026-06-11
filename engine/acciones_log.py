@@ -44,20 +44,26 @@ def _leer(path: str | None = None) -> list[dict[str, Any]]:
 
 
 def ya_registrada(review_id: str, path: str | None = None) -> bool:
-    """True si ya hubo una publicación aceptada (real o dry-run) para esa reseña —
-    evita publicar/registrar dos veces la misma."""
+    """True solo si ya hubo una publicación REAL (published=True) de esa reseña. Un
+    simulacro (dry_run) es un ensayo repetible y NO consume la reseña."""
     return any(
-        r.get("review_id") == review_id and r.get("accion") == "publicar"
-        and r.get("resultado") in ("ok", "dry_run")
+        r.get("review_id") == review_id and r.get("accion") == "publicar" and r.get("published") is True
         for r in _leer(path)
     )
 
 
 def termino_ya_bloqueado(term: str, path: str | None = None) -> bool:
-    """True si ya hubo un bloqueo aceptado (real o dry-run) para ese término —
-    evita bloquear dos veces el mismo."""
+    """True solo si ya hubo un bloqueo REAL (applied=True) de ese término. Un simulacro
+    (dry_run) NO consume el término."""
     return any(
-        r.get("term") == term and r.get("accion") == "bloquear"
-        and r.get("resultado") in ("ok", "dry_run")
+        r.get("term") == term and r.get("accion") == "bloquear" and r.get("applied") is True
         for r in _leer(path)
     )
+
+
+def bloqueo_real_ts(term: str, path: str | None = None) -> str | None:
+    """Fecha (ts) del último bloqueo REAL del término, o None si nunca se aplicó de verdad."""
+    for r in reversed(_leer(path)):
+        if r.get("term") == term and r.get("accion") == "bloquear" and r.get("applied") is True:
+            return r.get("ts")
+    return None
