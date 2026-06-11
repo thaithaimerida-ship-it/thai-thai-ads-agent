@@ -1,13 +1,15 @@
 """Acciones de reseñas 5★ — Fase G.
 
-GET  /acciones/resenas?token=X            → UI. Las tarjetas (estrellas/autor/texto) se
-                                            renderizan SERVER-SIDE (nunca página en blanco);
-                                            el borrador IA llega después vía /data.
-GET  /acciones/resenas/contenido?token=X  → JSON: contenido de reseñas (rápido, sin IA).
-GET  /acciones/resenas/data?token=X       → JSON: borradores IA de la tanda (lento).
+GET  /acciones/resenas?token=X            → UI. Tarjetas (estrellas/autor/texto) SERVER-SIDE.
+GET  /acciones/resenas/contenido?token=X  → JSON: contenido de reseñas (rápido, con caché).
+GET  /acciones/resenas/borrador?...&review_id=X → JSON: borrador IA de UNA reseña (per-card,
+                                            con caché). Variedad por posición. Nunca 500.
+GET  /acciones/resenas/data?token=X       → JSON: lote de borradores (compat; la UI usa /borrador).
 POST /acciones/resenas/publicar?token=X   → publica UNA respuesta (DRY_RUN default).
 
-Las reseñas ≤4★ JAMÁS aparecen. Re-validación server-side en el POST. Sin batch.
+Generación PROGRESIVA por tarjeta: cada textarea se llena cuando SU borrador está; si falla o
+excede 30s, esa tarjeta muestra "No se pudo generar — Reintentar". El textarea siempre es
+editable (puedes escribir tú). Las ≤4★ JAMÁS aparecen.
 """
 from __future__ import annotations
 
@@ -25,7 +27,6 @@ router = APIRouter(tags=["acciones-resenas"])
 
 
 def _require_token(token: str) -> None:
-    """Fail-closed: sin ACCIONES_TOKEN en el entorno o token que no coincide → 403."""
     expected = os.getenv("ACCIONES_TOKEN", "")
     if not expected or not secrets.compare_digest(token or "", expected):
         raise HTTPException(status_code=403, detail="Token inválido o ausente")
@@ -51,12 +52,13 @@ class PublicarBody(BaseModel):
 def _card_html(it: dict) -> str:
     rid = _esc(it.get("review_id"))
     comentario = _esc(it.get("comment")) if it.get("comment") else "<i>(sin texto)</i>"
-    return (f"<div class='card' id='c-{rid}'>"
+    return (f"<div class='card' id='c-{rid}' data-rid='{rid}'>"
             f"<div class='stars'>★★★★★</div><div class='rev'>{_esc(it.get('reviewer') or 'Cliente')}</div>"
             f"<div class='comment'>{comentario}</div>"
             f"<div class='badges' id='b-{rid}'></div>"
-            f"<textarea id='t-{rid}' disabled>generando borrador…</textarea>"
-            f"<button class='btn' id='btn-{rid}' disabled onclick=\"pub('{rid}')\">Publicar respuesta</button>"
+            f"<textarea id='t-{rid}' placeholder='Generando borrador… (o escribe tú)'></textarea>"
+            f"<div class='status' id='s-{rid}'>⏳ generando borrador…</div>"
+            f"<button class='btn' id='btn-{rid}' onclick=\"pub('{rid}')\">Publicar respuesta</button>"
             f"<div class='msg' id='m-{rid}'></div></div>")
 
 
@@ -70,7 +72,7 @@ async def resenas_ui(token: str = "", offset: int = 0, limit: int = 10):
     dry = "<span class='pill dry'>DRY-RUN: nada se publica de verdad</span>" if data["dry_run"] else ""
     return HTMLResponse(
         _PAGE.replace("__TOKEN__", _esc(token)).replace("__CARDS__", cards).replace("__DRY__", dry)
-        .replace("__INITN__", str(len(data["items"]))).replace("__MORE__", "block" if data["hay_mas"] else "none")
+        .replace("__NEXT__", str(data["offset"] + data["limit"])).replace("__MORE__", "block" if data["hay_mas"] else "none")
     )
 
 
@@ -79,6 +81,12 @@ async def resenas_contenido(token: str = "", offset: int = 0, limit: int = 10):
     _require_token(token)
     off, lim = _clamp(offset, limit)
     return JSONResponse(content=resenas_service.cargar_resenas_tanda(offset=off, limit=lim))
+
+
+@router.get("/acciones/resenas/borrador")
+async def resenas_borrador(token: str = "", review_id: str = ""):
+    _require_token(token)
+    return JSONResponse(content=resenas_service.borrador_para(review_id))
 
 
 @router.get("/acciones/resenas/data")
@@ -116,14 +124,16 @@ _PAGE = """<!doctype html>
   .badges{margin:6px 0;min-height:1px;}
   .b-ene{background:#EEEDFE;color:#534AB7;} .b-cie{background:#EAF3DE;color:#27500A;}
   .b-rev{background:#FCEBEB;color:#791F1F;}
-  textarea{width:100%;box-sizing:border-box;border:1px solid #ccc;border-radius:8px;padding:10px;font:13px Arial;min-height:80px;}
-  textarea[disabled]{color:#999;font-style:italic;background:#faf7f2;}
+  textarea{width:100%;box-sizing:border-box;border:1px solid #ccc;border-radius:8px;padding:10px;font:13px Arial;min-height:84px;}
+  .status{font-size:11px;color:#888;margin-top:4px;min-height:14px;}
   .btn{display:inline-block;background:#2d2a26;color:#fff;border:none;border-radius:8px;padding:9px 14px;font-size:13px;cursor:pointer;font-weight:bold;margin-top:8px;}
   .btn[disabled]{opacity:.45;cursor:not-allowed;}
   .ok{color:#1a7f37;font-size:12px;font-weight:bold;margin-top:8px;}
-  .err{color:#A32D2D;font-size:12px;margin-top:8px;}
+  .err{color:#A32D2D;font-weight:bold;}
+  .msg{font-size:12px;margin-top:6px;}
   .empty{background:#fff;border:1px solid #e2dccf;border-radius:10px;padding:20px;text-align:center;color:#777;}
   #more{display:block;width:100%;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:8px;padding:11px;font-size:13px;cursor:pointer;font-weight:bold;}
+  a{color:#1a5276;}
   .footer{font-size:10.5px;color:#999;text-align:center;padding:12px;}
 </style></head><body><div class="box">
 <div class="head">
@@ -136,11 +146,12 @@ _PAGE = """<!doctype html>
 </div>
 <script>
 "use strict";
-var T="__TOKEN__", offset=__INITN__;
+var T="__TOKEN__", nextOffset=__NEXT__, queue=[], active=0, MAXC=3;
 function el(id){return document.getElementById(id);}
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function eneLabel(e){return {explosiva:"🔥 Explosiva",zen:"😊 Zen",vibrante:"😄 Vibrante",agradecimiento:"⭐ Agradecimiento"}[e]||e;}
 function badges(it){
+  if(!it.energia) return "";
   var rev=it.revisar_manual?"<span class='pill b-rev'>⚠ revisar manualmente</span> ":"";
   var cie=it.grupo_cierre?"<span class='pill b-cie'>cierre: "+esc(it.grupo_cierre)+"</span> ":"";
   var src=it.fuente==="banco"?"<span class='pill b-cie'>banco</span> ":"";
@@ -148,36 +159,42 @@ function badges(it){
 }
 function cardHtml(it){
   var rid=it.review_id;
-  return "<div class='card' id='c-"+esc(rid)+"'>"+
+  return "<div class='card' id='c-"+esc(rid)+"' data-rid='"+esc(rid)+"'>"+
     "<div class='stars'>★★★★★</div><div class='rev'>"+esc(it.reviewer||"Cliente")+"</div>"+
     "<div class='comment'>"+(it.comment?esc(it.comment):"<i>(sin texto)</i>")+"</div>"+
     "<div class='badges' id='b-"+esc(rid)+"'></div>"+
-    "<textarea id='t-"+esc(rid)+"' disabled>generando borrador…</textarea>"+
-    "<button class='btn' id='btn-"+esc(rid)+"' disabled onclick='pub(\""+esc(rid)+"\")'>Publicar respuesta</button>"+
+    "<textarea id='t-"+esc(rid)+"' placeholder='Generando borrador… (o escribe tú)'></textarea>"+
+    "<div class='status' id='s-"+esc(rid)+"'>⏳ generando borrador…</div>"+
+    "<button class='btn' id='btn-"+esc(rid)+"' onclick='pub(\""+esc(rid)+"\")'>Publicar respuesta</button>"+
     "<div class='msg' id='m-"+esc(rid)+"'></div></div>";
 }
-function fillDraft(it){
-  var ta=el("t-"+it.review_id), b=el("b-"+it.review_id), btn=el("btn-"+it.review_id);
-  if(!ta) return;
-  ta.value=it.borrador; ta.disabled=false; ta.style.fontStyle="normal"; ta.style.color="#1a1a1a";
-  if(btn) btn.disabled=false; if(b) b.innerHTML=badges(it);
+function showError(rid,reason){
+  var st=el("s-"+rid); if(!st) return;
+  st.innerHTML="<span class='err'>No se pudo generar: "+esc(reason)+".</span> <a href='#' onclick='retry(\""+rid+"\");return false;'>Reintentar</a> · o escribe tú.";
 }
-function markLoadingError(reason){
-  var tas=document.getElementsByTagName("textarea"); var i;
-  for(i=0;i<tas.length;i++){ if(tas[i].disabled && tas[i].value==="generando borrador…"){ tas[i].value="Error cargando borrador: "+reason; tas[i].style.color="#A32D2D"; } }
-}
-function fetchDrafts(off,lim){
-  if(lim<=0) return;
-  var ctrl=new AbortController(); var to=setTimeout(function(){ctrl.abort();},120000);
-  fetch("/acciones/resenas/data?token="+encodeURIComponent(T)+"&offset="+off+"&limit="+lim,{signal:ctrl.signal})
+function retry(rid){ var st=el("s-"+rid); if(st) st.innerHTML="⏳ generando borrador…"; queue.push(rid); pump(); }
+function loadDraft(rid){
+  var ctrl=new AbortController(); var to=setTimeout(function(){ctrl.abort();},30000);
+  return fetch("/acciones/resenas/borrador?token="+encodeURIComponent(T)+"&review_id="+encodeURIComponent(rid),{signal:ctrl.signal})
    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
-   .then(function(d){ clearTimeout(to); (d.items||[]).forEach(fillDraft); })
-   .catch(function(e){ clearTimeout(to); markLoadingError(e&&e.name==="AbortError"?"tardó demasiado, recarga la página":(e&&e.message)||"error de red"); });
+   .then(function(d){ clearTimeout(to);
+     if(d.error){ showError(rid,d.error); return; }
+     var ta=el("t-"+rid); if(ta && !ta.value.trim()){ ta.value=d.borrador; }
+     var b=el("b-"+rid); if(b) b.innerHTML=badges(d);
+     var st=el("s-"+rid); if(st) st.innerHTML="";
+   })
+   .catch(function(e){ clearTimeout(to); showError(rid, e&&e.name==="AbortError"?"tardó demasiado":((e&&e.message)||"error de red")); });
+}
+function pump(){
+  while(active<MAXC && queue.length){
+    var rid=queue.shift(); active++;
+    loadDraft(rid).then(function(){ active--; pump(); });
+  }
 }
 function pub(id){
   var btn=el("btn-"+id), ta=el("t-"+id), msg=el("m-"+id);
-  if(ta.disabled){ msg.className="err"; msg.textContent="Espera a que cargue el borrador."; return; }
-  btn.disabled=true; msg.className=""; msg.textContent="Publicando…";
+  if(!ta.value.trim()){ msg.className="msg"; msg.innerHTML="<span class='err'>Escribe o espera el borrador antes de publicar.</span>"; return; }
+  btn.disabled=true; msg.className="msg"; msg.textContent="Publicando…";
   fetch("/acciones/resenas/publicar?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({review_id:id,texto:ta.value})})
    .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
@@ -185,18 +202,23 @@ function pub(id){
      else { btn.disabled=false; msg.innerHTML="<div class='err'>No se pudo: "+esc(res.j.motivo||"error")+"</div>"; } })
    .catch(function(){ btn.disabled=false; msg.innerHTML="<div class='err'>Error de red</div>"; });
 }
+function enqueueVisible(){
+  var nodes=document.querySelectorAll(".card[data-rid]");
+  for(var i=0;i<nodes.length;i++){ var rid=nodes[i].getAttribute("data-rid"); if(nodes[i].getAttribute("data-q")!=="1"){ nodes[i].setAttribute("data-q","1"); queue.push(rid); } }
+  pump();
+}
 function loadMore(){
   var btn=el("more"); btn.disabled=true; btn.textContent="Cargando…";
-  fetch("/acciones/resenas/contenido?token="+encodeURIComponent(T)+"&offset="+offset+"&limit=10")
+  fetch("/acciones/resenas/contenido?token="+encodeURIComponent(T)+"&offset="+nextOffset+"&limit=10")
    .then(function(r){return r.json();})
    .then(function(d){
      var items=d.items||[]; items.forEach(function(it){ el("list").insertAdjacentHTML("beforeend",cardHtml(it)); });
-     var off=offset; offset+=items.length;
+     nextOffset+=items.length;
      btn.disabled=false; btn.textContent="Cargar 10 más"; btn.style.display=d.hay_mas?"block":"none";
-     fetchDrafts(off, items.length);
+     enqueueVisible();
    })
    .catch(function(){ btn.disabled=false; btn.textContent="Cargar 10 más"; });
 }
 el("more").addEventListener("click",loadMore);
-fetchDrafts(0, __INITN__);
+enqueueVisible();
 </script></body></html>"""

@@ -117,6 +117,56 @@ def test_dry_run_no_llama_updatereply(monkeypatch):
     assert res["dry_run"] is True and res["published"] is False
 
 
+def test_borrador_endpoint_per_card(client, monkeypatch):
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(resenas_service, "borrador_para",
+                        lambda rid: {"review_id": rid, "borrador": "🔥 Gracias", "energia": "explosiva", "cache": False})
+    r = client.get("/acciones/resenas/borrador?token=secreto&review_id=a")
+    assert r.status_code == 200 and r.json()["borrador"] == "🔥 Gracias"
+    assert client.get("/acciones/resenas/borrador?review_id=a").status_code == 403  # sin token
+
+
+def test_borrador_para_genera_y_cachea(monkeypatch, tmp_path):
+    from engine import borradores_cache, resenas_ai
+    monkeypatch.setattr(borradores_cache, "CACHE_PATH", str(tmp_path / "bc.json"))
+    revs = [{"reviewId": "a", "starRating": "FIVE", "comment": "rico", "reviewer": {"displayName": "Ana"}}]
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", lambda *a, **k: revs)
+    calls = {"n": 0}
+
+    def fake_uno(resena, indice=0, **k):
+        calls["n"] += 1
+        return {"energia": "explosiva", "borrador": "🔥 Gracias", "grupo_cierre": "antojo",
+                "fuente": "generado", "revisar_manual": False, "emoji_apertura": "🔥",
+                "cierre": "x", "cuerpo": "y", "motivo_revision": ""}
+
+    monkeypatch.setattr(resenas_ai, "generar_uno", fake_uno)
+    r1 = resenas_service.borrador_para("a")
+    assert r1["borrador"] == "🔥 Gracias" and r1["cache"] is False
+    r2 = resenas_service.borrador_para("a")
+    assert r2["cache"] is True and calls["n"] == 1  # 2da vez: caché, no regenera
+
+
+def test_borrador_para_error_no_lanza(monkeypatch, tmp_path):
+    from engine import borradores_cache
+    monkeypatch.setattr(borradores_cache, "CACHE_PATH", str(tmp_path / "bc.json"))
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("GBP caído")))
+    r = resenas_service.borrador_para("a")
+    assert "error" in r and "GBP" in r["error"]  # nunca lanza → el front muestra el error
+
+
+def test_publicar_correo_lleva_datos_reales(monkeypatch, tmp_path):
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(gbp_reviews, "get_review", lambda rid, token=None: {
+        "reviewId": "r1", "starRating": "FIVE", "comment": "todo rico", "reviewer": {"displayName": "Ana López"}})
+    cap = {}
+    monkeypatch.setattr(resenas_service.resenas_email, "enviar_confirmacion",
+                        lambda entry: cap.update(entry=entry) or {"enviado": False})
+    res = resenas_service.publicar("r1", "gracias")
+    assert res["status"] == "ok"
+    assert cap["entry"]["reviewer"] == "Ana López" and cap["entry"]["comment"] == "todo rico"
+
+
 def test_dry_run_no_consume_resena_pero_real_si(monkeypatch, tmp_path):
     # BUG 1: un simulacro (dry-run) NO consume la reseña; solo la publicación REAL la consume.
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))

@@ -27,8 +27,8 @@ def construir_confirmacion(entry: dict[str, Any]) -> tuple[str, str]:
     asunto = f"🍜 Reseña respondida — {modo} · {entry.get('reviewer', '')}".strip()
     cuerpo = (
         f"Se {'simuló' if entry.get('dry_run') else 'publicó'} una respuesta a una reseña 5★.\n\n"
-        f"Cliente: {entry.get('reviewer', '')}\n"
-        f"Reseña: {entry.get('comment', '(sin texto)')}\n\n"
+        f"Cliente: {entry.get('reviewer') or '(anónimo)'}\n"
+        f"Reseña: {entry.get('comment') or '(sin texto)'}\n\n"
         f"Respuesta {'(no publicada, dry-run)' if entry.get('dry_run') else 'publicada'}:\n"
         f"{entry.get('texto', '')}\n\n"
         f"Energía: {entry.get('energia', '')} · Fuente: {entry.get('fuente', '')}\n"
