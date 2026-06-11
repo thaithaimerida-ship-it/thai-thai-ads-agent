@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 def email_habilitado() -> bool:
-    return os.getenv("RESENAS_EMAIL_ENABLED", "false").strip().lower() == "true"
+    # Gate compartido (ACCIONES_EMAIL_ENABLED), con RESENAS_EMAIL_ENABLED como alias legacy.
+    from engine import acciones_email
+    return acciones_email.email_habilitado()
 
 
 def construir_confirmacion(entry: dict[str, Any]) -> tuple[str, str]:

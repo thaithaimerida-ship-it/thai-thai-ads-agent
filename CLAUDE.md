@@ -236,9 +236,14 @@ Cuando se despliegue el digest completo:
 ### Pendientes de deploy — Fase G (módulo Reseñas 5★)
 - **`ACCIONES_TOKEN`** (Secret Manager): token de `/acciones/resenas`. Sin token / token inválido / var no seteada → 403 (fail-closed). Es el mismo concepto que `ACTIONS_TOKEN` del digest; unificar al desplegar.
 - **`DRY_RUN_RESENAS=true`** por default (no llama a `updateReply` de GBP). Solo cambiar a `false` post-deploy con autorización explícita de Hugo.
-- **`RESENAS_EMAIL_ENABLED=true`** en **producción** — Hugo quiere el correo de confirmación por cada publicación real. (Default `false` en local/build para no enviar correos en pruebas.)
+- **`ACCIONES_EMAIL_ENABLED=true`** en **producción** — gate ÚNICO del correo de confirmación de acciones (reseñas **y** bloqueo). Hugo lo quiere por cada acción real. `RESENAS_EMAIL_ENABLED` queda como alias legacy (ambos los lee `engine/acciones_email.email_habilitado`). Default `false` en local/build.
 - **`GBP_ACCOUNT_ID` / `GBP_LOCATION_ID`** (opcionales): hay defaults a la cuenta/ubicación de Thai Thai. Credenciales GBP (`GBP_CLIENT_ID/SECRET/REFRESH_TOKEN`) ya en Cloud Run.
-- Log inmutable de publicaciones en `data/acciones_log.jsonl` (append-only; sync a GCS como el resto de `data/`).
+- Log inmutable de acciones en `data/acciones_log.jsonl` (append-only; sync a GCS como el resto de `data/`).
+
+### Pendientes de deploy — Fase B1 (página de bloqueo de negativos)
+- **`ACCIONES_TOKEN`** (Secret Manager): mismo token que reseñas para `/acciones/bloqueo`, fail-closed 403.
+- **`DRY_RUN_NEGATIVOS=true`** por default (todo menos la llamada de escritura a Google Ads). Solo `false` post-deploy con autorización explícita de Hugo.
+- **`GOOGLE_ADS_CUSTOMER_ID`** (default `4021070209`). Aplica EXACT en SEARCH (Delivery Search / Experiencia 2026) vía `ads_client.add_negative_keyword(match_type="EXACT")`. **JAMÁS BROAD, JAMÁS batch.** Smart (Local/Delivery): guarda de marca/categoría (thai/tailand*/bangkok/thaithai) → si la contiene, el theme se prohíbe; sin API confiable para negativos en Smart → `manual_required` (aplicar en UI). "Dejar" agrega el término a `acknowledged_external_roots` en `term_dictionary.json` (no toca Ads).
 
 ### Hallazgo GloriaFood (2026-06-10)
 - Los pedidos GloriaFood se guardan en SQLite `gloriafood_orders` (sync a GCS); 13 pedidos/$6,910 en 7 días, campos completos (cliente+items). Ver `docs/inventario_pedidos_gloriafood.md`.

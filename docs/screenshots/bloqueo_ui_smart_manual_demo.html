@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bloquear término — Thai Thai</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;background:#f0ede6;color:#1a1a1a;margin:0;padding:14px 8px;}
+  .box{max-width:600px;margin:0 auto;}
+  .card{background:#fff;border:1px solid #ddd6c8;border-radius:10px;padding:16px;margin-bottom:12px;}
+  h1{font-size:18px;margin:0 0 4px;font-weight:600;}
+  .muted{color:#777;font-size:12px;line-height:1.5;}
+  code{background:#f6f3ec;border-radius:4px;padding:1px 5px;font-size:12px;}
+  .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:bold;background:#EAF3DE;color:#27500A;}
+  .dry{background:#E7F0FA;color:#114277;}
+  .term{font-size:20px;font-weight:bold;}
+  .kpi{font-size:13px;color:#444;margin:8px 0;}
+  .camp{display:block;border:1px solid #e2dccf;border-radius:8px;padding:11px 12px;margin:8px 0;font-size:13px;cursor:pointer;}
+  .camp.off{opacity:.6;background:#faf7f2;cursor:not-allowed;}
+  .gasto{float:right;color:#777;font-weight:bold;}
+  .nota{color:#8a5a1f;font-size:11px;margin-top:5px;}
+  .row{display:flex;gap:8px;margin-top:12px;}
+  .btn{flex:1.4;background:#9b2f2f;color:#fff;border:none;border-radius:8px;padding:11px;font-size:14px;cursor:pointer;font-weight:bold;}
+  .btn-sec{flex:1;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:8px;padding:11px;font-size:14px;cursor:pointer;font-weight:bold;}
+  .btn[disabled]{opacity:.5;cursor:not-allowed;}
+  #msg{margin-top:10px;font-size:13px;font-weight:bold;}
+  .ok{color:#1a7f37;} .err{color:#9b2f2f;}
+  .footer{font-size:10.5px;color:#999;text-align:center;padding:12px;}
+</style></head><body><div class="box">
+<div class="card">
+  <h1>🚫 Revisar y bloquear</h1>
+  <p class="muted">Bloquear es la excepción. Revisa exactamente qué se aplicará antes de confirmar. <span class='pill dry'>DRY-RUN: nada se aplica de verdad</span></p>
+  <div class="term">"la rueda restaurante"</div>
+  <div class="kpi">2 variantes · gasto acumulado <b>$25</b></div>
+  <div class="muted">Variantes: <code>la rueda restaurante</code> · <code>restaurante la rueda merida</code></div>
+</div>
+<div class="card">
+  <p class="muted"><b>Qué se aplicará</b> (marca las campañas):</p>
+  <label class='camp '><input type='checkbox' class='chk' value='111' checked > <b>Thai Merida - Delivery Search</b> <span class='pill'>EXACT (búsqueda)</span> <span class='gasto'>$15</span></label><label class='camp '><input type='checkbox' class='chk' value='22612348265'  > <b>Thai Merida - Local (Smart)</b> <span class='pill'>theme (Smart)</span> <span class='gasto'>$10</span><div class='nota'>Este se aplica manualmente en Google Ads (te enviare las instrucciones por correo).</div></label>
+  <div class="row">
+    <button class="btn" id="confirmar" onclick="confirmar()">Confirmar bloqueo</button>
+    <button class="btn-sec" onclick="dejar()">Dejar (es búsqueda válida)</button>
+  </div>
+  <div id="msg"></div>
+</div>
+<div class="footer">🔒 Nada se aplica sin tu confirmación · jamás BROAD, jamás en lote · marca protegida en Smart.</div>
+</div>
+<script>
+"use strict";
+var TERM="la rueda restaurante", TOKEN="DEMO";
+function ids(){return Array.prototype.slice.call(document.querySelectorAll(".chk:checked")).map(function(c){return c.value;});}
+function confirmar(){
+  var b=document.getElementById("confirmar"), m=document.getElementById("msg");
+  var sel=ids(); if(!sel.length){m.className="err";m.textContent="Marca al menos una campaña.";return;}
+  b.disabled=true; m.className=""; m.textContent="Aplicando…";
+  fetch("/acciones/bloqueo/confirmar?token="+encodeURIComponent(TOKEN),{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({term:TERM,campaign_ids:sel})})
+   .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
+   .then(function(res){ if(res.ok){m.className="ok";m.textContent="✓ "+(res.j.dry_run?"Simulado (dry-run)":"Bloqueado");}
+     else{b.disabled=false;m.className="err";m.textContent="No se pudo: "+(res.j.motivo||"error");} })
+   .catch(function(){b.disabled=false;m.className="err";m.textContent="Error de red";});
+}
+function dejar(){
+  var m=document.getElementById("msg"); m.className=""; m.textContent="Guardando…";
+  fetch("/acciones/bloqueo/dejar?token="+encodeURIComponent(TOKEN),{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({term:TERM})})
+   .then(function(r){return r.json();}).then(function(j){m.className="ok";m.textContent="✓ Marcado como búsqueda válida. No se volverá a preguntar.";})
+   .catch(function(){m.className="err";m.textContent="Error de red";});
+}
+</script></body></html>

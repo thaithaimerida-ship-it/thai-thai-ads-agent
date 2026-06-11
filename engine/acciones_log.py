@@ -51,3 +51,13 @@ def ya_registrada(review_id: str, path: str | None = None) -> bool:
         and r.get("resultado") in ("ok", "dry_run")
         for r in _leer(path)
     )
+
+
+def termino_ya_bloqueado(term: str, path: str | None = None) -> bool:
+    """True si ya hubo un bloqueo aceptado (real o dry-run) para ese término —
+    evita bloquear dos veces el mismo."""
+    return any(
+        r.get("term") == term and r.get("accion") == "bloquear"
+        and r.get("resultado") in ("ok", "dry_run")
+        for r in _leer(path)
+    )
