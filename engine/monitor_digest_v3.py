@@ -8,10 +8,23 @@ from __future__ import annotations
 import json
 import os
 import unicodedata
+import urllib.parse
 from collections import Counter
 from typing import Any
 
+from engine.monitor_email_renderer import render_monitor_email
+from engine.monitor_sections import (
+    build_ads_quality_summary,
+    build_campaign_rows_from_context,
+    build_gbp_summary,
+    build_reviews_summary,
+    build_search_console,
+    build_search_terms_cards,
+    build_seo_summary,
+    enrich_campaign_rows,
+)
 from engine.negatives_classifier_v3 import build_negatives_preview_v3_payload
+from engine.search_term_classifier import EXTERNAL_ENTITY_GENERIC_TOKENS
 
 
 MAX_DECISIONS = 5
@@ -83,6 +96,13 @@ def _contains_high_priority_entity(term: str, dictionary: dict[str, Any]) -> boo
     return any(entity in norm for entity in dictionary.get("high_priority_entities", []) or [])
 
 
+def _is_acknowledged_external(term: str, dictionary: dict[str, Any]) -> bool:
+    """Term already classified by Hugo (seeded in the dictionary) → never asked again."""
+    tokens = set(_normalize(term).split())
+    roots = dictionary.get("acknowledged_external_roots", []) or []
+    return any(root in tokens for root in roots)
+
+
 def _identity_label(identity: str, dictionary: dict[str, Any]) -> str:
     return (dictionary.get("identity_labels") or {}).get(identity, identity or "desconocido")
 
@@ -100,6 +120,10 @@ def _decision_type(item: dict[str, Any], raw: dict[str, Any], dictionary: dict[s
     identity = item.get("identity_axis")
     term = item.get("term") or ""
     already_negative = item.get("already_negative") is True
+
+    # B-3: a term already classified by Hugo (seeded in the dictionary) is never asked again.
+    if _is_acknowledged_external(term, dictionary):
+        return None
 
     if identity in {"marca_propia", "intencion_thai", "generico_util", "categoria_asiatica"}:
         return None
@@ -185,6 +209,68 @@ def _build_decision(
     }
 
 
+def _decision_group_key(term: str, dictionary: dict[str, Any]) -> str:
+    """Core-entity key so variants of the same place collapse into one decision."""
+    norm = _normalize(term)
+    for root in dictionary.get("competitor_roots", []) or []:
+        if root in norm:
+            return root
+    distinctive = [t for t in norm.split() if t not in EXTERNAL_ENTITY_GENERIC_TOKENS]
+    return " ".join(sorted(distinctive)) if distinctive else norm
+
+
+def _group_decision_candidates(
+    candidates: list[tuple[float, dict[str, Any]]],
+    dictionary: dict[str, Any],
+) -> list[tuple[float, dict[str, Any]]]:
+    """Merge decisions whose normalized core entity matches into one decision
+    carrying every variant (B-4). Cost and clicks are summed across variants."""
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for priority, decision in candidates:
+        key = _decision_group_key(decision.get("term", ""), dictionary)
+        if key not in groups:
+            groups[key] = {"priority": priority, "decision": dict(decision), "cost": 0.0,
+                           "clicks": 0, "variantes": [], "campaigns": []}
+            order.append(key)
+        group = groups[key]
+        group["variantes"].append(decision.get("term"))
+        camp = decision.get("campaign")
+        if camp and camp not in group["campaigns"]:
+            group["campaigns"].append(camp)
+        group["cost"] += _number(decision.get("cost_mxn"))
+        group["clicks"] += _int(decision.get("clicks"))
+        if priority > group["priority"]:
+            group["priority"] = priority
+            group["decision"] = dict(decision)
+
+    out = []
+    for key in order:
+        group = groups[key]
+        decision = group["decision"]
+        decision["cost_mxn"] = round(group["cost"], 2)
+        decision["clicks"] = group["clicks"]
+        decision["variantes"] = group["variantes"]
+        decision["variantes_count"] = len(group["variantes"])
+        decision["campaigns"] = group["campaigns"]
+        out.append((group["priority"], decision))
+    return out
+
+
+def _attach_action_links(decisions: list[dict[str, Any]], links: dict[str, Any]) -> None:
+    """A2: each decision gets two links to the protected Part-B page with the action
+    preselected (Revisar y bloquear / Dejar). No execution happens in the email."""
+    base = links.get("bloqueo_base")
+    token = links.get("token", "")
+    if not base:
+        return
+    for d in decisions:
+        term_q = urllib.parse.quote(str(d.get("term") or ""))
+        suffix = f"?term={term_q}&token={urllib.parse.quote(str(token))}"
+        d["link_bloquear"] = f"{base}{suffix}&accion=bloquear"
+        d["link_dejar"] = f"{base}{suffix}&accion=dejar"
+
+
 def _campaign_status(row: dict[str, Any]) -> str:
     if row["money_conversions"] > 0:
         return "Tiene dinero real medible."
@@ -210,6 +296,8 @@ def _build_campaign_rows(
             "money_cpa_mxn": None,
             "local_signals": 0.0,
             "local_signal_cost_mxn": None,
+            "clicks": 0,
+            "impressions": 0,
             "status_human": "",
             "recommendation_human": "Monitorear. No escalar automáticamente.",
         })
@@ -220,6 +308,8 @@ def _build_campaign_rows(
         behavior = item.get("behavior_axis")
 
         row["spend_mxn"] += cost
+        row["clicks"] += _int(item.get("clicks", raw.get("clicks")))
+        row["impressions"] += _int(raw.get("impressions", item.get("impressions")))
         if behavior == "senal_dinero":
             row["money_conversions"] += conversions or all_conversions
         elif behavior == "senal_local":
@@ -300,9 +390,15 @@ def _build_search_terms_summary(
     }
 
 
-def build_monitor_digest(search_terms_payload: dict[str, Any]) -> dict[str, Any]:
+def build_monitor_digest(
+    search_terms_payload: dict[str, Any],
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if search_terms_payload.get("status") != "success":
         return search_terms_payload
+
+    context = dict(context or {})
+    context.setdefault("links", {})
 
     dictionary = load_term_dictionary()
     v3 = build_negatives_preview_v3_payload(search_terms_payload)
@@ -345,10 +441,18 @@ def build_monitor_digest(search_terms_payload: dict[str, Any]) -> dict[str, Any]
                 _build_decision(item, raw, decision_type, dictionary),
             ))
 
-    decision_candidates.sort(key=lambda pair: pair[0], reverse=True)
-    decisions = [decision for _, decision in decision_candidates[:MAX_DECISIONS]]
+    grouped_candidates = _group_decision_candidates(decision_candidates, dictionary)
+    grouped_candidates.sort(key=lambda pair: pair[0], reverse=True)
+    decisions = [decision for _, decision in grouped_candidates[:MAX_DECISIONS]]
+    _attach_action_links(decisions, context.get("links") or {})
     summary["decisions_count"] = len(decisions)
-    campaign_rows = _build_campaign_rows(items, raw_by_key, search_terms_payload)
+    if context.get("campaign_metrics"):
+        campaign_rows = build_campaign_rows_from_context(context)
+    else:
+        campaign_rows = enrich_campaign_rows(
+            _build_campaign_rows(items, raw_by_key, search_terms_payload),
+            context,
+        )
     anomalies = [
         _build_negative_leak_anomaly(decision)
         for decision in decisions
@@ -360,11 +464,14 @@ def build_monitor_digest(search_terms_payload: dict[str, Any]) -> dict[str, Any]
         if key.endswith("_mxn"):
             summary[key] = round(summary[key], 2)
 
-    return {
+    digest = {
         "status": "success",
         "source": "monitor_digest_v3",
         "read_only": True,
         "date_range": search_terms_payload.get("date_range"),
+        "generated_date": context.get("generated_date"),
+        "links": context.get("links") or {},
+        "pedidos_gloriafood_interno": context.get("pedidos_gloriafood_interno"),
         "max_decisions": MAX_DECISIONS,
         "summary": summary,
         "identity_counts": dict(identity_counts),
@@ -372,6 +479,12 @@ def build_monitor_digest(search_terms_payload: dict[str, Any]) -> dict[str, Any]
         "v3_state_counts": v3.get("state_counts", {}),
         "campaign_rows": campaign_rows,
         "search_terms_summary": search_terms_summary,
+        "search_terms_cards": build_search_terms_cards(items, decisions, context),
+        "gbp_summary": build_gbp_summary(context),
+        "reviews_summary": build_reviews_summary(context, context.get("reviews_reference_date")),
+        "ads_quality_summary": build_ads_quality_summary(context),
+        "seo_summary": build_seo_summary(context),
+        "search_console": build_search_console(context),
         "decisions": decisions,
         "anomalies": anomalies,
         "warnings": _build_warnings(search_terms_payload),
@@ -382,3 +495,5 @@ def build_monitor_digest(search_terms_payload: dict[str, Any]) -> dict[str, Any]
             "post_required": False,
         },
     }
+    digest.update(render_monitor_email(digest, mode=context.get("mode", "monday")))
+    return digest
