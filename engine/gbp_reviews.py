@@ -7,9 +7,25 @@ Las credenciales viven en .env (GBP_CLIENT_ID/SECRET/REFRESH_TOKEN). Read-only p
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import requests
+
+# Caché en memoria de la lista de reseñas: evita paginar GBP (~10s, 8 páginas) en cada
+# request de la página/borrador. TTL configurable (default 1h). Las publicadas/banco se
+# derivan de aquí, así que no se paginan 1,144 reseñas por carga.
+_REVIEWS_CACHE: dict[str, Any] = {"ts": 0.0, "reviews": None}
+
+
+def fetch_reviews_cached(ttl: float = 3600.0, max_pages: int = 8) -> list[dict[str, Any]]:
+    now = time.time()
+    if _REVIEWS_CACHE["reviews"] is not None and (now - _REVIEWS_CACHE["ts"]) < ttl:
+        return _REVIEWS_CACHE["reviews"]
+    revs = fetch_reviews(max_pages=max_pages)
+    _REVIEWS_CACHE["reviews"] = revs
+    _REVIEWS_CACHE["ts"] = now
+    return revs
 
 _OAUTH = "https://oauth2.googleapis.com/token"
 _BASE = "https://mybusiness.googleapis.com/v4"

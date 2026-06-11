@@ -123,6 +123,17 @@ def seleccionar_cierre(energia: str, pool: dict[str, list[str]],
     return (pool.get(g0, [""]) or [""])[0], g0
 
 
+def seleccionar_cierre_idx(energia: str, pool: dict[str, list[str]], indice: int,
+                           recientes: list[str] | None = None) -> tuple[str, str]:
+    """Cierre determinista POR ÍNDICE (para generación per-card, sin estado cruzado): toma del
+    grupo afín a la energía, evitando los usados en publicaciones recientes."""
+    recientes_n = [_norm(r) for r in (recientes or [])]
+    afin = _ENERGIA_GRUPO.get(energia, "calido")
+    grupo = pool.get(afin) or (next(iter(pool.values())) if pool else [""])
+    candidatos = [c for c in grupo if not any(_norm(c) in r for r in recientes_n)] or grupo
+    return candidatos[indice % len(candidatos)], afin
+
+
 def seleccionar_banco(banco: list[str], usados: set[str], recientes: list[str] | None = None) -> str:
     """Elige una respuesta del banco (verbatim), sin repetir en el lote ni en las últimas
     publicaciones."""
@@ -619,3 +630,50 @@ def generar_borradores(
                     "grupo_cierre": grupo, "emoji_apertura": apertura_emoji(full), "fuente": "generado",
                     "revisar_manual": not natural, "motivo_revision": "" if natural else motivo})
     return out
+
+
+def generar_uno(resena: dict[str, Any], indice: int = 0, respuestas_previas: list[str] | None = None,
+                cierres_recientes: list[str] | None = None, banco_recientes: list[str] | None = None,
+                max_reintentos: int = 2) -> dict[str, Any]:
+    """Genera UN borrador independiente (per-card): variedad por ÍNDICE (paleta/ángulos/cierre),
+    sin acumular estado de otros borradores (prompts pequeños → sin 431). Reintentos acotados
+    para responder rápido; el front tiene su propio timeout y reintento por tarjeta."""
+    base = (respuestas_previas or [])[:6]  # lista de prohibidos ACOTADA (prompts chicos)
+
+    if sin_texto(resena):
+        sel = seleccionar_banco(cargar_banco_sin_texto(), set(), banco_recientes)
+        return {"energia": "agradecimiento", "borrador": sel, "cuerpo": "", "cierre": "",
+                "grupo_cierre": "", "emoji_apertura": apertura_emoji(sel), "fuente": "banco",
+                "revisar_manual": False, "motivo_revision": ""}
+
+    energia = clasificar_energia(resena)
+    paleta = ENERGIA_EMOJIS.get(energia, EMOJIS_APERTURA)
+    emoji_obj = paleta[indice % len(paleta)]
+    apertura_ang = APERTURAS_ANGULO[indice % len(APERTURAS_ANGULO)]
+    genero = inferir_genero(resena.get("reviewer") or "")
+    cierre_sel, grupo = seleccionar_cierre_idx(energia, cargar_pool_cierres(), indice, cierres_recientes)
+
+    def _ensamblar(c: str) -> str:
+        return (c + " " + cierre_sel).strip()
+
+    def _malo(c: str) -> bool:
+        return bool(cuerpo_invita(c) or violaciones_contenido(_ensamblar(c), resena))
+
+    def _gen(extra: str = "") -> str:
+        c = generar_cuerpo(resena, base, emoji_obj, energia, apertura_ang, genero, extra)
+        n = 0
+        while _malo(c) and n < max_reintentos:
+            c = generar_cuerpo(resena, base + [c], emoji_obj, energia, apertura_ang, genero, extra)
+            n += 1
+        return c
+
+    cuerpo = _gen()
+    full = _ensamblar(cuerpo)
+    natural, motivo = evaluar_naturalidad(full)
+    if not natural:
+        cuerpo = _gen(extra=f"NO uses frases artificiales o de marketing como: {motivo}")
+        full = _ensamblar(cuerpo)
+        natural, motivo = evaluar_naturalidad(full)
+    return {"energia": energia, "borrador": full, "cuerpo": cuerpo, "cierre": cierre_sel,
+            "grupo_cierre": grupo, "emoji_apertura": apertura_emoji(full), "fuente": "generado",
+            "revisar_manual": not natural, "motivo_revision": "" if natural else motivo}
