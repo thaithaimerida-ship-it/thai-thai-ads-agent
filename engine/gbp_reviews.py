@@ -54,7 +54,9 @@ def fetch_reviews(token: str | None = None, max_pages: int = 8) -> list[dict[str
         params = {"pageSize": 50}
         if page:
             params["pageToken"] = page
-        j = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=30).json()
+        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=30)
+        resp.raise_for_status()
+        j = resp.json()
         out.extend(j.get("reviews", []))
         page = j.get("nextPageToken")
         if not page:
