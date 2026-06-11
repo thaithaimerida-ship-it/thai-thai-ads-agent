@@ -45,6 +45,19 @@ def test_solo_rating_5_listadas():
     assert ids == ["a"]  # solo 5★ sin respuesta; ≤4★ jamás
 
 
+def test_pagina_renderiza_tarjetas_server_side(client, monkeypatch):
+    # BUG 2: la página trae las tarjetas (contenido de reseñas) sin depender de JS.
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(resenas_service, "cargar_resenas_tanda", lambda offset=0, limit=10: {
+        "total": 1, "offset": 0, "limit": 10, "hay_mas": False, "dry_run": True,
+        "items": [{"review_id": "r1", "reviewer": "Ana López", "stars": 5, "comment": "La comida rica"}]})
+    r = client.get("/acciones/resenas?token=secreto")
+    assert r.status_code == 200
+    assert "Ana López" in r.text and "La comida rica" in r.text  # contenido server-side
+    assert "generando borrador" in r.text                        # placeholder, jamás vacío
+    assert "DRY-RUN" in r.text
+
+
 def test_data_con_token_lista_borradores(client, monkeypatch):
     monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
     monkeypatch.setattr(resenas_service, "cargar_borradores_tanda", lambda offset=0, limit=10: {
@@ -104,11 +117,19 @@ def test_dry_run_no_llama_updatereply(monkeypatch):
     assert res["dry_run"] is True and res["published"] is False
 
 
-def test_no_publicar_dos_veces_misma_resena(monkeypatch, tmp_path):
-    monkeypatch.setenv("DRY_RUN_RESENAS", "true")
+def test_dry_run_no_consume_resena_pero_real_si(monkeypatch, tmp_path):
+    # BUG 1: un simulacro (dry-run) NO consume la reseña; solo la publicación REAL la consume.
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
     monkeypatch.setattr(gbp_reviews, "get_review", lambda rid, token=None: _review())
-    primera = resenas_service.publicar("r1", "¡Gracias!")
-    assert primera["status"] == "ok"
-    segunda = resenas_service.publicar("r1", "¡Gracias otra vez!")
-    assert segunda["status"] == "rechazada" and segunda["motivo"] == "ya_publicada"
+    # 1) dos simulacros (dry-run) → ambos proceden (ensayo repetible)
+    monkeypatch.setattr(gbp_reviews, "publicar_respuesta",
+                        lambda rid, txt, token=None: {"status": "dry_run", "dry_run": True, "published": False})
+    assert resenas_service.publicar("r1", "ensayo 1")["status"] == "ok"
+    assert resenas_service.publicar("r1", "ensayo 2")["status"] == "ok"
+    # 2) acción REAL del mismo ítem → procede (no estaba consumido)
+    monkeypatch.setattr(gbp_reviews, "publicar_respuesta",
+                        lambda rid, txt, token=None: {"status": "ok", "dry_run": False, "published": True})
+    assert resenas_service.publicar("r1", "real")["status"] == "ok"
+    # 3) segunda acción REAL → rechazada
+    seg = resenas_service.publicar("r1", "real otra vez")
+    assert seg["status"] == "rechazada" and seg["motivo"] == "ya_publicada"

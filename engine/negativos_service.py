@@ -86,6 +86,7 @@ def contexto_bloqueo(term: str, payload: dict[str, Any] | None = None) -> dict[s
         "variantes": variantes, "variantes_count": len(variantes),
         "gasto_total": round(sum(c["gasto"] for c in campanas), 2),
         "contiene_marca": marca, "campanas": campanas,
+        "ya_bloqueado_ts": acciones_log.bloqueo_real_ts(term),  # bloqueo REAL previo, si lo hay
         "dry_run": negativos_apply.dry_run_negativos(),
     }
 
@@ -112,19 +113,22 @@ def confirmar_bloqueo(term: str, campaign_ids: list[str], payload: dict[str, Any
     resultados = negativos_apply.aplicar_bloqueo(term, marcadas)
     dry = negativos_apply.dry_run_negativos()
     manuales = [r for r in resultados if r.get("status") == "manual_required"]
+    applied = any(r.get("applied") for r in resultados)  # algún negativo REAL aplicado a Ads
     entry = {
         "accion": "bloquear", "term": term, "variantes_count": ctx["variantes_count"],
         "campanas": [r["campaign"] for r in resultados],
         "match_types": [r["match_type"] for r in resultados],
-        "dry_run": dry, "resultado": "dry_run" if dry else "ok",
+        "dry_run": dry, "applied": applied, "resultado": "dry_run" if dry else "ok",
         "pending_manual": [r["campaign"] for r in manuales], "detalle": resultados,
     }
     registrado = acciones_log.registrar(entry)
 
     nombres = ", ".join(r["campaign"] for r in resultados)
-    asunto = f"🚫 Bloqueado '{term}' ({ctx['variantes_count']} variantes)"
+    n = ctx["variantes_count"]
+    var_txt = f"{n} variante" if n == 1 else f"{n} variantes"
+    asunto = f"🚫 Bloqueado '{term}' ({var_txt})"
     cuerpo = (f"Se {'simuló' if dry else 'aplicó'} el bloqueo de '{term}' "
-              f"({ctx['variantes_count']} variantes) en [{nombres}], por tu instrucción de hoy.\n\n"
+              f"({var_txt}) en [{nombres}], por tu instrucción de hoy.\n\n"
               f"Match types: {', '.join(entry['match_types'])}.\n")
     if manuales:
         cuerpo += ("\n⚠ PASO MANUAL en Smart (la API no permite negativos en Smart de forma confiable):\n")

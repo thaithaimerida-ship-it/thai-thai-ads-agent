@@ -11,6 +11,20 @@ from typing import Any
 from engine import acciones_log, gbp_reviews, resenas_ai, resenas_email
 
 
+def cargar_resenas_tanda(offset: int = 0, limit: int = 10) -> dict[str, Any]:
+    """SOLO el contenido de las reseñas (estrellas, autor, texto) — RÁPIDO, sin IA.
+    La página lo usa para render server-side inmediato; los borradores llegan aparte."""
+    reviews = gbp_reviews.fetch_reviews()
+    pendientes = gbp_reviews.pendientes_5_estrellas(reviews)
+    tanda = pendientes[offset:offset + limit]
+    return {
+        "total": len(pendientes), "offset": offset, "limit": limit,
+        "hay_mas": offset + limit < len(pendientes), "dry_run": gbp_reviews.dry_run_activo(),
+        "items": [{"review_id": r["review_id"], "reviewer": r["reviewer"],
+                   "stars": r["stars"], "comment": r["comment"]} for r in tanda],
+    }
+
+
 def cargar_borradores_tanda(offset: int = 0, limit: int = 10) -> dict[str, Any]:
     """Trae las pendientes 5★, toma la tanda [offset:offset+limit] y genera sus borradores.
     Las CON texto → generador + cierre del pool; las SIN texto → banco verbatim."""
@@ -55,7 +69,8 @@ def publicar(review_id: str, texto: str, reviewer: str = "", comment: str = "",
     entry = {
         "accion": "publicar", "review_id": review_id, "reviewer": reviewer, "comment": comment,
         "texto": texto, "energia": energia, "fuente": fuente,
-        "dry_run": res["dry_run"], "resultado": "dry_run" if res["dry_run"] else "ok",
+        "dry_run": res["dry_run"], "published": res.get("published", False),
+        "resultado": "dry_run" if res["dry_run"] else "ok",
     }
     registrado = acciones_log.registrar(entry)
     correo = resenas_email.enviar_confirmacion(registrado)
