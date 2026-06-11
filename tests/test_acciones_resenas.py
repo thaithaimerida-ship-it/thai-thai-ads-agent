@@ -117,6 +117,17 @@ def test_dry_run_no_llama_updatereply(monkeypatch):
     assert res["dry_run"] is True and res["published"] is False
 
 
+def test_page_js_sin_escapes_colapsados(client, monkeypatch):
+    # Regresión: _PAGE es raw string; \" NO debe colapsar (colapsado rompe TODO el script JS
+    # y las tarjetas quedan en "generando…" eterno).
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(resenas_service, "cargar_resenas_tanda", lambda offset=0, limit=10: {
+        "total": 0, "offset": 0, "limit": 10, "hay_mas": False, "dry_run": True, "items": []})
+    html = client.get("/acciones/resenas?token=secreto").text
+    assert 'pub("")' not in html and 'pub(""' not in html  # patrón colapsado/roto
+    assert r'pub(\"' in html and r'retry(\"' in html        # escape correcto preservado
+
+
 def test_borrador_endpoint_per_card(client, monkeypatch):
     monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
     monkeypatch.setattr(resenas_service, "borrador_para",

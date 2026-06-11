@@ -106,7 +106,7 @@ async def resenas_publicar(body: PublicarBody, token: str = ""):
     return JSONResponse(content=res, status_code=200 if res.get("status") == "ok" else 409)
 
 
-_PAGE = """<!doctype html>
+_PAGE = r"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Reseñas 5★ — Responder</title>
