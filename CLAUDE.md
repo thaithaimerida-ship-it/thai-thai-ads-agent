@@ -233,6 +233,13 @@ Cuando se despliegue el digest completo:
 - **Search Console**: ✅ cableado (2026-06-10) a la propiedad **URL-prefix** `https://thaithaimerida.com/` (la de dominio está SIN VERIFICAR — NO usar `sc-domain:`). SA con permiso Total ya agregado. Query en `engine/monitor_sources.build_search_console_context()`. Pendiente de deploy: confirmar que la **Search Console API** esté habilitada en el proyecto `thai-thai-ads-master-agent`. Override opcional con `SEARCH_CONSOLE_SITE_URL`.
 - **Verificar presupuestos** del digest en prod contra los reales (Local $158, Delivery $55, Delivery Search $75, Experiencia $158 al 2026-06-10).
 
+### Pendientes de deploy — Fase G (módulo Reseñas 5★)
+- **`ACCIONES_TOKEN`** (Secret Manager): token de `/acciones/resenas`. Sin token / token inválido / var no seteada → 403 (fail-closed). Es el mismo concepto que `ACTIONS_TOKEN` del digest; unificar al desplegar.
+- **`DRY_RUN_RESENAS=true`** por default (no llama a `updateReply` de GBP). Solo cambiar a `false` post-deploy con autorización explícita de Hugo.
+- **`RESENAS_EMAIL_ENABLED=true`** en **producción** — Hugo quiere el correo de confirmación por cada publicación real. (Default `false` en local/build para no enviar correos en pruebas.)
+- **`GBP_ACCOUNT_ID` / `GBP_LOCATION_ID`** (opcionales): hay defaults a la cuenta/ubicación de Thai Thai. Credenciales GBP (`GBP_CLIENT_ID/SECRET/REFRESH_TOKEN`) ya en Cloud Run.
+- Log inmutable de publicaciones en `data/acciones_log.jsonl` (append-only; sync a GCS como el resto de `data/`).
+
 ### Hallazgo GloriaFood (2026-06-10)
 - Los pedidos GloriaFood se guardan en SQLite `gloriafood_orders` (sync a GCS); 13 pedidos/$6,910 en 7 días, campos completos (cliente+items). Ver `docs/inventario_pedidos_gloriafood.md`.
 - `money=$0` en Delivery es **limitación estructural conocida** (iframe no medible + UPLOAD_CLICKS no confiable), NO regresión. Reemplazo = tienda en línea propia. Ver `docs/diagnostico_dinero.md`.

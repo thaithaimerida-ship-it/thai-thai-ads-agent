@@ -1,0 +1,125 @@
+"""Acceso a reseñas de Google Business Profile (GBP v4) — Fase G.
+
+Lectura (pendientes 5★, respuestas publicadas) y publicación de respuesta (updateReply),
+esta última GATED por DRY_RUN_RESENAS (default true → no llama a la API de escritura).
+Las credenciales viven en .env (GBP_CLIENT_ID/SECRET/REFRESH_TOKEN). Read-only por defecto.
+"""
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import requests
+
+_OAUTH = "https://oauth2.googleapis.com/token"
+_BASE = "https://mybusiness.googleapis.com/v4"
+_STARS = {"ONE": 1, "TWO": 2, "THREE": 3, "FOUR": 4, "FIVE": 5}
+
+
+def dry_run_activo() -> bool:
+    """DRY_RUN_RESENAS=true por default: NO se llama a la API de escritura."""
+    return os.getenv("DRY_RUN_RESENAS", "true").strip().lower() != "false"
+
+
+def _account_location() -> tuple[str, str]:
+    acc = os.getenv("GBP_ACCOUNT_ID", "116182531567733744541")
+    loc = os.getenv("GBP_LOCATION_ID", "17757029602072738121")
+    return acc, loc
+
+
+def get_access_token() -> str:
+    resp = requests.post(_OAUTH, data={
+        "client_id": os.environ["GBP_CLIENT_ID"],
+        "client_secret": os.environ["GBP_CLIENT_SECRET"],
+        "refresh_token": os.environ["GBP_REFRESH_TOKEN"],
+        "grant_type": "refresh_token",
+    }, timeout=20)
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+def _reviews_url() -> str:
+    acc, loc = _account_location()
+    return f"{_BASE}/accounts/{acc}/locations/{loc}/reviews"
+
+
+def fetch_reviews(token: str | None = None, max_pages: int = 8) -> list[dict[str, Any]]:
+    """Trae reseñas paginando (read-only). El snapshot del auditor solo trae página 1,
+    por eso aquí paginamos para ver las respuestas en reseñas más viejas."""
+    token = token or get_access_token()
+    url = _reviews_url()
+    out: list[dict[str, Any]] = []
+    page = None
+    for _ in range(max_pages):
+        params = {"pageSize": 50}
+        if page:
+            params["pageToken"] = page
+        j = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=30).json()
+        out.extend(j.get("reviews", []))
+        page = j.get("nextPageToken")
+        if not page:
+            break
+    return out
+
+
+def _limpiar_comentario(review: dict[str, Any]) -> str:
+    return (review.get("comment") or "").split("\n\n(Translated by Google)")[0].strip()
+
+
+def _stars(review: dict[str, Any]) -> int:
+    return _STARS.get(review.get("starRating"), 0)
+
+
+def to_resena(review: dict[str, Any]) -> dict[str, Any]:
+    """Normaliza un review GBP al shape que consume el generador/UI."""
+    return {
+        "review_id": review.get("reviewId") or (review.get("name") or "").split("/")[-1],
+        "name": review.get("name"),
+        "stars": _stars(review),
+        "comment": _limpiar_comentario(review),
+        "reviewer": (review.get("reviewer") or {}).get("displayName", ""),
+        "create_time": review.get("createTime"),
+    }
+
+
+def pendientes_5_estrellas(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """SOLO rating == 5 sin respuesta previa, de más reciente a más antigua. Las ≤4★
+    JAMÁS entran."""
+    pend = [r for r in reviews if _stars(r) == 5 and not r.get("reviewReply")]
+    pend.sort(key=lambda r: r.get("createTime", ""), reverse=True)
+    return [to_resena(r) for r in pend]
+
+
+def respuestas_publicadas(reviews: list[dict[str, Any]], n: int = 15) -> list[str]:
+    """Últimas n respuestas publicadas (texto), para la lista de prohibidos del generador."""
+    con = [r for r in reviews if r.get("reviewReply")]
+    con.sort(key=lambda r: (r["reviewReply"] or {}).get("updateTime", ""), reverse=True)
+    return [(r["reviewReply"] or {}).get("comment", "") for r in con[:n]]
+
+
+def get_review(review_id: str, token: str | None = None) -> dict[str, Any] | None:
+    """Re-lee UNA reseña (para re-validar en el momento de publicar)."""
+    token = token or get_access_token()
+    url = f"{_reviews_url()}/{review_id}"
+    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=20)
+    if r.status_code != 200:
+        return None
+    return r.json()
+
+
+def es_publicable(review: dict[str, Any] | None) -> bool:
+    """Re-validación server-side: 5★ y sin respuesta previa."""
+    return bool(review) and _stars(review) == 5 and not review.get("reviewReply")
+
+
+def publicar_respuesta(review_id: str, comentario: str, token: str | None = None) -> dict[str, Any]:
+    """Publica la respuesta vía updateReply (PUT). GATED por DRY_RUN_RESENAS: si está activo
+    (default), NO llama a la API y devuelve dry_run=True."""
+    if dry_run_activo():
+        return {"status": "dry_run", "dry_run": True, "published": False}
+    token = token or get_access_token()
+    url = f"{_reviews_url()}/{review_id}/reply"
+    r = requests.put(url, headers={"Authorization": f"Bearer {token}"},
+                     json={"comment": comentario}, timeout=20)
+    r.raise_for_status()
+    return {"status": "ok", "dry_run": False, "published": True}
