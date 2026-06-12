@@ -168,6 +168,33 @@ def limitar_emojis(texto: str, maximo: int = 3) -> str:
     return _EMOJI_SEQ_RE.sub(_repl, texto or "")
 
 
+# V2 — paleta de emojis UNIVERSALES aprobada (voz + banco). Cualquier emoji fuera de aquí
+# (o un tono de piel) se prohíbe y se limpia, aunque la reseña del cliente lo traiga.
+ALLOWED_EMOJIS = set("😄🙌🥳😊⭐🤩😍🎉🔥🌶💛🌿⚡🥭✨🙏🍛🌟🍜🥰👋🥢🥘")
+_SKIN_RE = re.compile("[\U0001F3FB-\U0001F3FF]")
+
+
+def emoji_no_aprobado(texto: str) -> bool:
+    if _SKIN_RE.search(texto or ""):
+        return True
+    limpio = _EMOJI_MOD_RE.sub("", texto or "")
+    return any(e not in ALLOWED_EMOJIS for e in _EMOJI_RE.findall(limpio))
+
+
+def limpiar_emojis_no_aprobados(texto: str) -> str:
+    """Quita modificadores de piel/variación y cualquier emoji fuera de la paleta (backstop)."""
+    limpio = _EMOJI_MOD_RE.sub("", texto or "")
+    return _EMOJI_RE.sub(lambda m: m.group(0) if m.group(0) in ALLOWED_EMOJIS else "", limpio)
+
+
+# V1 — la voz firma SIEMPRE en plural (nosotros). Prohibida la primera persona singular.
+_SINGULAR_RE = re.compile(r"\b(yo|mi|mia|mias|mio|mios|me|conmigo)\b")
+
+
+def voz_singular(texto: str) -> bool:
+    return bool(_SINGULAR_RE.search(_norm(texto)))
+
+
 def _palabras(texto: str) -> list[str]:
     t = unicodedata.normalize("NFD", (texto or "").lower())
     t = "".join(c for c in t if unicodedata.category(c) != "Mn")
@@ -377,6 +404,10 @@ def violaciones_contenido(texto: str, resena: dict[str, Any]) -> list[str]:
         v.append("agencia_incorrecta")
     if tiene_frase_artificial(texto):
         v.append("frase_artificial")
+    if voz_singular(texto):
+        v.append("voz_singular")
+    if emoji_no_aprobado(texto):
+        v.append("emoji_no_aprobado")
     return v
 
 
@@ -525,6 +556,9 @@ def _build_user_prompt(resena: dict[str, Any], respuestas_previas: list[str],
     partes.append("NO mandes saludos, abrazos ni cariño a la cocina, al chef ni al equipo: el cariño es para quien escribió.")
     partes.append("No atribuyas al cliente acciones del restaurante: él no cocinó. Di 'la comida estuvo deliciosa', "
                   "no 'la comida te salió deliciosa'.")
+    partes.append("Firma SIEMPRE en PLURAL (nosotros): 'nuestra atención', 'nos encantó', 'te esperamos'. PROHIBIDA la "
+                  "primera persona singular (yo / mí / me / mía). Puedes nombrar al equipo (ej. Alejandro), pero la voz es del restaurante en plural.")
+    partes.append("Usa SOLO emojis de la paleta aprobada (😄🙌⭐🥳😊🥭🔥🌶️ y los del banco). NUNCA copies emojis de la reseña del cliente ni uses tonos de piel.")
     if genero == "f":
         partes.append("Concuerda en FEMENINO los adjetivos dirigidos a la clienta (contenta, cómoda…).")
     elif genero == "m":
@@ -553,6 +587,7 @@ def generar_cuerpo(resena: dict[str, Any], respuestas_previas: list[str] | None 
                               apertura_angulo, genero, extra)
     draft = llm_client.generate_text(model_role=MODEL_ROLE, user_prompt=user, system_prompt=system, max_tokens=160)
     draft = " ".join((draft or "").split()).strip('"').strip()  # normaliza espacios/saltos
+    draft = limpiar_emojis_no_aprobados(draft)                  # V2: solo paleta aprobada, sin tonos de piel
     return " ".join(limitar_emojis(draft, 3).split())           # hard cap 3 emojis + re-normaliza
 
 
