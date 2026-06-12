@@ -71,6 +71,36 @@ def test_seleccion_banco_sin_repetir_y_evita_recientes():
     assert b3 != banco[0]
 
 
+def test_banco_rota_15_respuestas_distintas():
+    # 15 reseñas sin texto → 15 respuestas distintas (rotación determinista por review_id).
+    banco = R.cargar_banco_sin_texto()
+    por_cubeta = {}
+    i = 0
+    while len(por_cubeta) < len(banco) and i < 100000:
+        rid = f"rev-{i}"
+        por_cubeta.setdefault(R._hash_idx(rid, len(banco)), rid)
+        i += 1
+    ids = list(por_cubeta.values())
+    assert len(ids) == 15
+    respuestas = [R.seleccionar_banco_por_review(banco, rid, []) for rid in ids]
+    assert len(set(respuestas)) == 15
+
+
+def test_banco_misma_resena_misma_respuesta_estable():
+    banco = R.cargar_banco_sin_texto()
+    a = R.seleccionar_banco_por_review(banco, "AbFvOq_estable_xyz", [])
+    b = R.seleccionar_banco_por_review(banco, "AbFvOq_estable_xyz", [])
+    assert a == b and a in banco  # misma reseña recargada → misma respuesta
+
+
+def test_banco_evita_respuesta_en_ultimas_publicadas():
+    banco = R.cargar_banco_sin_texto()
+    rid = "rev-7"
+    base = R.seleccionar_banco_por_review(banco, rid, [])      # la del hash
+    otra = R.seleccionar_banco_por_review(banco, rid, [base])  # base ya publicada → avanza
+    assert otra != base and otra in banco
+
+
 # ── Variedad + emojis ─────────────────────────────────────────────────────────
 def test_borradores_misma_corrida_no_comparten_apertura_ni_cierre():
     distintos = ["😄 Qué gusto leerte, gracias", "🙌 No puede ser qué linda reseña", "⭐ Mil gracias de corazón"]

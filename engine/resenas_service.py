@@ -37,9 +37,18 @@ def borrador_para(review_id: str) -> dict[str, Any]:
         idx = next((i for i, r in enumerate(pendientes) if r["review_id"] == review_id), None)
         if idx is None:
             return {"review_id": review_id, "error": "Reseña no encontrada o ya respondida."}
-        publicadas = gbp_reviews.respuestas_publicadas(reviews, 6)
-        item = resenas_ai.generar_uno(pendientes[idx], indice=idx, respuestas_previas=publicadas,
-                                      cierres_recientes=publicadas, banco_recientes=publicadas)
+        resena = pendientes[idx]
+        if resenas_ai.sin_texto(resena):
+            # Banco verbatim ROTADO por hash(review_id), evitando las últimas 10 publicaciones REALES.
+            recientes = acciones_log.textos_publicados_reales(10)
+            sel = resenas_ai.seleccionar_banco_por_review(resenas_ai.cargar_banco_sin_texto(), review_id, recientes)
+            item = {"energia": "agradecimiento", "borrador": sel, "cuerpo": "", "cierre": "",
+                    "grupo_cierre": "", "emoji_apertura": resenas_ai.apertura_emoji(sel),
+                    "fuente": "banco", "revisar_manual": False, "motivo_revision": ""}
+        else:
+            publicadas = gbp_reviews.respuestas_publicadas(reviews, 6)
+            item = resenas_ai.generar_uno(resena, indice=idx, respuestas_previas=publicadas,
+                                          cierres_recientes=publicadas, banco_recientes=publicadas)
         borradores_cache.set(review_id, item)
         return {**item, "review_id": review_id, "cache": False}
     except Exception as exc:  # nunca 500 → el front muestra el error

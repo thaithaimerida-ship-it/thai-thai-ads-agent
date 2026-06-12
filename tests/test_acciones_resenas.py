@@ -166,6 +166,27 @@ def test_borrador_para_error_no_lanza(monkeypatch, tmp_path):
     assert "error" in r and "GBP" in r["error"]  # nunca lanza → el front muestra el error
 
 
+def test_borrador_para_sin_texto_usa_rotacion(monkeypatch, tmp_path):
+    # BUG banco: reseña sin texto → respuesta del banco ROTADA por hash(review_id), no la primera.
+    from engine import borradores_cache, resenas_ai
+    monkeypatch.setattr(borradores_cache, "CACHE_PATH", str(tmp_path / "bc.json"))
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    revs = [{"reviewId": "zzz-9", "starRating": "FIVE", "comment": "", "reviewer": {"displayName": "A"}}]
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", lambda *a, **k: revs)
+    out = resenas_service.borrador_para("zzz-9")
+    banco = resenas_ai.cargar_banco_sin_texto()
+    assert out["fuente"] == "banco"
+    assert out["borrador"] == resenas_ai.seleccionar_banco_por_review(banco, "zzz-9", [])
+
+
+def test_textos_publicados_reales_solo_reales(tmp_path):
+    p = str(tmp_path / "log.jsonl")
+    acciones_log.registrar({"accion": "publicar", "review_id": "r1", "texto": "A", "published": True, "resultado": "ok"}, path=p)
+    acciones_log.registrar({"accion": "publicar", "review_id": "r2", "texto": "B", "published": False, "resultado": "dry_run"}, path=p)
+    acciones_log.registrar({"accion": "publicar", "review_id": "r3", "texto": "C", "published": True, "resultado": "ok"}, path=p)
+    assert acciones_log.textos_publicados_reales(10, path=p) == ["C", "A"]  # solo reales, reciente primero
+
+
 def test_publicar_correo_lleva_datos_reales(monkeypatch, tmp_path):
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
     monkeypatch.setattr(gbp_reviews, "get_review", lambda rid, token=None: {

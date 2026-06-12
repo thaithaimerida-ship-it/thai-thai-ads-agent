@@ -17,12 +17,17 @@ CACHE_PATH = os.path.join(_BASE, "data", "borradores_cache.json")
 _VOZ_PATH = os.path.join(_BASE, "data", "voz_resenas.md")
 
 
+# Bump para invalidar TODOS los borradores cacheados (p. ej. al cambiar la rotación del banco).
+_CACHE_VERSION = "2"
+
+
 def voz_hash(path: str | None = None) -> str:
     try:
         with open(path or _VOZ_PATH, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()[:16]
+            data = f.read()
     except OSError:
-        return "0"
+        data = b""
+    return hashlib.sha256(_CACHE_VERSION.encode("utf-8") + data).hexdigest()[:16]
 
 
 def _leer(path: str | None = None) -> dict[str, Any]:

@@ -67,3 +67,15 @@ def bloqueo_real_ts(term: str, path: str | None = None) -> str | None:
         if r.get("term") == term and r.get("accion") == "bloquear" and r.get("applied") is True:
             return r.get("ts")
     return None
+
+
+def textos_publicados_reales(n: int = 10, path: str | None = None) -> list[str]:
+    """Últimos n textos de publicaciones REALES (published=True), del más reciente al más
+    antiguo. Sirve para no repetir respuestas del banco contra lo ya publicado de verdad."""
+    out: list[str] = []
+    for r in reversed(_leer(path)):
+        if r.get("accion") == "publicar" and r.get("published") is True and r.get("texto"):
+            out.append(r["texto"])
+            if len(out) >= n:
+                break
+    return out
