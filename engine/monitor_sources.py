@@ -35,6 +35,34 @@ def _num(value: Any) -> float:
         return 0.0
 
 
+def _sanitizar_db_error(exc: Exception) -> str:
+    import re
+    msg = f"{type(exc).__name__}: {exc}"
+    msg = re.sub(r"postgres(ql)?://[^@\s]*@", "postgresql://***@", msg)  # nunca filtrar URL/credenciales
+    return msg.strip()[:160]
+
+
+def build_keepalive_db(database_url: str | None = None, timeout: int = 8) -> dict[str, Any]:
+    """Keepalive de la base de reservas (Supabase): un SELECT 1 para que el free-tier no
+    acumule 7 días de inactividad y se pause. READ-ONLY, NO toca el código de reservas.
+    Devuelve {ok, checked, error}; el error va sanitizado (sin credenciales)."""
+    url = database_url if database_url is not None else os.getenv("DATABASE_URL")
+    if not url:
+        return {"ok": False, "checked": True, "error": "DATABASE_URL no configurada"}
+    try:
+        import psycopg2
+        conn = psycopg2.connect(url, connect_timeout=timeout)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            conn.close()
+        return {"ok": True, "checked": True, "error": None}
+    except Exception as exc:
+        return {"ok": False, "checked": True, "error": _sanitizar_db_error(exc)}
+
+
 def build_gbp_context(audit: dict[str, Any]) -> dict[str, Any]:
     """Map a GBP audit payload into {gbp, reviews} context slices.
 

@@ -472,6 +472,7 @@ def build_monitor_digest(
         "generated_date": context.get("generated_date"),
         "links": context.get("links") or {},
         "pedidos_gloriafood_interno": context.get("pedidos_gloriafood_interno"),
+        "keepalive_db": context.get("keepalive_db"),
         "max_decisions": MAX_DECISIONS,
         "summary": summary,
         "identity_counts": dict(identity_counts),
