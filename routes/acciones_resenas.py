@@ -49,10 +49,20 @@ class PublicarBody(BaseModel):
     fuente: str = "generado"
 
 
+class ItemLote(BaseModel):
+    review_id: str
+    texto: str
+
+
+class PublicarLoteBody(BaseModel):
+    items: list[ItemLote] = []
+
+
 def _card_html(it: dict) -> str:
     rid = _esc(it.get("review_id"))
     comentario = _esc(it.get("comment")) if it.get("comment") else "<i>(sin texto)</i>"
     return (f"<div class='card' id='c-{rid}' data-rid='{rid}'>"
+            f"<label class='selrow' id='sel-{rid}' style='display:none'><input type='checkbox' class='sel' onchange='upd()'> seleccionar</label>"
             f"<div class='stars'>★★★★★</div><div class='rev'>{_esc(it.get('reviewer') or 'Cliente')}</div>"
             f"<div class='comment'>{comentario}</div>"
             f"<div class='badges' id='b-{rid}'></div>"
@@ -106,6 +116,13 @@ async def resenas_publicar(body: PublicarBody, token: str = ""):
     return JSONResponse(content=res, status_code=200 if res.get("status") == "ok" else 409)
 
 
+@router.post("/acciones/resenas/publicar-lote")
+async def resenas_publicar_lote(body: PublicarLoteBody, token: str = ""):
+    _require_token(token)
+    items = [{"review_id": i.review_id, "texto": i.texto} for i in body.items]
+    return JSONResponse(content=resenas_service.publicar_lote(items))
+
+
 _PAGE = r"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -134,15 +151,22 @@ _PAGE = r"""<!doctype html>
   .empty{background:#fff;border:1px solid #e2dccf;border-radius:10px;padding:20px;text-align:center;color:#777;}
   #more{display:block;width:100%;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:8px;padding:11px;font-size:13px;cursor:pointer;font-weight:bold;}
   a{color:#1a5276;}
+  .selrow{display:block;font-size:11px;color:#555;margin-bottom:6px;cursor:pointer;}
+  .selrow input{vertical-align:middle;margin-right:5px;}
+  #lote{display:none;position:sticky;bottom:8px;width:100%;background:#1a7f37;color:#fff;border:none;border-radius:8px;padding:13px;font-size:14px;cursor:pointer;font-weight:bold;margin:10px 0 4px;box-shadow:0 6px 16px rgba(0,0,0,.2);}
+  #lote[disabled]{background:#9bbfa6;cursor:not-allowed;}
+  #loteMsg{font-size:12px;margin:4px 0 8px;font-weight:bold;}
   .footer{font-size:10.5px;color:#999;text-align:center;padding:12px;}
 </style></head><body><div class="box">
 <div class="head">
   <h1>⭐ Reseñas 5★ — responder con tu voz</h1>
-  <p class="muted">Solo reseñas de 5 estrellas sin responder. Cada respuesta se publica una por una, tú la revisas antes. <span id="mode">__DRY__</span></p>
+  <p class="muted">Solo reseñas de 5 estrellas sin responder. Publica una por una, o marca varias y usa el botón verde. Tú revisas antes. <span id="mode">__DRY__</span></p>
 </div>
 <div id="list">__CARDS__</div>
 <button id="more" style="display:__MORE__">Cargar 10 más</button>
-<div class="footer">🔒 Nada se publica sin tu confirmación · las ≤4★ nunca aparecen aquí.</div>
+<button id="lote" disabled onclick="publicarLote()">Publicar seleccionadas (0)</button>
+<div id="loteMsg"></div>
+<div class="footer">🔒 Nada se publica sin tu confirmación · las ≤4★ nunca aparecen aquí · las marcadas "revisar manualmente" se publican una por una.</div>
 </div>
 <script>
 "use strict";
@@ -160,6 +184,7 @@ function badges(it){
 function cardHtml(it){
   var rid=it.review_id;
   return "<div class='card' id='c-"+esc(rid)+"' data-rid='"+esc(rid)+"'>"+
+    "<label class='selrow' id='sel-"+esc(rid)+"' style='display:none'><input type='checkbox' class='sel' onchange='upd()'> seleccionar</label>"+
     "<div class='stars'>★★★★★</div><div class='rev'>"+esc(it.reviewer||"Cliente")+"</div>"+
     "<div class='comment'>"+(it.comment?esc(it.comment):"<i>(sin texto)</i>")+"</div>"+
     "<div class='badges' id='b-"+esc(rid)+"'></div>"+
@@ -182,6 +207,7 @@ function loadDraft(rid){
      var ta=el("t-"+rid); if(ta && !ta.value.trim()){ ta.value=d.borrador; }
      var b=el("b-"+rid); if(b) b.innerHTML=badges(d);
      var st=el("s-"+rid); if(st) st.innerHTML="";
+     var sr=el("sel-"+rid); if(sr) sr.style.display = d.revisar_manual ? "none" : "block";  // flaggeada: sin checkbox de lote
    })
    .catch(function(e){ clearTimeout(to); showError(rid, e&&e.name==="AbortError"?"tardó demasiado":((e&&e.message)||"error de red")); });
 }
@@ -198,9 +224,43 @@ function pub(id){
   fetch("/acciones/resenas/publicar?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({review_id:id,texto:ta.value})})
    .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
-   .then(function(res){ if(res.ok){ msg.innerHTML="<div class='ok'>✓ "+(res.j.dry_run?"Simulado (dry-run)":"Publicado")+"</div>"; ta.disabled=true; }
+   .then(function(res){ if(res.ok){ msg.innerHTML="<div class='ok'>✓ "+(res.j.dry_run?"Simulado (dry-run)":"Publicado")+"</div>"; ta.disabled=true; _quitarSel(id); }
      else { btn.disabled=false; msg.innerHTML="<div class='err'>No se pudo: "+esc(res.j.motivo||"error")+"</div>"; } })
    .catch(function(){ btn.disabled=false; msg.innerHTML="<div class='err'>Error de red</div>"; });
+}
+function _quitarSel(rid){ var sr=el("sel-"+rid); if(sr){ var cb=sr.querySelector(".sel"); if(cb) cb.checked=false; sr.style.display="none"; } upd(); }
+var MAXSEL=10;
+function _checks(){ return Array.prototype.slice.call(document.querySelectorAll(".sel")); }
+function _seleccionadas(){ return _checks().filter(function(c){ return c.checked && !c.disabled; }); }
+function upd(){
+  var sel=_seleccionadas();
+  _checks().forEach(function(c){ if(!c.checked) c.disabled = (sel.length>=MAXSEL); });  // tope 10
+  var b=el("lote");
+  b.textContent="Publicar seleccionadas ("+sel.length+")";
+  b.disabled = sel.length===0;
+  b.style.display = sel.length>0 ? "block" : "none";
+  el("loteMsg").innerHTML = sel.length>=MAXSEL ? "<span style='color:#8b5e14'>Máximo 10 por lote.</span>" : "";
+}
+function publicarLote(){
+  var sel=_seleccionadas(); if(!sel.length) return;
+  var items=[];
+  sel.forEach(function(c){ var card=c.closest(".card"); if(!card) return; var rid=card.getAttribute("data-rid"); var ta=el("t-"+rid);
+    if(ta && ta.value.trim()) items.push({review_id:rid, texto:ta.value}); });
+  if(!items.length){ el("loteMsg").innerHTML="<span class='err'>Las seleccionadas no tienen texto.</span>"; return; }
+  var b=el("lote"); b.disabled=true; b.textContent="Publicando…"; el("loteMsg").textContent="Publicando "+items.length+"…";
+  fetch("/acciones/resenas/publicar-lote?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({items:items})})
+   .then(function(r){ return r.json(); })
+   .then(function(d){
+     (d.resultados||[]).forEach(function(r){ var msg=el("m-"+r.review_id), ta=el("t-"+r.review_id);
+       if(!msg) return;
+       if(r.status==="ok"){ msg.innerHTML="<div class='ok'>✓ "+(d.dry_run?"Simulado":"Publicado")+"</div>"; if(ta) ta.disabled=true; _quitarSel(r.review_id); }
+       else { msg.innerHTML="<div class='err'>No se pudo: "+esc(r.motivo||"error")+"</div>"; }
+     });
+     el("loteMsg").innerHTML="<span class='ok'>"+d.publicadas+" "+(d.dry_run?"simuladas":"publicadas")+(d.fallidas?(" · "+d.fallidas+" fallaron"):"")+"</span>";
+     upd();
+   })
+   .catch(function(){ el("loteMsg").innerHTML="<span class='err'>Error de red en el lote</span>"; upd(); });
 }
 function enqueueVisible(){
   var nodes=document.querySelectorAll(".card[data-rid]");
