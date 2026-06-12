@@ -245,6 +245,27 @@ Cuando se despliegue el digest completo:
 - **`DRY_RUN_NEGATIVOS=true`** por default (todo menos la llamada de escritura a Google Ads). Solo `false` post-deploy con autorización explícita de Hugo.
 - **`GOOGLE_ADS_CUSTOMER_ID`** (default `4021070209`). Aplica EXACT en SEARCH (Delivery Search / Experiencia 2026) vía `ads_client.add_negative_keyword(match_type="EXACT")`. **JAMÁS BROAD, JAMÁS batch.** Smart (Local/Delivery): guarda de marca/categoría (thai/tailand*/bangkok/thaithai) → si la contiene, el theme se prohíbe; sin API confiable para negativos en Smart → `manual_required` (aplicar en UI). "Dejar" agrega el término a `acknowledged_external_roots` en `term_dictionary.json` (no toca Ads).
 
+## 🔐 Seguridad de secretos
+
+### REGLA DURA (Claude): nunca volcar env vars completas
+- PROHIBIDO imprimir el listado completo de env vars de Cloud Run (`gcloud run services describe ... --format="value(...env)"` o equivalentes). Vuelca secretos en plano al output/transcript.
+- Para leer UNA variable: parsear JSON por clave puntual y mostrar SOLO esa, p. ej.
+  `gcloud run services describe thai-thai-ads-agent --region=us-central1 --format=json | jq -r '.spec.template.spec.containers[0].env[] | select(.name=="DRY_RUN_RESENAS") | .value'`. Nunca el array entero.
+- Para confirmar flags no sensibles (DRY_RUN_*), preferir el comportamiento observable (campo `dry_run` de un endpoint) en vez de leer el env.
+
+### Incidente 2026-06-11: env dump → rotación de secretos
+Un `describe ...--format="value(env)"` volcó todos los secretos al transcript. Rotación:
+- **HOY (a Secret Manager):** `DATABASE_URL`, `OPENAI_API_KEY`, `GOOGLE_CREDENTIALS_JSON` (runbook aparte).
+- **Rotar esta semana** (procedimiento):
+  - `GOOGLE_ADS_CLIENT_SECRET` + `GOOGLE_ADS_REFRESH_TOKEN`: GCP Console → APIs y servicios → Credenciales → cliente OAuth → *restablecer secreto*; luego re-correr el flujo OAuth (`InstalledAppFlow.run_local_server`) para un refresh token nuevo. Actualizar `google-ads.yaml`/`.env` + Cloud Run.
+  - `GBP_CLIENT_SECRET` + `GBP_REFRESH_TOKEN`: igual (cliente OAuth de GBP) → restablecer secreto + re-autorizar para nuevo refresh token.
+  - `GOOGLE_ADS_DEVELOPER_TOKEN`: Google Ads → API Center; bajo riesgo solo (inútil sin el OAuth) — rotar si el API Center lo permite.
+  - `GMAIL_APP_PASSWORD` / `EMAIL_APP_PASSWORD`: Cuenta Google → Seguridad → Contraseñas de aplicación → revocar la vieja + crear nueva.
+  - `GLORIAFOOD_MASTER_KEY`: dashboard GloriaFood → integración/API → regenerar.
+  - `CALLMEBOT_APIKEY`: re-solicitar apikey al bot de CallMeBot.
+  - `ADMIN_API_TOKEN`: generar uno nuevo aleatorio (`python -c "import secrets;print(secrets.token_urlsafe(24))"`) + actualizar Cloud Run y cualquier llamador.
+- Tras rotar cada uno: subir con `--update-env-vars` (o `--update-secrets` si va a Secret Manager) y verificar el módulo que lo usa.
+
 ### Hallazgo GloriaFood (2026-06-10)
 - Los pedidos GloriaFood se guardan en SQLite `gloriafood_orders` (sync a GCS); 13 pedidos/$6,910 en 7 días, campos completos (cliente+items). Ver `docs/inventario_pedidos_gloriafood.md`.
 - `money=$0` en Delivery es **limitación estructural conocida** (iframe no medible + UPLOAD_CLICKS no confiable), NO regresión. Reemplazo = tienda en línea propia. Ver `docs/diagnostico_dinero.md`.

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from engine.monitor_digest_v3 import build_monitor_digest
 from engine.monitor_sections import build_ads_quality_from_list, build_campaign_metrics
 from engine.monitor_sources import (
+    build_keepalive_db,
     build_search_console_context,
     build_seo_context,
     load_gbp_context,
@@ -105,6 +106,12 @@ def _build_context(date_range: str, mode: str) -> dict:
         context["ads_quality"] = _ads_quality(client, target_id, date_range)
     except Exception as exc:
         logger.warning("monitor context: Google Ads sources unavailable — %s", exc)
+
+    # Keepalive de la DB de reservas (Supabase free-tier se pausa a los 7 días sin actividad).
+    try:
+        context["keepalive_db"] = build_keepalive_db()
+    except Exception:
+        context["keepalive_db"] = {"ok": False, "checked": True, "error": "keepalive no ejecutado"}
 
     return context
 

@@ -515,9 +515,26 @@ def _search_console(digest: dict[str, Any], text: list[str]) -> str:
     return _section(_sc_title(sc), "".join(inner))
 
 
+def _keepalive_alert(digest: dict[str, Any], text: list[str]) -> str:
+    """Alerta SOLO si el keepalive de la DB de reservas falló (Supabase pausado/caído)."""
+    k = digest.get("keepalive_db") or {}
+    if not k.get("checked") or k.get("ok"):
+        return ""
+    err = _escape(k.get("error") or "sin detalle")
+    text.append(f"⚠ ALERTA: la base de datos de reservas no respondió ({k.get('error')}). Revisa Supabase — "
+                "el plan gratuito se pausa tras 7 días sin actividad y las reservas dejan de guardarse.")
+    return (
+        "<div style=\"border:2px solid #A32D2D;background:#fbe9e7;border-radius:8px;padding:12px;margin-bottom:12px;\">"
+        "<p style=\"font-size:13px;font-weight:bold;color:#A32D2D;margin:0 0 4px;\">⚠ La base de datos de reservas no respondió</p>"
+        f"<p style=\"font-size:11.5px;color:#5a1f1f;margin:0;line-height:1.5;\">El keepalive falló: {err}. Revisa Supabase "
+        "cuanto antes — el plan gratuito se pausa tras 7 días sin actividad y las reservas dejan de guardarse.</p></div>"
+    )
+
+
 def _render_full_html(digest: dict[str, Any]) -> tuple[str, list[str]]:
     text: list[str] = []
-    body = (_header(digest, text) + _posibles_bloqueos(digest, text) + _campaigns(digest, text)
+    body = (_header(digest, text) + _keepalive_alert(digest, text) + _posibles_bloqueos(digest, text)
+            + _campaigns(digest, text)
             + _busquedas(digest, text) + _resenas(digest, text) + _maps(digest, text)
             + _anuncios(digest, text) + _seo(digest, text) + _search_console(digest, text))
     return body, text
@@ -531,6 +548,9 @@ def _render_friday_html(digest: dict[str, Any]) -> tuple[str, list[str]]:
     parts = ["<div class=\"section\"><p style=\"font-size:12px;color:#777;margin:0;\">Cierre de viernes — solo lo que necesita tu ojo.</p></div>",
              "<div class=\"section\"><h2>Decisiones pendientes del lunes</h2>"]
     text = [BRAND_TITLE, "Cierre de viernes", ""]
+    alerta = _keepalive_alert(digest, text)
+    if alerta:
+        parts.insert(0, alerta)
     if decisions:
         for d in decisions:
             parts.append(
