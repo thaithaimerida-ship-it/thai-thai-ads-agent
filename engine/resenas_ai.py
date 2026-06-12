@@ -8,6 +8,7 @@ Solo genera texto on-demand; NO publica nada (eso lo hace el endpoint con DRY_RU
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import unicodedata
@@ -146,6 +147,30 @@ def seleccionar_banco(banco: list[str], usados: set[str], recientes: list[str] |
                 continue
             return b
     return banco[0] if banco else ""
+
+
+def _hash_idx(clave: str, n: int) -> int:
+    """Hash ESTABLE (sha256, no el hash() de Python que es aleatorio por proceso) → [0, n)."""
+    if n <= 0:
+        return 0
+    return int(hashlib.sha256((clave or "").encode("utf-8")).hexdigest(), 16) % n
+
+
+def seleccionar_banco_por_review(banco: list[str], review_id: str, recientes: list[str] | None = None) -> str:
+    """Banco verbatim ROTADO determinísticamente por review_id (per-card, sin contexto del lote):
+    índice base = hash(review_id) % N; si esa respuesta está en las últimas publicaciones reales,
+    avanza al siguiente índice libre. La MISMA reseña siempre da la MISMA respuesta (estable,
+    independiente del orden de carga y del caché)."""
+    if not banco:
+        return ""
+    n = len(banco)
+    recientes_n = {_norm(r) for r in (recientes or [])}
+    base = _hash_idx(review_id, n)
+    for off in range(n):
+        cand = banco[(base + off) % n]
+        if _norm(cand) not in recientes_n:
+            return cand
+    return banco[base]  # todas en recientes (improbable: banco=15 vs últimas 10)
 
 
 def contar_emojis(texto: str) -> int:
