@@ -158,6 +158,23 @@ def test_frase_artificial_backstop():
     assert not R.tiene_frase_artificial("gracias por tu visita")
 
 
+def test_v1_voz_plural_no_singular():
+    # caso real: "la atención de Alejandro y la mía" → primera persona singular, MAL.
+    assert R.voz_singular("Qué gusto, la atención de Alejandro y la mía estuvo al pendiente")
+    assert R.voz_singular("a mí me encantó")
+    assert not R.voz_singular("Nuestra atención y la de Alejandro te cuidaron; nos encantó")
+    assert R.violaciones_contenido("me dio mucho gusto", {"reviewer": "Ana"}).count("voz_singular") == 1
+
+
+def test_v2_emoji_solo_paleta_aprobada():
+    # caso real: 🫶🏻 copiado de la reseña (base fuera de paleta + tono de piel) → MAL.
+    assert R.emoji_no_aprobado("Gracias 🫶🏻 por tu visita")
+    assert R.emoji_no_aprobado("Gracias 😄🏽")            # tono de piel solo
+    assert not R.emoji_no_aprobado("Gracias 😄 por tu visita ⭐")
+    limpio = R.limpiar_emojis_no_aprobados("Gracias 🫶🏻 por tu visita 😄")
+    assert "🫶" not in limpio and "🏻" not in limpio and "😄" in limpio
+
+
 def test_cuerpo_no_invita():
     assert R.cuerpo_invita("Gracias, te esperamos pronto")
     assert R.cuerpo_invita("Vuelve cuando quieras")
