@@ -187,6 +187,45 @@ def test_textos_publicados_reales_solo_reales(tmp_path):
     assert acciones_log.textos_publicados_reales(10, path=p) == ["C", "A"]  # solo reales, reciente primero
 
 
+def test_lote_tope_10_y_un_solo_correo(monkeypatch, tmp_path):
+    monkeypatch.setenv("DRY_RUN_RESENAS", "true")
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(gbp_reviews, "get_review", lambda rid, token=None: _review())
+    correos = {"n": 0}
+    monkeypatch.setattr(resenas_service.acciones_email, "enviar",
+                        lambda asunto, cuerpo: correos.__setitem__("n", correos["n"] + 1) or {"enviado": False})
+    items = [{"review_id": f"r{i}", "texto": f"gracias {i}"} for i in range(12)]
+    res = resenas_service.publicar_lote(items)
+    assert len(res["resultados"]) == 10          # tope: máximo 10
+    assert res["publicadas"] == 10
+    assert correos["n"] == 1                      # UN solo correo por lote
+
+
+def test_lote_fallo_parcial_no_detiene(monkeypatch, tmp_path):
+    monkeypatch.setenv("DRY_RUN_RESENAS", "true")
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+
+    def gr(rid, token=None):
+        return _review(reply="ya respondida") if rid == "r-bad" else _review()
+    monkeypatch.setattr(gbp_reviews, "get_review", gr)
+    monkeypatch.setattr(resenas_service.acciones_email, "enviar", lambda a, c: {"enviado": False})
+    res = resenas_service.publicar_lote([
+        {"review_id": "r-ok", "texto": "a"}, {"review_id": "r-bad", "texto": "b"}, {"review_id": "r-ok2", "texto": "c"}])
+    assert res["publicadas"] == 2 and res["fallidas"] == 1   # el fallo NO detuvo a los demás
+    assert [r["motivo"] for r in res["resultados"] if r["status"] != "ok"] == ["no_publicable"]
+
+
+def test_page_lote_excluye_flaggeadas_y_tope_10(client, monkeypatch):
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(resenas_service, "cargar_resenas_tanda", lambda offset=0, limit=10: {
+        "total": 0, "offset": 0, "limit": 10, "hay_mas": False, "dry_run": False, "items": []})
+    html = client.get("/acciones/resenas?token=secreto").text
+    assert "Publicar seleccionadas" in html                 # botón del lote
+    assert 'd.revisar_manual ? "none"' in html              # flaggeadas → sin checkbox
+    assert "MAXSEL=10" in html                              # tope 10 en UI
+    assert "/acciones/resenas/publicar-lote" in html        # endpoint del lote
+
+
 def test_publicar_correo_lleva_datos_reales(monkeypatch, tmp_path):
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
     monkeypatch.setattr(gbp_reviews, "get_review", lambda rid, token=None: {

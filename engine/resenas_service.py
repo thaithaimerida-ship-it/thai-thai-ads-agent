@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from engine import acciones_log, borradores_cache, gbp_reviews, resenas_ai, resenas_email
+from engine import acciones_email, acciones_log, borradores_cache, gbp_reviews, resenas_ai, resenas_email
 
 
 def cargar_resenas_tanda(offset: int = 0, limit: int = 10) -> dict[str, Any]:
@@ -82,9 +82,10 @@ def cargar_borradores_tanda(offset: int = 0, limit: int = 10) -> dict[str, Any]:
 
 
 def publicar(review_id: str, texto: str, reviewer: str = "", comment: str = "",
-             energia: str = "", fuente: str = "generado") -> dict[str, Any]:
+             energia: str = "", fuente: str = "generado", enviar_correo: bool = True) -> dict[str, Any]:
     """Publica UNA respuesta. Re-valida server-side (5★ + sin respuesta previa + no repetida),
-    publica (gated por DRY_RUN), registra en el log inmutable y manda correo de confirmación."""
+    publica (gated por DRY_RUN), registra en el log inmutable y manda correo de confirmación.
+    `enviar_correo=False` lo usa el lote (un solo correo al final, no uno por reseña)."""
     texto = (texto or "").strip()
     if not texto:
         return {"status": "rechazada", "motivo": "texto_vacio"}
@@ -108,5 +109,40 @@ def publicar(review_id: str, texto: str, reviewer: str = "", comment: str = "",
         "resultado": "dry_run" if res["dry_run"] else "ok",
     }
     registrado = acciones_log.registrar(entry)
-    correo = resenas_email.enviar_confirmacion(registrado)
+    correo = resenas_email.enviar_confirmacion(registrado) if enviar_correo else {"enviado": False, "motivo": "lote"}
     return {"status": "ok", "dry_run": res["dry_run"], "correo": correo, "registro": registrado}
+
+
+def publicar_lote(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Publica una SELECCIÓN, UNA POR UNA (mismos candados que `publicar`: re-validación 5★ +
+    sin respuesta + log por reseña). Tope 10. Si una falla, las demás continúan. UN solo correo
+    de confirmación al final con el resumen."""
+    items = (items or [])[:10]  # tope: máximo 10 por lote
+    resultados = []
+    for it in items:
+        rid = it.get("review_id", "")
+        texto = it.get("texto", "")
+        res = publicar(rid, texto, enviar_correo=False)  # sin correo individual; el lote manda uno
+        reg = res.get("registro") or {}
+        resultados.append({
+            "review_id": rid, "status": res.get("status"), "motivo": res.get("motivo", ""),
+            "reviewer": reg.get("reviewer", ""), "texto": texto,
+        })
+
+    ok = [r for r in resultados if r["status"] == "ok"]
+    fail = [r for r in resultados if r["status"] != "ok"]
+    dry = gbp_reviews.dry_run_activo()
+    verbo = "simuladas" if dry else "publicadas"
+    asunto = f"🍜 {len(ok)} respuesta{'s' if len(ok) != 1 else ''} {verbo}"
+    if fail:
+        asunto += f" · {len(fail)} falló" if len(fail) == 1 else f" · {len(fail)} fallaron"
+    lineas = [f"{len(ok)} respuesta(s) {verbo}" + (f", {len(fail)} fallaron." if fail else ".") , ""]
+    for r in ok:
+        lineas.append(f"✓ {r['reviewer'] or r['review_id']}: {r['texto']}")
+    if fail:
+        lineas += ["", "Fallaron:"]
+        for r in fail:
+            lineas.append(f"✗ {r['reviewer'] or r['review_id']}: {r['motivo']}")
+    correo = acciones_email.enviar(asunto, "\n".join(lineas))
+    return {"publicadas": len(ok), "fallidas": len(fail), "dry_run": dry,
+            "resultados": resultados, "correo": correo}
