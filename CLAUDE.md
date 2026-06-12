@@ -255,8 +255,8 @@ Cuando se despliegue el digest completo:
 
 ### Incidente 2026-06-11: env dump → rotación de secretos
 Un `describe ...--format="value(env)"` volcó todos los secretos al transcript. Rotación:
-- **HOY (a Secret Manager):** `DATABASE_URL`, `OPENAI_API_KEY`, `GOOGLE_CREDENTIALS_JSON` (runbook aparte).
-- **Rotar esta semana** (procedimiento):
+- **✅ COMPLETADAS 2026-06-11 (en Secret Manager, verificadas):** `DATABASE_URL` (reservas — keepalive `SELECT 1` ok + reserva de prueba escribió en Supabase), `OPENAI_API_KEY` (borrador de reseña genera en vivo), `GOOGLE_CREDENTIALS_JSON` (Search Console del digest trae datos; SA key vieja `3a31cd29…` → borrar en consola). Las 3 ya no están en env plano. Swap por-llave atómico (`--remove-env-vars=K --update-secrets=K=secret:latest`); el combinado con varias llaves a la vez falla en gcloud.
+- **Rotar antes del 2026-06-18 (media/baja)** (procedimiento):
   - `GOOGLE_ADS_CLIENT_SECRET` + `GOOGLE_ADS_REFRESH_TOKEN`: GCP Console → APIs y servicios → Credenciales → cliente OAuth → *restablecer secreto*; luego re-correr el flujo OAuth (`InstalledAppFlow.run_local_server`) para un refresh token nuevo. Actualizar `google-ads.yaml`/`.env` + Cloud Run.
   - `GBP_CLIENT_SECRET` + `GBP_REFRESH_TOKEN`: igual (cliente OAuth de GBP) → restablecer secreto + re-autorizar para nuevo refresh token.
   - `GOOGLE_ADS_DEVELOPER_TOKEN`: Google Ads → API Center; bajo riesgo solo (inútil sin el OAuth) — rotar si el API Center lo permite.
