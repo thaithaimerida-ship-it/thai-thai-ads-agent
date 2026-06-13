@@ -266,6 +266,14 @@ Un `describe ...--format="value(env)"` volcó todos los secretos al transcript. 
   - `ADMIN_API_TOKEN`: generar uno nuevo aleatorio (`python -c "import secrets;print(secrets.token_urlsafe(24))"`) + actualizar Cloud Run y cualquier llamador.
 - Tras rotar cada uno: subir con `--update-env-vars` (o `--update-secrets` si va a Secret Manager) y verificar el módulo que lo usa.
 
+### Cartero del monitor — `POST /monitor/send` (reemplazo del Apps Script, 2026-06-12)
+- El Apps Script viejo (`sendDailyReport`) **archivado 2026-06-12** (sus triggers desactivados, proyecto NO borrado) — falló el viernes 12 jun porque usaba la PageSpeed key vieja (rotada). Reemplazado por `POST /monitor/send` + Cloud Scheduler.
+- Endpoint genera el digest → renderiza v6.2 (lunes completo / viernes corto según día America/Merida o `tipo=lunes|viernes`) → envía a `MONITOR_EMAIL_TO` (default `thaithaimerida@gmail.com`) por el SMTP de los correos de confirmación. **Idempotente por día** (registro `monitor_send` en `acciones_log`; `force=true` reenvía).
+- **Auth:** (1) OIDC del SA del Cloud Scheduler (sin secreto en el job) o (2) `MONITOR_SEND_TOKEN` (Secret Manager) para disparo manual. Fail-closed 403.
+- **Env vars:** `MONITOR_SEND_TOKEN` (secret), `MONITOR_SCHEDULER_SA` (email del SA), `MONITOR_OIDC_AUDIENCE` (URL del endpoint), `MONITOR_EMAIL_TO` (opcional).
+- **Cloud Scheduler:** `monitor-lunes` (`30 6 * * 1`) y `monitor-viernes` (`30 6 * * 5`), America/Merida, OIDC, 2 reintentos backoff. **Uptime check** sobre `/health` cada 5 min + alerta a `thaithaimerida@gmail.com`.
+- Fix relacionado: los links de acción del correo usan `ACCIONES_TOKEN` (antes `ACTIONS_TOKEN`, inexistente → botones rotos).
+
 ### Hallazgo GloriaFood (2026-06-10)
 - Los pedidos GloriaFood se guardan en SQLite `gloriafood_orders` (sync a GCS); 13 pedidos/$6,910 en 7 días, campos completos (cliente+items). Ver `docs/inventario_pedidos_gloriafood.md`.
 - `money=$0` en Delivery es **limitación estructural conocida** (iframe no medible + UPLOAD_CLICKS no confiable), NO regresión. Reemplazo = tienda en línea propia. Ver `docs/diagnostico_dinero.md`.
