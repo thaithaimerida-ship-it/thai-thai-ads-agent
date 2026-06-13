@@ -1,10 +1,10 @@
 """Read-only source adapters for the Monitor digest context.
 
-This module ONLY reads local snapshots / parses already-fetched payloads into
-the small `context` shape that `monitor_sections` consumes. It does NOT call any
-external API and does NOT write anything. When a source is missing or malformed
-it returns a `data_broken=true` marker so the renderer shows "en reparación"
-instead of zeros pretending to be data.
+This module parses already-fetched payloads into the small `context` shape that
+`monitor_sections` consumes, and makes a few READ-ONLY API calls (PageSpeed, Search
+Console, GBP live). It NEVER writes anything. When a source is missing, malformed or
+its API fails it returns a `data_broken=true` marker so the renderer shows "en
+reparación" instead of zeros pretending to be data.
 """
 from __future__ import annotations
 
@@ -301,10 +301,33 @@ def load_gloriafood_internal(db_path: str | None = None, days: int = 7) -> dict[
 
 
 def load_gbp_context(path: str = GBP_AUDIT_PATH) -> dict[str, Any]:
-    """Load the local GBP audit snapshot. Returns data_broken slices on failure."""
+    """Load the local GBP audit snapshot. Returns data_broken slices on failure.
+
+    DEPRECADO para el monitor (el archivo es gitignored → ausente en Cloud Run). Se conserva
+    para auditorías manuales con `_gbp_audit.py`. El monitor usa `load_gbp_context_live()`.
+    """
     try:
         with open(path, encoding="utf-8") as f:
             audit = json.load(f)
     except Exception:
         return {"gbp": {"data_broken": True}, "reviews": {"data_broken": True}}
+    return build_gbp_context(audit)
+
+
+def load_gbp_context_live() -> dict[str, Any]:
+    """Contexto GBP EN VIVO para el monitor (read-only): reseñas por el mismo path que la
+    bandeja (`fetch_reviews_cached`) + Maps 30d por la Performance API. Cada slice degrada
+    de forma INDEPENDIENTE a data_broken: si una API falla, esa sección sale "en reparación"
+    pero el correo se envía igual (jamás un correo a medias por una sección caída)."""
+    from engine import gbp_reviews
+
+    audit: dict[str, Any] = {}
+    try:
+        audit["performance_aggregate_30d"] = gbp_reviews.fetch_performance_30d_cached()
+    except Exception:
+        audit["performance_aggregate_30d"] = {}  # build_gbp_context → gbp data_broken
+    try:
+        audit["reviews"] = {"data": {"reviews": gbp_reviews.fetch_reviews_cached()}}
+    except Exception:
+        audit["reviews"] = {}  # build_gbp_context → reviews data_broken
     return build_gbp_context(audit)

@@ -17,7 +17,7 @@ from engine.monitor_sources import (
     build_keepalive_db,
     build_search_console_context,
     build_seo_context,
-    load_gbp_context,
+    load_gbp_context_live,
     load_gloriafood_internal,
 )
 from routes.analysis import VALID_DATE_RANGES, _build_search_terms_payload, _normalize_date_range
@@ -66,39 +66,41 @@ def _ads_quality(client, target_id: str, date_range: str) -> dict:
     return build_ads_quality_from_list(ads, _RANGE_DAYS.get(date_range, 7))
 
 
-def _build_context(date_range: str, mode: str) -> dict:
-    """Assemble the read-only enrichment context. Never raises — missing sources
-    degrade to data_broken / search-term fallback."""
-    context: dict = {
-        "mode": "friday" if str(mode).strip().lower() == "friday" else "monday",
-        "links": _links(),
-    }
+def _ctx_gbp() -> dict:
+    """Reseñas + Maps 30d EN VIVO (read-only). Cada slice ya degrada por su cuenta."""
     try:
-        context.update(load_gbp_context())
+        return load_gbp_context_live()
     except Exception:
-        context["gbp"] = {"data_broken": True}
-        context["reviews"] = {"data_broken": True}
+        return {"gbp": {"data_broken": True}, "reviews": {"data_broken": True}}
+
+
+def _ctx_gloriafood() -> dict:
     try:
         interno = load_gloriafood_internal()
-        if interno:
-            context["pedidos_gloriafood_interno"] = interno
+        return {"pedidos_gloriafood_interno": interno} if interno else {}
     except Exception:
-        pass
-    # PageSpeed only when a key is configured (keyless PSI is rate-limited / 429).
-    if os.getenv("PAGESPEED_API_KEY"):
-        try:
-            context.update(build_seo_context())
-        except Exception:
-            context["seo"] = {"data_broken": True}
-    else:
-        context["seo"] = {"data_broken": True}
+        return {}
 
+
+def _ctx_seo() -> dict:
+    # PageSpeed solo con key configurada (PSI sin key se rate-limita / 429).
+    if not os.getenv("PAGESPEED_API_KEY"):
+        return {"seo": {"data_broken": True}}
     try:
-        context.update(build_search_console_context())
+        return build_seo_context()
     except Exception:
-        context["search_console"] = {"data_broken": True}
+        return {"seo": {"data_broken": True}}
 
-    # Google Ads sources (read-only). Token may be down → leave sections to fall back.
+
+def _ctx_search_console() -> dict:
+    try:
+        return build_search_console_context()
+    except Exception:
+        return {"search_console": {"data_broken": True}}
+
+
+def _ctx_ads(date_range: str) -> dict:
+    """Google Ads (read-only). Token caído → secciones caen a su fallback."""
     try:
         from engine.ads_client import fetch_campaign_conversion_breakdown, fetch_campaign_data, get_ads_client
         target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
@@ -108,18 +110,44 @@ def _build_context(date_range: str, mode: str) -> dict:
         # 30d window for the 'provisional' health (señales + CTR vs propio promedio 30d).
         campaigns_30d = fetch_campaign_data(client, target_id, "LAST_30_DAYS")
         breakdown_30d = fetch_campaign_conversion_breakdown(client, target_id, "LAST_30_DAYS")
+        out: dict = {}
         if campaigns:
-            context["campaign_metrics"] = build_campaign_metrics(campaigns, breakdown, campaigns_30d, breakdown_30d)
-        context["ads_quality"] = _ads_quality(client, target_id, date_range)
+            out["campaign_metrics"] = build_campaign_metrics(campaigns, breakdown, campaigns_30d, breakdown_30d)
+        out["ads_quality"] = _ads_quality(client, target_id, date_range)
+        return out
     except Exception as exc:
         logger.warning("monitor context: Google Ads sources unavailable — %s", exc)
+        return {}
 
+
+def _ctx_keepalive() -> dict:
     # Keepalive de la DB de reservas (Supabase free-tier se pausa a los 7 días sin actividad).
     try:
-        context["keepalive_db"] = build_keepalive_db()
+        return {"keepalive_db": build_keepalive_db()}
     except Exception:
-        context["keepalive_db"] = {"ok": False, "checked": True, "error": "keepalive no ejecutado"}
+        return {"keepalive_db": {"ok": False, "checked": True, "error": "keepalive no ejecutado"}}
 
+
+def _build_context(date_range: str, mode: str) -> dict:
+    """Assemble the read-only enrichment context. Never raises — missing sources degrade
+    to data_broken / search-term fallback. Las 6 fuentes (GBP, GloriaFood, SEO, Search
+    Console, Ads, keepalive) son llamadas I/O independientes → se corren EN PARALELO para
+    bajar el tiempo total de /monitor/send (cada bloque trae su propio try/except, así que
+    una fuente caída nunca tumba el correo ni bloquea a las demás)."""
+    import concurrent.futures as _cf
+
+    context: dict = {
+        "mode": "friday" if str(mode).strip().lower() == "friday" else "monday",
+        "links": _links(),
+    }
+    tareas = [_ctx_gbp, _ctx_gloriafood, _ctx_seo, _ctx_search_console, _ctx_keepalive,
+              lambda: _ctx_ads(date_range)]
+    with _cf.ThreadPoolExecutor(max_workers=len(tareas)) as ex:
+        for fut in [ex.submit(t) for t in tareas]:
+            try:
+                context.update(fut.result())
+            except Exception:
+                pass  # ya cubierto dentro de cada bloque; red extra
     return context
 
 
