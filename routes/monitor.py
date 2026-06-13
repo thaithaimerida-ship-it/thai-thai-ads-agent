@@ -127,7 +127,7 @@ def _build_context(date_range: str, mode: str) -> dict:
 async def monitor_digest(date_range: str = "LAST_7_DAYS", mode: str = "monday"):
     """Monitor Digest V3: read-only summary + rendered email for the weekly digest.
 
-    mode=friday renders the short Friday close (decisions + anomalies + spend only).
+    Contrato v6.2: formato completo único (lunes y viernes idénticos). `mode` queda sin efecto.
     """
     date_range = _normalize_date_range(date_range)
     if date_range not in VALID_DATE_RANGES:
@@ -139,10 +139,22 @@ async def monitor_digest(date_range: str = "LAST_7_DAYS", mode: str = "monday"):
     return build_monitor_digest(payload, _build_context(date_range, mode))
 
 
+_DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+             "septiembre", "octubre", "noviembre", "diciembre"]
+
+
 def _hoy_merida() -> tuple[str, str]:
-    """(fecha 'YYYY-MM-DD', modo render 'monday'|'friday') en hora de Mérida."""
+    """(fecha 'YYYY-MM-DD', etiqueta del día 'lunes'|'viernes') en hora de Mérida.
+    La etiqueta solo rotula el envío en el log; ya NO cambia el formato (contrato v6.2)."""
     now = datetime.now(ZoneInfo("America/Merida"))
-    return now.strftime("%Y-%m-%d"), ("friday" if now.weekday() == 4 else "monday")
+    return now.strftime("%Y-%m-%d"), ("viernes" if now.weekday() == 4 else "lunes")
+
+
+def _fecha_humana() -> str:
+    """Fecha de envío legible en español (hora de Mérida), p. ej. 'viernes 12 de junio de 2026'."""
+    n = datetime.now(ZoneInfo("America/Merida"))
+    return f"{_DIAS_ES[n.weekday()]} {n.day} de {_MESES_ES[n.month - 1]} de {n.year}"
 
 
 def _auth_monitor_send(token: str, authorization: str) -> None:
@@ -168,24 +180,26 @@ def _auth_monitor_send(token: str, authorization: str) -> None:
 @router.post("/monitor/send")
 async def monitor_send(token: str = "", tipo: str = "", force: bool = False,
                        date_range: str = "LAST_7_DAYS", authorization: str = Header(default="")):
-    """Genera el digest, lo renderiza (lunes completo / viernes corto según el día America/Merida
-    o `tipo`) y lo envía por SMTP a thaithaimerida@gmail.com. Idempotente por día (force=true
-    reenvía). Reemplaza al Apps Script. El renderer v6.2 NO se toca."""
+    """Genera el digest, lo renderiza (formato completo — el MISMO para lunes y viernes, contrato
+    v6.2) y lo envía por SMTP a thaithaimerida@gmail.com. Idempotente por día (force=true reenvía).
+    Reemplaza al Apps Script. `tipo` (lunes|viernes) solo rotula el envío; ya no cambia el formato."""
     _auth_monitor_send(token, authorization)
     date_range = _normalize_date_range(date_range)
     if date_range not in VALID_DATE_RANGES:
         raise HTTPException(status_code=400, detail=f"date_range invalido: '{date_range}'.")
-    fecha, modo_dia = _hoy_merida()
-    mode = ("friday" if tipo == "viernes" else "monday") if tipo in ("lunes", "viernes") else modo_dia
+    fecha, dia = _hoy_merida()
+    modo = tipo if tipo in ("lunes", "viernes") else dia  # etiqueta para el log/respuesta
 
     if not force and acciones_log.monitor_ya_enviado_hoy(fecha):
-        return JSONResponse({"status": "already_sent", "fecha": fecha, "modo": mode})
+        return JSONResponse({"status": "already_sent", "fecha": fecha, "modo": modo})
 
     payload = _build_search_terms_payload(date_range)
-    digest = build_monitor_digest(payload, _build_context(date_range, mode))
+    context = _build_context(date_range, modo)
+    context["generated_date"] = _fecha_humana()  # fecha de envío → asunto y encabezado
+    digest = build_monitor_digest(payload, context)
     res = monitor_mailer.enviar_digest(digest.get("subject_email"), digest.get("html_email"), digest.get("text_email"))
-    acciones_log.registrar({"accion": "monitor_send", "fecha": fecha, "modo": mode,
+    acciones_log.registrar({"accion": "monitor_send", "fecha": fecha, "modo": modo,
                             "resultado": "ok" if res.get("enviado") else "error", "force": bool(force), "correo": res})
     ok = bool(res.get("enviado"))
-    return JSONResponse({"status": "sent" if ok else "error", "fecha": fecha, "modo": mode, "correo": res},
+    return JSONResponse({"status": "sent" if ok else "error", "fecha": fecha, "modo": modo, "correo": res},
                         status_code=200 if ok else 502)

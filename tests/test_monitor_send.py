@@ -53,8 +53,9 @@ def test_send_force_reenvia(client, setup):
     assert r.json()["status"] == "sent" and setup["sent"] == 2
 
 
-def test_send_tipo_fuerza_formato(client, setup):
+def test_send_tipo_solo_rotula(client, setup):
+    # Contrato v6.2: `tipo` ya no cambia el formato (siempre el completo); solo rotula el envío.
     client.post("/monitor/send?token=sec&tipo=viernes&force=true")
-    assert setup["mode"] == "friday"                                # viernes corto
+    assert setup["mode"] == "viernes"
     client.post("/monitor/send?token=sec&tipo=lunes&force=true")
-    assert setup["mode"] == "monday"                                # lunes completo
+    assert setup["mode"] == "lunes"

@@ -418,22 +418,30 @@ def test_snapshot_html_lunes():
         last = idx
     assert "Thai Thai Monitor" in html and "THAI THAI MONITOR" not in html
     assert "Nada se ejecuta sin tu confirmación" in html  # A10 footer
-    assert digest["subject_email"].startswith("🍜 Thai Thai")
+    assert digest["subject_email"].startswith("Thai Thai Monitor —")
 
 
-def test_snapshot_html_viernes():
+def test_snapshot_html_viernes_es_el_completo():
+    # Contrato v6.2 (2026-06-12): el viernes ahora envía el MISMO reporte completo del lunes.
     ctx = _rich_context()
-    ctx["mode"] = "friday"
+    ctx["mode"] = "friday"  # ya no cambia el formato — debe salir el completo igual
     digest = build_monitor_digest(_payload([_term(query="bankok casa thai", cost=44.0, clicks=35)]), ctx)
     html = digest["html_email"]
-    assert digest["subject_email"] == "🍜 Thai Thai — Cierre de viernes"
-    assert "Gasto acumulado" in html
-    assert "Decisiones pendientes del lunes" in html  # A11: short list
-    assert "Anomalías nuevas" in html
-    # A11: viernes corto — secciones completas omitidas
-    assert "Maps · 30 días" not in html
-    assert "Search Console" not in html
-    assert "Campañas" not in html
+    # Mismo asunto fijo con fecha que el lunes (la referencia trae generated_date).
+    assert digest["subject_email"].startswith("Thai Thai Monitor —")
+    # Las 9 secciones del formato completo, en orden — idénticas al snapshot de lunes.
+    headings = ["Posibles bloqueos — necesitan tu confirmación", "📊 Campañas — últimos 7 días",
+                "🔎 Qué buscó la gente para ver tus anuncios", "⭐ Reseñas", "📍 Tu negocio en Maps — 30 días",
+                "📢 Anuncios — ", "🌐 SEO de tu web", "🔍 Search Console · 7 días"]
+    last = -1
+    for h in headings:
+        idx = html.find(h)
+        assert idx != -1, f"falta sección en viernes: {h}"
+        assert idx > last, f"sección fuera de orden en viernes: {h}"
+        last = idx
+    # El viejo "viernes corto" ya no existe.
+    assert "Cierre de viernes" not in html
+    assert "Decisiones pendientes del lunes" not in html
 
 
 def test_correo_cero_decisiones():
