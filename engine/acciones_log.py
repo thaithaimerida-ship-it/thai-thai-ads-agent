@@ -69,6 +69,14 @@ def bloqueo_real_ts(term: str, path: str | None = None) -> str | None:
     return None
 
 
+def monitor_ya_enviado_hoy(fecha: str, path: str | None = None) -> bool:
+    """True si el correo del monitor de esa fecha (YYYY-MM-DD) ya se envió OK — idempotencia."""
+    return any(
+        r.get("accion") == "monitor_send" and r.get("fecha") == fecha and r.get("resultado") == "ok"
+        for r in _leer(path)
+    )
+
+
 def textos_publicados_reales(n: int = 10, path: str | None = None) -> list[str]:
     """Últimos n textos de publicaciones REALES (published=True), del más reciente al más
     antiguo. Sirve para no repetir respuestas del banco contra lo ya publicado de verdad."""

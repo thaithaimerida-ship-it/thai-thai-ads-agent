@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import JSONResponse
 
+from engine import acciones_log, monitor_mailer
 from engine.monitor_digest_v3 import build_monitor_digest
 from engine.monitor_sections import build_ads_quality_from_list, build_campaign_metrics
 from engine.monitor_sources import (
@@ -22,7 +27,9 @@ router = APIRouter(tags=["monitor"])
 logger = logging.getLogger(__name__)
 
 _BASE_URL = os.getenv("MONITOR_BASE_URL", "https://thai-thai-ads-agent-624172071613.us-central1.run.app")
-_ACTIONS_TOKEN = os.getenv("ACTIONS_TOKEN", "PENDIENTE_PARTE_B")
+# Los links de acción del correo usan el MISMO token que protege las páginas (ACCIONES_TOKEN,
+# en Secret Manager). ACTIONS_TOKEN queda como alias legacy.
+_ACTIONS_TOKEN = os.getenv("ACCIONES_TOKEN") or os.getenv("ACTIONS_TOKEN", "PENDIENTE_PARTE_B")
 
 _RANGE_DAYS = {"TODAY": 1, "YESTERDAY": 1, "LAST_7_DAYS": 7, "LAST_14_DAYS": 14,
                "LAST_30_DAYS": 30, "THIS_MONTH": 30, "LAST_MONTH": 30}
@@ -130,3 +137,55 @@ async def monitor_digest(date_range: str = "LAST_7_DAYS", mode: str = "monday"):
         )
     payload = _build_search_terms_payload(date_range)
     return build_monitor_digest(payload, _build_context(date_range, mode))
+
+
+def _hoy_merida() -> tuple[str, str]:
+    """(fecha 'YYYY-MM-DD', modo render 'monday'|'friday') en hora de Mérida."""
+    now = datetime.now(ZoneInfo("America/Merida"))
+    return now.strftime("%Y-%m-%d"), ("friday" if now.weekday() == 4 else "monday")
+
+
+def _auth_monitor_send(token: str, authorization: str) -> None:
+    """Fail-closed. Acepta: (1) MONITOR_SEND_TOKEN compartido (disparo manual / tests), o
+    (2) un OIDC ID token de Google del SA del Cloud Scheduler (sin secreto en el job)."""
+    expected = os.getenv("MONITOR_SEND_TOKEN", "")
+    if expected and token and secrets.compare_digest(token, expected):
+        return
+    sa = os.getenv("MONITOR_SCHEDULER_SA", "")
+    if authorization.startswith("Bearer ") and sa:
+        try:
+            from google.auth.transport import requests as greq
+            from google.oauth2 import id_token as gidt
+            aud = os.getenv("MONITOR_OIDC_AUDIENCE") or None  # si se setea, se verifica el audience
+            info = gidt.verify_oauth2_token(authorization.split(" ", 1)[1], greq.Request(), audience=aud)
+            if info.get("email") == sa and info.get("email_verified"):
+                return
+        except Exception:
+            pass
+    raise HTTPException(status_code=403, detail="No autorizado")
+
+
+@router.post("/monitor/send")
+async def monitor_send(token: str = "", tipo: str = "", force: bool = False,
+                       date_range: str = "LAST_7_DAYS", authorization: str = Header(default="")):
+    """Genera el digest, lo renderiza (lunes completo / viernes corto según el día America/Merida
+    o `tipo`) y lo envía por SMTP a thaithaimerida@gmail.com. Idempotente por día (force=true
+    reenvía). Reemplaza al Apps Script. El renderer v6.2 NO se toca."""
+    _auth_monitor_send(token, authorization)
+    date_range = _normalize_date_range(date_range)
+    if date_range not in VALID_DATE_RANGES:
+        raise HTTPException(status_code=400, detail=f"date_range invalido: '{date_range}'.")
+    fecha, modo_dia = _hoy_merida()
+    mode = ("friday" if tipo == "viernes" else "monday") if tipo in ("lunes", "viernes") else modo_dia
+
+    if not force and acciones_log.monitor_ya_enviado_hoy(fecha):
+        return JSONResponse({"status": "already_sent", "fecha": fecha, "modo": mode})
+
+    payload = _build_search_terms_payload(date_range)
+    digest = build_monitor_digest(payload, _build_context(date_range, mode))
+    res = monitor_mailer.enviar_digest(digest.get("subject_email"), digest.get("html_email"), digest.get("text_email"))
+    acciones_log.registrar({"accion": "monitor_send", "fecha": fecha, "modo": mode,
+                            "resultado": "ok" if res.get("enviado") else "error", "force": bool(force), "correo": res})
+    ok = bool(res.get("enviado"))
+    return JSONResponse({"status": "sent" if ok else "error", "fecha": fecha, "modo": mode, "correo": res},
+                        status_code=200 if ok else 502)
