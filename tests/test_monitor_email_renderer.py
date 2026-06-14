@@ -229,10 +229,14 @@ def test_max_5_decisions_rendered():
 
     decisions = [_decision(term=f"restaurante externo {i}", cost=i + 1) for i in range(8)]
     rendered = render_monitor_email(_digest(decisions=decisions))
+    html = rendered["html_email"]
 
-    assert rendered["html_email"].count("Revisar y bloquear →") == 5  # one block button per decision (A2)
-    assert "restaurante externo 4" in rendered["html_email"]
-    assert "restaurante externo 5" not in rendered["html_email"]
+    # Módulo cerrado (contrato v6.2): SIN botones por ítem; se listan 5 y "+3 más en la bandeja".
+    assert html.count("Revisar y bloquear →") == 0
+    assert "Revisar y bloquear en la bandeja →" in html
+    assert "restaurante externo 4" in html       # 5º renderizado (índices 0-4)
+    assert "restaurante externo 5" not in html    # 6º: ya no se renderiza
+    assert "+3 más en la bandeja" in html         # 8 totales - 5 mostrados
 
 
 def test_zero_decisions_email():

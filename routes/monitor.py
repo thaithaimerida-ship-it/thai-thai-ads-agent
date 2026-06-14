@@ -39,6 +39,7 @@ def _links() -> dict:
     return {
         "ads": "https://ads.google.com/aw/overview",
         "bloqueo_base": f"{_BASE_URL}/acciones/bloqueo",
+        "bloqueos": f"{_BASE_URL}/acciones/bloqueos?token={_ACTIONS_TOKEN}",  # bandeja (checkboxes)
         "resenas": f"{_BASE_URL}/acciones/resenas?token={_ACTIONS_TOKEN}",
         "revision": f"{_BASE_URL}/acciones/bloqueo?token={_ACTIONS_TOKEN}",
         "token": _ACTIONS_TOKEN,
@@ -206,11 +207,13 @@ def _auth_monitor_send(token: str, authorization: str) -> None:
 
 
 @router.post("/monitor/send")
-async def monitor_send(token: str = "", tipo: str = "", force: bool = False,
+async def monitor_send(token: str = "", tipo: str = "", force: bool = False, marca: str = "",
                        date_range: str = "LAST_7_DAYS", authorization: str = Header(default="")):
     """Genera el digest, lo renderiza (formato completo — el MISMO para lunes y viernes, contrato
     v6.2) y lo envía por SMTP a thaithaimerida@gmail.com. Idempotente por día (force=true reenvía).
-    Reemplaza al Apps Script. `tipo` (lunes|viernes) solo rotula el envío; ya no cambia el formato."""
+    Reemplaza al Apps Script. `tipo` (lunes|viernes) solo rotula el envío; ya no cambia el formato.
+    `marca` (opcional) agrega un sufijo al asunto — útil para envíos de prueba que no deben
+    agruparse en el mismo hilo de Gmail que los reales."""
     _auth_monitor_send(token, authorization)
     date_range = _normalize_date_range(date_range)
     if date_range not in VALID_DATE_RANGES:
@@ -225,7 +228,10 @@ async def monitor_send(token: str = "", tipo: str = "", force: bool = False,
     context = _build_context(date_range, modo)
     context["generated_date"] = _fecha_humana()  # fecha de envío → asunto y encabezado
     digest = build_monitor_digest(payload, context)
-    res = monitor_mailer.enviar_digest(digest.get("subject_email"), digest.get("html_email"), digest.get("text_email"))
+    subject = digest.get("subject_email")
+    if marca.strip():
+        subject = f"{subject} · {marca.strip()[:40]}"  # sufijo de prueba (acotado)
+    res = monitor_mailer.enviar_digest(subject, digest.get("html_email"), digest.get("text_email"))
     acciones_log.registrar({"accion": "monitor_send", "fecha": fecha, "modo": modo,
                             "resultado": "ok" if res.get("enviado") else "error", "force": bool(force), "correo": res})
     ok = bool(res.get("enviado"))

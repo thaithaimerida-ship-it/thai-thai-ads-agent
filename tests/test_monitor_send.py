@@ -23,14 +23,14 @@ def setup(monkeypatch, tmp_path):
     monkeypatch.setenv("MONITOR_SEND_TOKEN", "sec")
     monkeypatch.delenv("MONITOR_SCHEDULER_SA", raising=False)
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
-    cap = {"sent": 0, "mode": None}
+    cap = {"sent": 0, "mode": None, "subject": None}
     monkeypatch.setattr(M, "_build_search_terms_payload",
                         lambda dr: {"status": "success", "date_range": dr, "search_terms": []})
     monkeypatch.setattr(M, "_build_context", lambda dr, mode: cap.update(mode=mode) or {"mode": mode})
     monkeypatch.setattr(M, "build_monitor_digest",
                         lambda p, c: {"subject_email": "S", "html_email": "<html>H", "text_email": "T"})
     monkeypatch.setattr(M.monitor_mailer, "enviar_digest",
-                        lambda s, h, t, destinatario=None: cap.update(sent=cap["sent"] + 1) or {"enviado": True})
+                        lambda s, h, t, destinatario=None: cap.update(sent=cap["sent"] + 1, subject=s) or {"enviado": True})
     return cap
 
 
@@ -59,3 +59,10 @@ def test_send_tipo_solo_rotula(client, setup):
     assert setup["mode"] == "viernes"
     client.post("/monitor/send?token=sec&tipo=lunes&force=true")
     assert setup["mode"] == "lunes"
+
+
+def test_send_marca_sufijo_asunto(client, setup):
+    client.post("/monitor/send?token=sec&force=true")
+    assert setup["subject"] == "S"                                  # sin marca → asunto tal cual
+    client.post("/monitor/send?token=sec&force=true&marca=prueba%2014:32")
+    assert setup["subject"] == "S · prueba 14:32"                   # marca → sufijo al asunto

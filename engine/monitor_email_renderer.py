@@ -163,31 +163,40 @@ def _header(digest: dict[str, Any], text: list[str]) -> str:
 
 # ── A2 posibles bloqueos ─────────────────────────────────────────────────────
 def _posibles_bloqueos(digest: dict[str, Any], text: list[str]) -> str:
-    decisions = (digest.get("decisions", []) or [])[:MAX_RENDERED_DECISIONS]
+    todas = digest.get("decisions", []) or []
+    decisions = todas[:MAX_RENDERED_DECISIONS]
+    total_n = len(todas)
+    total_gasto = sum(_number(d.get("cost_mxn")) for d in todas)
+    bandeja = (digest.get("links") or {}).get("bloqueos") or "#"
     inner = [
         "<div style=\"border:1px solid #e8b4b4;border-radius:8px;padding:12px;\">"
         "<p style=\"font-size:12.5px;font-weight:bold;color:#A32D2D;margin:0 0 4px;\">⚠ Posibles bloqueos — necesitan tu confirmación</p>"
-        "<p style=\"font-size:10.5px;color:#666;margin:0 0 10px;line-height:1.5;\">Estas búsquedas dispararon tus anuncios pero parecen ser de otros negocios. "
-        "Si confirmas, se bloquean: tu anuncio deja de aparecer (y de pagar) cuando alguien las busque.</p>"
     ]
     text.append("Posibles bloqueos — necesitan tu confirmación")
     if decisions:
+        inner.append(
+            "<p style=\"font-size:11px;color:#A32D2D;margin:0 0 10px;\">"
+            f"<b>{total_n} búsqueda{'s' if total_n != 1 else ''}</b> de otros negocios dispararon tus anuncios · "
+            f"<b>{_escape(_money_mxn(total_gasto))}</b> gastados esta semana.</p>"
+        )
+        text.append(f"{total_n} búsquedas de otros negocios · {_money_mxn(total_gasto)} gastados esta semana")
         for i, d in enumerate(decisions, start=1):
             variantes = _number(d.get("variantes_count"))
             var = f" <span style=\"font-size:10.5px;color:#999;\">({_int_text(variantes)} variantes)</span>" if variantes > 1 else ""
             camps = _escape(", ".join(d.get("campaigns") or []) or "—")
             inner.append(
-                "<div style=\"background:#f6f3ec;border-radius:6px;padding:10px 12px;margin-bottom:8px;\">"
-                f"<p style=\"font-size:13px;margin:0;\"><b>{i}. \"{_escape(d.get('term'))}\"</b>{var} — {_escape(_money(d.get('cost_mxn')))} gastados<br>"
-                f"<span style=\"font-size:11px;color:#666;\">Apareció en: {camps}</span></p>"
-                "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:8px;\"><tr>"
-                f"<td width=\"58%\" style=\"padding-right:6px;\">{_btn(d.get('link_bloquear') or '#', 'Revisar y bloquear →', True)}</td>"
-                f"<td width=\"42%\">{_btn(d.get('link_dejar') or '#', 'Dejar', False)}</td>"
-                "</tr></table></div>"
+                "<div style=\"background:#f6f3ec;border-radius:6px;padding:9px 12px;margin-bottom:6px;\">"
+                f"<p style=\"font-size:13px;margin:0;\"><b>{i}. \"{_escape(d.get('term'))}\"</b>{var} — {_escape(_money(d.get('cost_mxn')))}<br>"
+                f"<span style=\"font-size:11px;color:#666;\">Apareció en: {camps}</span></p></div>"
             )
-            text.append(f"• {i}. \"{_text(d.get('term'))}\" — {_money(d.get('cost_mxn'))} gastados — Apareció en: {', '.join(d.get('campaigns') or [])} [Revisar y bloquear]/[Dejar]")
-        inner.append("<p style=\"font-size:10.5px;color:#999;margin-top:9px;line-height:1.5;\">\"Revisar y bloquear\" abre una página segura: ves variantes, "
-                     "campañas y gasto, y confirmas. Solo ahí se ejecuta. \"Dejar\" lo marca válido y no se vuelve a preguntar.</p>")
+            text.append(f"• {i}. \"{_text(d.get('term'))}\" — {_money(d.get('cost_mxn'))} — {', '.join(d.get('campaigns') or [])}")
+        if total_n > len(decisions):
+            inner.append(f"<p style=\"font-size:11px;color:#999;margin:2px 0 10px;\">+{total_n - len(decisions)} más en la bandeja.</p>")
+            text.append(f"+{total_n - len(decisions)} más en la bandeja")
+        inner.append(f"<div style=\"margin-top:4px;\">{_btn(bandeja, 'Revisar y bloquear en la bandeja →', True)}</div>")
+        inner.append("<p style=\"font-size:10.5px;color:#999;margin-top:9px;line-height:1.5;\">En la bandeja marcas varias y las bloqueas juntas, o revisas "
+                     "una por una. Nada se ejecuta sin tu confirmación.</p>")
+        text.append(f"→ Revisar y bloquear en la bandeja: {bandeja}")
     else:
         inner.append("<p>Sin decisiones esta semana. Sin decisiones pendientes.</p>")
         text.append("Sin decisiones esta semana. Sin decisiones pendientes.")
@@ -348,12 +357,32 @@ def _resenas(digest: dict[str, Any], text: list[str]) -> str:
     for r in rv.get("requieren_atencion") or []:
         if int(_number(r.get("estrellas"))) <= 3:
             inner.append(f"<p style=\"font-size:11.5px;color:#791F1F;margin-top:10px;\">⚠️ {_int_text(r.get('estrellas'))}★ requiere tu atención: \"{_escape(r.get('extracto_corto'))}\"</p>")
+
+    # Módulo cerrado: hasta 3 pendientes (5★ sin responder) + "+N más" + UN botón a la bandeja.
+    pendientes = rv.get("pendientes") or []
+    pend_total = int(_number(rv.get("pendientes_total")))
+    if pendientes:
+        inner.append("<p style=\"font-size:11.5px;color:#3C3489;font-weight:bold;margin:12px 0 6px;\">Pendientes de responder (5★):</p>")
+        for p in pendientes:
+            inner.append(
+                "<div style=\"background:#f6f3ec;border-radius:6px;padding:8px 10px;margin-bottom:5px;\">"
+                f"<p style=\"font-size:11.5px;margin:0;\"><b>{_escape(p.get('reviewer'))}</b> · 5★<br>"
+                f"<span style=\"color:#555;\">\"{_escape(p.get('extracto_corto'))}\"</span></p></div>"
+            )
+        extra = pend_total - len(pendientes)
+        if extra > 0:
+            inner.append(f"<p style=\"font-size:11px;color:#999;margin:0 0 8px;\">+{extra} más en la bandeja.</p>")
     link = (digest.get("links") or {}).get("resenas")
-    if link and _number(rv.get("cinco_sin_responder")) > 0:
-        inner.append(f"<div style=\"margin-top:10px;\">{_btn(link, f'Responder las {sin_resp} de 5★ con IA →', True)}</div>")
-    inner.append("<p style=\"font-size:10.5px;color:#534AB7;margin-top:6px;line-height:1.5;\">Abre una página segura: cada reseña con su respuesta "
-                 "redactada por IA, ajustas si quieres y publicas una por una. La de 1★ solo se muestra — esa la respondes tú directo en Google.</p></div>")
+    if link and pend_total > 0:
+        inner.append(f"<div style=\"margin-top:8px;\">{_btn(link, 'Responder reseñas en la bandeja →', True)}</div>")
+    inner.append("<p style=\"font-size:10.5px;color:#534AB7;margin-top:6px;line-height:1.5;\">En la bandeja cada reseña trae su respuesta "
+                 "redactada por IA: ajustas si quieres, marcas varias y publicas. La de 1★ solo se muestra — esa la respondes tú directo en Google.</p></div>")
     text.append(f"Reseñas: promedio {promedio_txt} · {_int_text(nuevas.get('total'))} nuevas · {sin_resp} de 5★ sin responder")
+    if pendientes:
+        for p in pendientes:
+            text.append(f"  • {_text(p.get('reviewer'))} (5★): \"{_text(p.get('extracto_corto'))}\"")
+        if pend_total > len(pendientes):
+            text.append(f"  +{pend_total - len(pendientes)} más en la bandeja")
     text.append("")
     return _section("⭐ Reseñas", "".join(inner))
 
