@@ -91,8 +91,10 @@ def contexto_bloqueo(term: str, payload: dict[str, Any] | None = None) -> dict[s
     }
 
 
-def confirmar_bloqueo(term: str, campaign_ids: list[str], payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Confirma el bloqueo de UN término en las campañas marcadas. Re-valida server-side."""
+def confirmar_bloqueo(term: str, campaign_ids: list[str], payload: dict[str, Any] | None = None,
+                      enviar_correo: bool = True) -> dict[str, Any]:
+    """Confirma el bloqueo de UN término en las campañas marcadas. Re-valida server-side.
+    `enviar_correo=False` lo usa el lote (un solo correo al final)."""
     ctx = contexto_bloqueo(term, payload)
     if not ctx["bloqueable"]:
         return {"status": "rechazada", "motivo": "termino_no_valido"}
@@ -136,9 +138,67 @@ def confirmar_bloqueo(term: str, campaign_ids: list[str], payload: dict[str, Any
             cuerpo += (f"\n• Campaña «{r['campaign']}»:\n"
                        f"  Theme negativo a pegar: {term}\n"
                        f"  Ruta: Campaña → Palabras clave → Temas de palabras clave negativas → Agregar.\n")
-    correo = acciones_email.enviar(asunto, cuerpo)
-    return {"status": "ok", "dry_run": dry, "resultados": resultados,
+    correo = acciones_email.enviar(asunto, cuerpo) if enviar_correo else {"enviado": False, "motivo": "lote"}
+    return {"status": "ok", "dry_run": dry, "resultados": resultados, "term": term,
+            "campanas": entry["campanas"], "match_types": entry["match_types"],
             "pending_manual": entry["pending_manual"], "correo": correo, "registro": registrado}
+
+
+def contextos_bandeja(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Bandeja: contexto de TODOS los términos candidatos a bloqueo (decisiones del digest),
+    construidos de UN solo fetch de search terms. Cada uno como en la página individual."""
+    payload = payload or _payload_busqueda()
+    dictionary = _cargar_diccionario()
+    decisiones = _decisiones(payload)
+    items, vistos = [], set()
+    for d in decisiones:
+        term = d.get("term")
+        if not term:
+            continue
+        gk = _group_key(term, dictionary)
+        if gk in vistos:
+            continue
+        vistos.add(gk)
+        ctx = contexto_bloqueo(term, payload)
+        if ctx.get("bloqueable"):
+            items.append(ctx)
+    items.sort(key=lambda c: c.get("gasto_total", 0), reverse=True)
+    return {"total": len(items), "dry_run": negativos_apply.dry_run_negativos(), "items": items}
+
+
+def confirmar_lote(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Bloquea una SELECCIÓN, UNO POR UNO (mismo confirmar_bloqueo: re-validación + log por
+    término). Tope 10. Fallo parcial no detiene. UN solo correo con el resumen."""
+    items = (items or [])[:10]
+    payload = _payload_busqueda()  # un fetch para todo el lote
+    resultados = []
+    for it in items:
+        term = it.get("term", "")
+        ids = it.get("campaign_ids") or []
+        res = confirmar_bloqueo(term, ids, payload=payload, enviar_correo=False)
+        resultados.append({
+            "term": term, "status": res.get("status"), "motivo": res.get("motivo", ""),
+            "campanas": res.get("campanas", []), "match_types": res.get("match_types", []),
+            "pending_manual": res.get("pending_manual", []),
+        })
+
+    ok = [r for r in resultados if r["status"] == "ok"]
+    fail = [r for r in resultados if r["status"] != "ok"]
+    dry = negativos_apply.dry_run_negativos()
+    verbo = "simulados" if dry else "bloqueados"
+    asunto = f"🚫 {len(ok)} término{'s' if len(ok) != 1 else ''} {verbo}"
+    if fail:
+        asunto += f" · {len(fail)} falló" if len(fail) == 1 else f" · {len(fail)} fallaron"
+    lineas = [f"{len(ok)} término(s) {verbo}" + (f", {len(fail)} fallaron." if fail else "."), ""]
+    for r in ok:
+        lineas.append(f"✓ '{r['term']}' → {', '.join(r['campanas'])} ({', '.join(r['match_types'])})")
+    if fail:
+        lineas += ["", "Fallaron:"]
+        for r in fail:
+            lineas.append(f"✗ '{r['term']}': {r['motivo']}")
+    correo = acciones_email.enviar(asunto, "\n".join(lineas))
+    return {"bloqueados": len(ok), "fallidos": len(fail), "dry_run": dry,
+            "resultados": resultados, "correo": correo}
 
 
 def dejar(term: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
