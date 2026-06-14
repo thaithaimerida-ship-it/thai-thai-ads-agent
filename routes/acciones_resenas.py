@@ -62,7 +62,7 @@ def _card_html(it: dict) -> str:
     rid = _esc(it.get("review_id"))
     comentario = _esc(it.get("comment")) if it.get("comment") else "<i>(sin texto)</i>"
     return (f"<div class='card' id='c-{rid}' data-rid='{rid}'>"
-            f"<label class='selrow' id='sel-{rid}' style='display:none'><input type='checkbox' class='sel' onchange='upd()'> seleccionar</label>"
+            f"<label class='selrow' id='sel-{rid}' style='display:block'><input type='checkbox' class='sel' onchange='upd()'> seleccionar</label>"
             f"<div class='stars'>★★★★★</div><div class='rev'>{_esc(it.get('reviewer') or 'Cliente')}</div>"
             f"<div class='comment'>{comentario}</div>"
             f"<div class='badges' id='b-{rid}'></div>"
@@ -184,7 +184,7 @@ function badges(it){
 function cardHtml(it){
   var rid=it.review_id;
   return "<div class='card' id='c-"+esc(rid)+"' data-rid='"+esc(rid)+"'>"+
-    "<label class='selrow' id='sel-"+esc(rid)+"' style='display:none'><input type='checkbox' class='sel' onchange='upd()'> seleccionar</label>"+
+    "<label class='selrow' id='sel-"+esc(rid)+"' style='display:block'><input type='checkbox' class='sel' onchange='upd()'> seleccionar</label>"+
     "<div class='stars'>★★★★★</div><div class='rev'>"+esc(it.reviewer||"Cliente")+"</div>"+
     "<div class='comment'>"+(it.comment?esc(it.comment):"<i>(sin texto)</i>")+"</div>"+
     "<div class='badges' id='b-"+esc(rid)+"'></div>"+
@@ -207,7 +207,9 @@ function loadDraft(rid){
      var ta=el("t-"+rid); if(ta && !ta.value.trim()){ ta.value=d.borrador; }
      var b=el("b-"+rid); if(b) b.innerHTML=badges(d);
      var st=el("s-"+rid); if(st) st.innerHTML="";
-     var sr=el("sel-"+rid); if(sr) sr.style.display = d.revisar_manual ? "none" : "block";  // flaggeada: sin checkbox de lote
+     // El checkbox ya está visible desde el render. Solo si el borrador sale flaggeado
+     // (no natural) lo ocultamos + desmarcamos: esa se revisa a mano, no entra al lote.
+     var sr=el("sel-"+rid); if(sr && d.revisar_manual){ var cb=sr.querySelector(".sel"); if(cb) cb.checked=false; sr.style.display="none"; upd(); }
    })
    .catch(function(e){ clearTimeout(to); showError(rid, e&&e.name==="AbortError"?"tardó demasiado":((e&&e.message)||"error de red")); });
 }
