@@ -391,9 +391,12 @@ LANDING_OK_STATUS_CODES = [200, 301, 302]
 
 EMAIL_SMTP_HOST  = "smtp.gmail.com"
 EMAIL_SMTP_PORT  = 587                                    # STARTTLS
-EMAIL_FROM       = "administracion@thaithaimerida.com.mx"
+EMAIL_FROM       = "administracion@thaithaimerida.com.mx"  # remitente — NO cambia
 EMAIL_FROM_NAME  = "Thai Thai Ads Agent"
-EMAIL_TO         = _os.getenv("EMAIL_TO", "administracion@thaithaimerida.com.mx")
+# Destinatario ÚNICO de TODOS los correos (monitor + confirmaciones reseñas/negativos).
+# Para cambiarlo, solo la env var MONITOR_RECIPIENT — sin tocar código. (EMAIL_TO = alias legacy.)
+MONITOR_RECIPIENT = _os.getenv("MONITOR_RECIPIENT", _os.getenv("EMAIL_TO", "administracion@thaithaimerida.com.mx"))
+EMAIL_TO         = MONITOR_RECIPIENT
 
 # App Password — solo desde variable de entorno, nunca hardcodeado
 GMAIL_APP_PASSWORD = _os.getenv("GMAIL_APP_PASSWORD", "")
