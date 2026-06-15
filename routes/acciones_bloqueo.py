@@ -9,7 +9,6 @@ JAMÁS BROAD, JAMÁS batch, jamás campañas no marcadas. Re-validación server-
 from __future__ import annotations
 
 import html
-import urllib.parse
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -46,11 +45,29 @@ async def bloqueo_ui(term: str = "", token: str = ""):
     return HTMLResponse(content=render_bloqueo(ctx, token))
 
 
+_MOTIVO_MSG = {
+    "termino_no_valido": "Término no válido (no es una decisión real)",
+    "ya_bloqueado": "Ya estaba bloqueado",
+    "sin_campanas_validas": "Sin campañas válidas para bloquear",
+}
+
+
 @router.post("/acciones/bloqueo/confirmar")
 async def bloqueo_confirmar(body: ConfirmarBody, token: str = ""):
+    """Bloquea UN término (re-validación server-side, DRY_RUN default). Devuelve SIEMPRE JSON con
+    {ok, dry_run, mensaje, ...}. Lo consumen la bandeja (botón individual in-place) y la página
+    individual; ambas leen el mismo JSON."""
     _require_token(token)
     res = negativos_service.confirmar_bloqueo(body.term, body.campaign_ids)
-    return JSONResponse(content=res, status_code=200 if res.get("status") == "ok" else 409)
+    ok = res.get("status") == "ok"
+    dry = bool(res.get("dry_run", True))
+    if ok:
+        mensaje = "Simulado (dry-run) — no se bloqueó de verdad" if dry else "Bloqueado"
+    else:
+        motivo = res.get("motivo", "")
+        mensaje = _MOTIVO_MSG.get(motivo, motivo or "No se pudo bloquear")
+    return JSONResponse(content={**res, "ok": ok, "dry_run": dry, "mensaje": mensaje},
+                        status_code=200 if ok else 409)
 
 
 @router.post("/acciones/bloqueo/dejar")
@@ -210,20 +227,23 @@ def _bandeja_card(ctx: dict, token: str) -> str:
             filas.append(f"<div class='camp off'>{nombre} <span class='pill'>theme (Smart)</span> · individual <span class='gasto'>${g}</span>{nota}</div>")
     ya = ctx.get("ya_bloqueado_ts")
     estado = f"<div class='estado'>✓ Ya bloqueado el {_esc(str(ya)[:10])}</div>" if ya else ""
+    ids_attr = _esc(",".join(search_ids))
     if ya:
-        chk = ""
+        chk, row = "", ""  # ya bloqueado: nada que hacer
     elif search_ids:
-        chk = (f"<label class='selrow'><input type='checkbox' class='sel' data-ids='{_esc(','.join(search_ids))}' onchange='upd()'> "
+        chk = (f"<label class='selrow'><input type='checkbox' class='sel' data-ids='{ids_attr}' onchange='upd()'> "
                "seleccionar para el lote (EXACT en búsqueda)</label>")
+        # Botón individual: bloquea EN EL ACTO (fetch), sin navegar. Mismo término, EXACT en búsqueda.
+        row = (f"<div class='row'><button class='btn' data-ids='{ids_attr}' onclick='bloquear(this)'>Bloquear</button>"
+               f"<button class='btn-sec' onclick='dejar(this)'>Dejar</button></div>")
     else:
-        chk = "<div class='nota'>Solo Smart (manual) — usa “Revisar y bloquear”.</div>"
-    link = f"/acciones/bloqueo?term={urllib.parse.quote(term_raw)}&token={_esc(token)}"
+        chk = "<div class='nota'>Solo Smart — se aplica a mano en Google Ads (no hay negativo EXACT que aplicar aquí).</div>"
+        row = f"<div class='row'><button class='btn-sec' onclick='dejar(this)'>Dejar</button></div>"
     return (f"<div class='card' data-term=\"{term}\">{chk}"
             f"<div class='term'>\"{term}\"</div>"
             f"<div class='kpi'>{_esc(_variantes(n))} · gasto <b>${gasto}</b></div>{estado}"
             f"<div class='camps'>{''.join(filas)}</div>"
-            f"<div class='row'><a class='btn' href=\"{link}\">Revisar y bloquear</a>"
-            f"<button class='btn-sec' onclick='dejar(this)'>Dejar</button></div>"
+            f"{row}"
             f"<div class='msg'></div></div>")
 
 
@@ -253,7 +273,8 @@ _BANDEJA = r"""<!doctype html>
   .camp.off{opacity:.75;background:#faf7f2;} .gasto{float:right;color:#777;font-weight:bold;} .nota{color:#8a5a1f;font-size:11px;margin-top:4px;}
   .estado{background:#EAF3DE;color:#27500A;border-radius:8px;padding:9px 11px;font-size:12.5px;font-weight:bold;margin:6px 0;}
   .row{display:flex;gap:8px;margin-top:10px;}
-  .btn{flex:1.5;background:#9b2f2f;color:#fff;text-decoration:none;text-align:center;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:bold;}
+  .btn{flex:1.5;background:#9b2f2f;color:#fff;text-decoration:none;text-align:center;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:bold;cursor:pointer;}
+  .btn:disabled{background:#c2b8b0;color:#fff;cursor:not-allowed;}
   .btn-sec{flex:1;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:8px;padding:10px;font-size:13px;cursor:pointer;font-weight:bold;}
   .msg{font-size:12px;margin-top:7px;font-weight:bold;} .ok{color:#1a7f37;} .err{color:#9b2f2f;}
   #lote{display:none;position:sticky;bottom:8px;width:100%;background:#9b2f2f;color:#fff;border:none;border-radius:8px;padding:13px;font-size:14px;cursor:pointer;font-weight:bold;margin:10px 0 4px;box-shadow:0 6px 16px rgba(0,0,0,.2);}
@@ -301,4 +322,25 @@ function dejar(btn){ var card=btn.closest(".card"); var term=card.getAttribute("
   fetch("/acciones/bloqueo/dejar?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({term:term})})
    .then(function(r){return r.json();}).then(function(j){ msg.innerHTML="<span class='ok'>✓ Marcado como válido. No se vuelve a preguntar.</span>"; var cb=card.querySelector(".sel"); if(cb){cb.checked=false;cb.disabled=true;} upd(); })
    .catch(function(){ msg.innerHTML="<span class='err'>Error de red</span>"; }); }
+function bloquear(btn){
+  var card=btn.closest(".card"); var term=card.getAttribute("data-term"); var msg=card.querySelector(".msg");
+  var idsAttr=btn.getAttribute("data-ids")||""; var ids=idsAttr.split(",").filter(Boolean);
+  btn.disabled=true; btn.textContent="Bloqueando…"; msg.className="msg"; msg.textContent="";
+  fetch("/acciones/bloqueo/confirmar?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({term:term,campaign_ids:ids})})
+   .then(function(r){ return r.json().then(function(j){ return {http:r.status, j:j}; }); })
+   .then(function(res){
+     var j=res.j||{};
+     if(j.ok){
+       btn.textContent="Bloquear"; btn.disabled=true;  // queda deshabilitado permanentemente
+       msg.innerHTML="<span class='ok'>✓ "+esc(j.mensaje||(j.dry_run?"Simulado (dry-run) — no se bloqueó de verdad":"Bloqueado"))+"</span>";
+       var cb=card.querySelector(".sel"); if(cb){cb.checked=false;cb.disabled=true;} upd();
+     } else {
+       var motivo=j.motivo||"", txt=j.mensaje||j.detail||("HTTP "+res.http);
+       msg.innerHTML="<span class='err'>No se pudo: "+esc(txt)+"</span>";
+       if(motivo==="ya_bloqueado"){ btn.textContent="Bloquear"; btn.disabled=true; }  // ya bloqueado → queda gris
+       else { btn.disabled=false; btn.textContent="Bloquear"; }                        // rehabilita
+     }
+   })
+   .catch(function(){ msg.innerHTML="<span class='err'>Error de red</span>"; btn.disabled=false; btn.textContent="Bloquear"; });
+}
 </script></body></html>"""

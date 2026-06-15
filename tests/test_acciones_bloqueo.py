@@ -99,6 +99,46 @@ def test_sin_token_403(client, monkeypatch):
     assert r.status_code == 403
 
 
+def test_confirmar_devuelve_json_ok_dry_run_mensaje(client, monkeypatch):
+    # El botón individual de la bandeja consume este JSON: {ok, dry_run, mensaje}.
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "confirmar_bloqueo",
+                        lambda term, ids: {"status": "ok", "dry_run": True, "term": term, "match_types": ["EXACT"]})
+    r = client.post("/acciones/bloqueo/confirmar?token=secreto", json={"term": "casa thai", "campaign_ids": ["111"]})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["ok"] is True and j["dry_run"] is True and "Simulado" in j["mensaje"]
+    # rechazo → ok False + mensaje humano mapeado (y status 409)
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "confirmar_bloqueo",
+                        lambda term, ids: {"status": "rechazada", "motivo": "ya_bloqueado"})
+    r2 = client.post("/acciones/bloqueo/confirmar?token=secreto", json={"term": "x", "campaign_ids": ["1"]})
+    assert r2.status_code == 409
+    j2 = r2.json()
+    assert j2["ok"] is False and j2["motivo"] == "ya_bloqueado" and "Ya estaba bloqueado" in j2["mensaje"]
+
+
+def test_bandeja_card_boton_bloquear_inplace_sin_link():
+    # El botón individual dispara in-place (onclick='bloquear') y YA NO enlaza la página individual.
+    con_search = {"term": "almar restaurante merida", "variantes_count": 1, "gasto_total": 16, "ya_bloqueado_ts": None,
+                  "campanas": [{"name": "Experiencia 2026", "id": "222", "channel": "SEARCH", "gasto": 16, "permitido": True}]}
+    h = acciones_bloqueo._bandeja_card(con_search, "TOK")
+    assert "onclick='bloquear(this)'" in h and ">Bloquear<" in h
+    assert "/acciones/bloqueo?term=" not in h          # ya no navega a la individual
+    assert "Revisar y bloquear" not in h               # botón renombrado
+
+
+def test_pagina_individual_sigue_html(client, monkeypatch):
+    # /acciones/bloqueo (singular) se queda viva en modo HTML para accesos directos.
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "contexto_bloqueo",
+                        lambda term, *a, **k: {"term": term, "variantes": [], "variantes_count": 0,
+                                               "gasto_total": 0, "contiene_marca": False, "campanas": [],
+                                               "ya_bloqueado_ts": None, "dry_run": True, "bloqueable": True})
+    r = client.get("/acciones/bloqueo?term=casa+thai&token=secreto")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    assert "Revisar y bloquear" in r.text              # la página individual conserva su flujo
+
+
 def test_term_arbitrario_rechazado(monkeypatch, tmp_path):
     monkeypatch.setenv("DRY_RUN_NEGATIVOS", "true")
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
