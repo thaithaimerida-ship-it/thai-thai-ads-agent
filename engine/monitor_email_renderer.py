@@ -362,7 +362,10 @@ def _resenas(digest: dict[str, Any], text: list[str]) -> str:
     pendientes = rv.get("pendientes") or []
     pend_total = int(_number(rv.get("pendientes_total")))
     if pendientes:
-        inner.append("<p style=\"font-size:11.5px;color:#3C3489;font-weight:bold;margin:12px 0 6px;\">Pendientes de responder (5★):</p>")
+        inner.append("<p style=\"font-size:11.5px;color:#3C3489;font-weight:bold;margin:12px 0 2px;\">Pendientes de responder (5★)</p>")
+        inner.append(f"<p style=\"font-size:11px;color:#534AB7;margin:0 0 6px;\">"
+                     f"<b>{_int_text(rv.get('cinco_sin_responder'))}</b> nuevas esta semana · "
+                     f"<b>{pend_total}</b> sin responder en total</p>")
         for p in pendientes:
             inner.append(
                 "<div style=\"background:#f6f3ec;border-radius:6px;padding:8px 10px;margin-bottom:5px;\">"
@@ -377,7 +380,7 @@ def _resenas(digest: dict[str, Any], text: list[str]) -> str:
         inner.append(f"<div style=\"margin-top:8px;\">{_btn(link, 'Responder reseñas en la bandeja →', True)}</div>")
     inner.append("<p style=\"font-size:10.5px;color:#534AB7;margin-top:6px;line-height:1.5;\">En la bandeja cada reseña trae su respuesta "
                  "redactada por IA: ajustas si quieres, marcas varias y publicas. La de 1★ solo se muestra — esa la respondes tú directo en Google.</p></div>")
-    text.append(f"Reseñas: promedio {promedio_txt} · {_int_text(nuevas.get('total'))} nuevas · {sin_resp} de 5★ sin responder")
+    text.append(f"Reseñas: promedio {promedio_txt} · {sin_resp} nuevas esta semana · {_int_text(pend_total)} sin responder en total")
     if pendientes:
         for p in pendientes:
             text.append(f"  • {_text(p.get('reviewer'))} (5★): \"{_text(p.get('extracto_corto'))}\"")

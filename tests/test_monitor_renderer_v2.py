@@ -502,6 +502,7 @@ def test_resenas_modulo_cerrado():
     digest = build_monitor_digest(_payload([_term(query="bankok casa thai", cost=44.0, clicks=35)]), _rich_context())
     html = digest["html_email"]
     assert "Pendientes de responder" in html
+    assert "nuevas esta semana · " in html and "sin responder en total" in html  # conteo
     assert "Responder reseñas en la bandeja →" in html
     assert "/acciones/resenas?token=" in html
     assert "de 5★ con IA" not in html                               # botón viejo eliminado
