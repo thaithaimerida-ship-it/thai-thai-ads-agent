@@ -84,11 +84,28 @@ async def bloqueos_bandeja(token: str = ""):
     return HTMLResponse(content=render_bandeja(data, token))
 
 
+def _mensaje_resultado(ok: bool, dry: bool, motivo: str) -> str:
+    if ok:
+        return "Simulado (dry-run) — no se bloqueó de verdad" if dry else "Bloqueado"
+    return _MOTIVO_MSG.get(motivo, motivo or "No se pudo bloquear")
+
+
 @router.post("/acciones/bloqueos/lote")
 async def bloqueos_lote(body: LoteBloqueoBody, token: str = ""):
+    """Lote: bloquea la selección UNO POR UNO (mismas guardas), UN solo correo. Enriquece cada
+    resultado con {ok, dry_run, mensaje} (aditivo) para que el JS actualice cada tarjeta al MISMO
+    estado final que el flujo individual. No toca el correo único ni los candados del service."""
     _require_token(token)
     items = [{"term": i.term, "campaign_ids": i.campaign_ids} for i in body.items]
-    return JSONResponse(content=negativos_service.confirmar_lote(items))
+    res = negativos_service.confirmar_lote(items)
+    dry = bool(res.get("dry_run", True))
+    for r in res.get("resultados", []):
+        r_ok = r.get("status") == "ok"
+        r["ok"] = r_ok
+        r["dry_run"] = dry
+        r["mensaje"] = _mensaje_resultado(r_ok, dry, r.get("motivo", ""))
+    res["ok"] = True  # la petición se procesó; el desglose va por término en `resultados`
+    return JSONResponse(content=res)
 
 
 def _esc(v) -> str:
@@ -297,9 +314,13 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){retur
 function cssesc(s){return String(s).replace(/["\\]/g,"\\$&");}
 function _checks(){return Array.prototype.slice.call(document.querySelectorAll(".sel"));}
 function _sel(){return _checks().filter(function(c){return c.checked && !c.disabled;});}
+// Estado final de una tarjeta bloqueada (individual o lote): checkbox off+disabled+data-done,
+// botón gris. data-done evita que upd() lo rehabilite por la lógica de MAXSEL.
+function _hecho(card){ var cb=card.querySelector(".sel"), btn=card.querySelector("button.btn");
+  if(cb){cb.checked=false;cb.disabled=true;cb.setAttribute("data-done","1");} if(btn){btn.disabled=true;} }
 function upd(){
   var sel=_sel();
-  _checks().forEach(function(c){ if(!c.checked) c.disabled=(sel.length>=MAXSEL); });
+  _checks().forEach(function(c){ if(!c.checked && !c.hasAttribute("data-done")) c.disabled=(sel.length>=MAXSEL); });
   var b=el("lote"); b.textContent="Bloquear seleccionados ("+sel.length+")"; b.disabled=sel.length===0; b.style.display=sel.length>0?"block":"none";
   el("loteMsg").innerHTML = sel.length>=MAXSEL ? "<span style='color:#8b5e14'>Máximo 10 por lote.</span>":"";
 }
@@ -310,9 +331,12 @@ function bloquearLote(){
   fetch("/acciones/bloqueos/lote?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:items})})
    .then(function(r){return r.json();})
    .then(function(d){
-     (d.resultados||[]).forEach(function(r){ var card=document.querySelector('.card[data-term="'+cssesc(r.term)+'"]'); if(!card) return; var msg=card.querySelector(".msg"), cb=card.querySelector(".sel");
-       if(r.status==="ok"){ msg.innerHTML="<span class='ok'>✓ "+(d.dry_run?"Simulado":"Bloqueado")+"</span>"; if(cb){cb.checked=false;cb.disabled=true;} }
-       else { msg.innerHTML="<span class='err'>No se pudo: "+esc(r.motivo||"error")+"</span>"; } });
+     (d.resultados||[]).forEach(function(r){ var card=document.querySelector('.card[data-term="'+cssesc(r.term)+'"]'); if(!card) return;
+       var msg=card.querySelector(".msg");
+       if(r.ok){ // MISMO estado final que el flujo individual: botón gris + leyenda + checkbox off
+         msg.innerHTML="<span class='ok'>✓ "+esc(r.mensaje||(r.dry_run?"Simulado (dry-run) — no se bloqueó de verdad":"Bloqueado"))+"</span>";
+         _hecho(card); }
+       else { msg.innerHTML="<span class='err'>No se pudo: "+esc(r.mensaje||r.motivo||"error")+"</span>"; } });
      el("loteMsg").innerHTML="<span class='ok'>"+d.bloqueados+" "+(d.dry_run?"simulados":"bloqueados")+(d.fallidos?(" · "+d.fallidos+" fallaron"):"")+"</span>";
      upd();
    })
@@ -320,7 +344,7 @@ function bloquearLote(){
 }
 function dejar(btn){ var card=btn.closest(".card"); var term=card.getAttribute("data-term"); var msg=card.querySelector(".msg"); msg.className="msg"; msg.textContent="Guardando…";
   fetch("/acciones/bloqueo/dejar?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({term:term})})
-   .then(function(r){return r.json();}).then(function(j){ msg.innerHTML="<span class='ok'>✓ Marcado como válido. No se vuelve a preguntar.</span>"; var cb=card.querySelector(".sel"); if(cb){cb.checked=false;cb.disabled=true;} upd(); })
+   .then(function(r){return r.json();}).then(function(j){ msg.innerHTML="<span class='ok'>✓ Marcado como válido. No se vuelve a preguntar.</span>"; var cb=card.querySelector(".sel"); if(cb){cb.checked=false;cb.disabled=true;cb.setAttribute("data-done","1");} upd(); })
    .catch(function(){ msg.innerHTML="<span class='err'>Error de red</span>"; }); }
 function bloquear(btn){
   var card=btn.closest(".card"); var term=card.getAttribute("data-term"); var msg=card.querySelector(".msg");
@@ -331,14 +355,14 @@ function bloquear(btn){
    .then(function(res){
      var j=res.j||{};
      if(j.ok){
-       btn.textContent="Bloquear"; btn.disabled=true;  // queda deshabilitado permanentemente
+       btn.textContent="Bloquear";
        msg.innerHTML="<span class='ok'>✓ "+esc(j.mensaje||(j.dry_run?"Simulado (dry-run) — no se bloqueó de verdad":"Bloqueado"))+"</span>";
-       var cb=card.querySelector(".sel"); if(cb){cb.checked=false;cb.disabled=true;} upd();
+       _hecho(card); upd();  // botón gris + checkbox off/disabled (estado final único)
      } else {
        var motivo=j.motivo||"", txt=j.mensaje||j.detail||("HTTP "+res.http);
        msg.innerHTML="<span class='err'>No se pudo: "+esc(txt)+"</span>";
-       if(motivo==="ya_bloqueado"){ btn.textContent="Bloquear"; btn.disabled=true; }  // ya bloqueado → queda gris
-       else { btn.disabled=false; btn.textContent="Bloquear"; }                        // rehabilita
+       if(motivo==="ya_bloqueado"){ btn.textContent="Bloquear"; _hecho(card); upd(); }  // ya bloqueado → estado final
+       else { btn.disabled=false; btn.textContent="Bloquear"; }                          // rehabilita
      }
    })
    .catch(function(){ msg.innerHTML="<span class='err'>Error de red</span>"; btn.disabled=false; btn.textContent="Bloquear"; });
