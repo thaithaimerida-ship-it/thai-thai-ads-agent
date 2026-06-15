@@ -117,6 +117,29 @@ def test_confirmar_devuelve_json_ok_dry_run_mensaje(client, monkeypatch):
     assert j2["ok"] is False and j2["motivo"] == "ya_bloqueado" and "Ya estaba bloqueado" in j2["mensaje"]
 
 
+def test_lote_endpoint_desglose_por_termino(client, monkeypatch):
+    # El JS necesita por término {term, ok, dry_run, mensaje} para actualizar cada tarjeta.
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "confirmar_lote",
+                        lambda items: {"bloqueados": 2, "fallidos": 0, "dry_run": True, "correo": {"enviado": True},
+                                       "resultados": [{"term": "a", "status": "ok", "motivo": ""},
+                                                      {"term": "b", "status": "ok", "motivo": ""}]})
+    j = client.post("/acciones/bloqueos/lote?token=secreto",
+                    json={"items": [{"term": "a"}, {"term": "b"}]}).json()
+    assert j["ok"] is True and len(j["resultados"]) == 2
+    for res in j["resultados"]:
+        assert res["ok"] is True and res["dry_run"] is True and "Simulado (dry-run)" in res["mensaje"]
+    # un fallo en el lote → ese término trae ok False + mensaje humano (sin romper el resto)
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "confirmar_lote",
+                        lambda items: {"bloqueados": 1, "fallidos": 1, "dry_run": True, "correo": {"enviado": True},
+                                       "resultados": [{"term": "a", "status": "ok", "motivo": ""},
+                                                      {"term": "b", "status": "rechazada", "motivo": "ya_bloqueado"}]})
+    j2 = client.post("/acciones/bloqueos/lote?token=secreto",
+                     json={"items": [{"term": "a"}, {"term": "b"}]}).json()
+    fb = [x for x in j2["resultados"] if x["term"] == "b"][0]
+    assert fb["ok"] is False and "Ya estaba bloqueado" in fb["mensaje"]
+
+
 def test_bandeja_card_boton_bloquear_inplace_sin_link():
     # El botón individual dispara in-place (onclick='bloquear') y YA NO enlaza la página individual.
     con_search = {"term": "almar restaurante merida", "variantes_count": 1, "gasto_total": 16, "ya_bloqueado_ts": None,
