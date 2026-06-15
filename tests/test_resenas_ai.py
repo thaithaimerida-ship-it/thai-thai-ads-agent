@@ -163,6 +163,21 @@ def test_c7_naturalidad_mockea_llm(monkeypatch):
     assert R.evaluar_naturalidad("Gracias por tu visita")[0] is True
 
 
+def test_c7_doble_pase_discrepancia_da_natural(monkeypatch):
+    # El juez LLM es ruidoso: si un pase dice artificial pero el otro natural, NO se flaggea
+    # (default natural). Recalibración 2026-06-14: evita falsos positivos en respuestas cálidas.
+    respuestas = iter(["ARTIFICIAL: auténtica comida tailandesa", "NATURAL"])
+    monkeypatch.setattr(R.llm_client, "generate_text", lambda **k: next(respuestas))
+    assert R.evaluar_naturalidad("Qué gusto que te encantara, vente por más")[0] is True
+
+
+def test_c7_doble_pase_confirma_artificial(monkeypatch):
+    # Dos pases coinciden en artificial (frase de folleto real) → SÍ se flaggea.
+    monkeypatch.setattr(R.llm_client, "generate_text", lambda **k: "ARTIFICIAL: deleitar tu paladar")
+    natural, motivo = R.evaluar_naturalidad("Ven a deleitar tu paladar")
+    assert natural is False and "deleitar tu paladar" in motivo
+
+
 def test_c8_frase_repetida_interna():
     # caso real Wendy: "gracias por tomarte el tiempo de escribir" ×2.
     doble = "Gracias por tomarte el tiempo de escribir; de corazón, gracias por tomarte el tiempo de escribir"
