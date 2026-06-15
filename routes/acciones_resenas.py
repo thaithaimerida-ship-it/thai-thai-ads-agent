@@ -226,7 +226,7 @@ function pub(id){
   fetch("/acciones/resenas/publicar?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({review_id:id,texto:ta.value})})
    .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
-   .then(function(res){ if(res.ok){ msg.innerHTML="<div class='ok'>✓ "+(res.j.dry_run?"Simulado (dry-run)":"Publicado")+"</div>"; ta.disabled=true; _quitarSel(id); }
+   .then(function(res){ if(res.ok){ msg.innerHTML="<div class='ok'>✓ "+(res.j.dry_run?"Simulada (dry-run)":"Publicada")+"</div>"; btn.disabled=true; ta.disabled=true; _quitarSel(id); }
      else { btn.disabled=false; msg.innerHTML="<div class='err'>No se pudo: "+esc(res.j.motivo||"error")+"</div>"; } })
    .catch(function(){ btn.disabled=false; msg.innerHTML="<div class='err'>Error de red</div>"; });
 }
