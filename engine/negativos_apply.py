@@ -35,9 +35,11 @@ def contiene_marca(term: str) -> bool:
     return bool(_BRAND_RE.search(_norm(term)))
 
 
-def _client():  # pragma: no cover - solo en modo real
-    from google.ads.googleads.client import GoogleAdsClient
-    return GoogleAdsClient.load_from_storage("google-ads.yaml")
+def _client():
+    # MISMO constructor que la ruta de lectura: env vars (canónicas en Cloud Run) → yaml solo
+    # local. Antes usaba load_from_storage("google-ads.yaml"), un archivo ausente en Cloud Run
+    # (gitignored) → FileNotFoundError al ejercer la escritura real. Mismo OAuth scope para R/W.
+    return ads_client.get_ads_client()
 
 
 def aplicar_en_campana(term: str, campana: dict[str, Any]) -> dict[str, Any]:

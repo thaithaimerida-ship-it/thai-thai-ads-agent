@@ -9,13 +9,22 @@ JAMÁS BROAD, JAMÁS batch, jamás campañas no marcadas. Re-validación server-
 from __future__ import annotations
 
 import html
+import logging
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from engine import negativos_service
+from engine import negativos_apply, negativos_service
 from routes.acciones_resenas import _require_token
+
+logger = logging.getLogger(__name__)
+
+
+def _error_mensaje(exc: Exception) -> str:
+    """Mensaje corto y seguro para la UI (sin secretos). Ej.: 'Error del servidor: [Errno 2]…'."""
+    detalle = (str(exc).strip().splitlines() or [""])[0][:120] or type(exc).__name__
+    return f"Error del servidor: {detalle}"
 
 router = APIRouter(tags=["acciones-bloqueo"])
 
@@ -58,7 +67,12 @@ async def bloqueo_confirmar(body: ConfirmarBody, token: str = ""):
     {ok, dry_run, mensaje, ...}. Lo consumen la bandeja (botón individual in-place) y la página
     individual; ambas leen el mismo JSON."""
     _require_token(token)
-    res = negativos_service.confirmar_bloqueo(body.term, body.campaign_ids)
+    try:
+        res = negativos_service.confirmar_bloqueo(body.term, body.campaign_ids)
+    except Exception as exc:  # NUNCA un 500 sin body JSON → el JS muestra el motivo real
+        logger.exception("bloqueo_confirmar: fallo aplicando '%s'", body.term)
+        return JSONResponse(content={"ok": False, "dry_run": negativos_apply.dry_run_negativos(),
+                                     "mensaje": _error_mensaje(exc)}, status_code=500)
     ok = res.get("status") == "ok"
     dry = bool(res.get("dry_run", True))
     if ok:
@@ -97,7 +111,12 @@ async def bloqueos_lote(body: LoteBloqueoBody, token: str = ""):
     estado final que el flujo individual. No toca el correo único ni los candados del service."""
     _require_token(token)
     items = [{"term": i.term, "campaign_ids": i.campaign_ids} for i in body.items]
-    res = negativos_service.confirmar_lote(items)
+    try:
+        res = negativos_service.confirmar_lote(items)
+    except Exception as exc:  # NUNCA un 500 sin body JSON
+        logger.exception("bloqueos_lote: fallo en el lote")
+        return JSONResponse(content={"ok": False, "dry_run": negativos_apply.dry_run_negativos(),
+                                     "mensaje": _error_mensaje(exc), "resultados": []}, status_code=500)
     dry = bool(res.get("dry_run", True))
     for r in res.get("resultados", []):
         r_ok = r.get("status") == "ok"
@@ -331,6 +350,7 @@ function bloquearLote(){
   fetch("/acciones/bloqueos/lote?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:items})})
    .then(function(r){return r.json();})
    .then(function(d){
+     if(d.ok===false){ el("loteMsg").innerHTML="<span class='err'>"+esc(d.mensaje||"No se pudo aplicar el lote")+"</span>"; upd(); return; }
      (d.resultados||[]).forEach(function(r){ var card=document.querySelector('.card[data-term="'+cssesc(r.term)+'"]'); if(!card) return;
        var msg=card.querySelector(".msg");
        if(r.ok){ // MISMO estado final que el flujo individual: botón gris + leyenda + checkbox off

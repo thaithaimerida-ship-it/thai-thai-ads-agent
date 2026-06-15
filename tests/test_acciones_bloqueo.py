@@ -284,3 +284,55 @@ def test_cosmetico_variante_singular_plural():
     assert acciones_bloqueo._variantes(1) == "1 variante"
     assert acciones_bloqueo._variantes(2) == "2 variantes"
     assert acciones_bloqueo._variantes(0) == "0 variantes"
+
+
+def test_bloqueo_real_usa_get_ads_client_no_yaml(monkeypatch, tmp_path):
+    # Modo REAL (DRY_RUN=false): la escritura construye el cliente con ads_client.get_ads_client()
+    # (env vars), JAMÁS load_from_storage("google-ads.yaml") — ese archivo no existe en Cloud Run.
+    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "false")
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(negativos_service.acciones_email, "enviar", lambda *a, **k: {"enviado": False})
+    calls = {"get_client": 0, "add": None}
+
+    def _fake_client():
+        calls["get_client"] += 1
+        return object()
+
+    def _fake_add(client, customer_id, campaign_id, keyword_text, match_type="BROAD"):
+        calls["add"] = (keyword_text, match_type, campaign_id)
+        return {"status": "success"}
+
+    monkeypatch.setattr(negativos_apply.ads_client, "get_ads_client", _fake_client)
+    monkeypatch.setattr(negativos_apply.ads_client, "add_negative_keyword", _fake_add)
+    res = negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=_payload())
+    assert res["status"] == "ok"
+    assert any(r.get("applied") for r in res["resultados"])   # aplicado de verdad en Ads
+    assert calls["get_client"] >= 1                            # cliente vía env vars (no yaml)
+    assert calls["add"][1] == "EXACT"                          # jamás BROAD
+
+
+def test_confirmar_500_devuelve_json_con_mensaje(client, monkeypatch):
+    # Si la escritura revienta, el endpoint devuelve JSON {ok:false, mensaje} (nunca 500 sin body).
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+
+    def _boom(term, ids):
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'google-ads.yaml'")
+
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "confirmar_bloqueo", _boom)
+    r = client.post("/acciones/bloqueo/confirmar?token=secreto", json={"term": "x", "campaign_ids": ["111"]})
+    assert r.status_code == 500
+    j = r.json()
+    assert j["ok"] is False and "Error del servidor" in j["mensaje"]
+
+
+def test_lote_500_devuelve_json_con_mensaje(client, monkeypatch):
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+
+    def _boom(items):
+        raise RuntimeError("falla interna")
+
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "confirmar_lote", _boom)
+    r = client.post("/acciones/bloqueos/lote?token=secreto", json={"items": [{"term": "x"}]})
+    assert r.status_code == 500
+    j = r.json()
+    assert j["ok"] is False and "Error del servidor" in j["mensaje"] and j["resultados"] == []

@@ -253,6 +253,9 @@ Cuando se despliegue el digest completo:
   `gcloud run services describe thai-thai-ads-agent --region=us-central1 --format=json | jq -r '.spec.template.spec.containers[0].env[] | select(.name=="DRY_RUN_RESENAS") | .value'`. Nunca el array entero.
 - Para confirmar flags no sensibles (DRY_RUN_*), preferir el comportamiento observable (campo `dry_run` de un endpoint) en vez de leer el env.
 
+### Pendiente (no urgente): `ACCIONES_TOKEN` viaja en la URL
+Las páginas/acciones (`/acciones/resenas`, `/acciones/bloqueos`, `/acciones/bloqueo/confirmar`, etc.) reciben el token como query param `?token=…`. Eso hace que el token aparezca en los **logs de request de Cloud Run** (httpRequest.requestUrl). Mover a header (`Authorization`/`X-Acciones-Token`) o body; los links del correo tendrían que pasar a un esquema que no exponga el token en la URL. Detectado durante el diagnóstico del bug de bloqueo real (2026-06-15). Bajo riesgo (solo Hugo accede a los logs), pero conviene cerrarlo.
+
 ### Incidente 2026-06-11: env dump → rotación de secretos
 Un `describe ...--format="value(env)"` volcó todos los secretos al transcript. Rotación:
 - **✅ COMPLETADAS 2026-06-11 (en Secret Manager, verificadas):** `DATABASE_URL` (reservas — keepalive `SELECT 1` ok + reserva de prueba escribió en Supabase), `OPENAI_API_KEY` (borrador de reseña genera en vivo), `GOOGLE_CREDENTIALS_JSON` (Search Console del digest trae datos; SA key vieja `3a31cd29…` → borrar en consola). Las 3 ya no están en env plano. Swap por-llave atómico (`--remove-env-vars=K --update-secrets=K=secret:latest`); el combinado con varias llaves a la vez falla en gcloud.
