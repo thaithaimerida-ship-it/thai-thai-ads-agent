@@ -221,7 +221,10 @@ def test_page_lote_excluye_flaggeadas_y_tope_10(client, monkeypatch):
         "total": 0, "offset": 0, "limit": 10, "hay_mas": False, "dry_run": False, "items": []})
     html = client.get("/acciones/resenas?token=secreto").text
     assert "Publicar seleccionadas" in html                 # botón del lote
-    assert 'd.revisar_manual ? "none"' in html              # flaggeadas → sin checkbox
+    # Checkbox INMEDIATO: visible desde el render, sin esperar al borrador (P3).
+    assert "style='display:block'><input type='checkbox' class='sel'" in html
+    # Flaggeadas (borrador no natural) → se ocultan + desmarcan al llegar el borrador.
+    assert "if(sr && d.revisar_manual)" in html
     assert "MAXSEL=10" in html                              # tope 10 en UI
     assert "/acciones/resenas/publicar-lote" in html        # endpoint del lote
 

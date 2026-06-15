@@ -437,27 +437,53 @@ def violaciones_contenido(texto: str, resena: dict[str, Any]) -> list[str]:
 
 
 _NAT_SYS = (
-    "Eres un mesero veterano y franco. Revisas respuestas a reseñas y eres INDULGENTE: el "
-    "lenguaje cálido, coloquial y mexicano PASA. Solo marcas algo como artificial si suena a "
-    "robot, a folleto publicitario o a traducción rara.\n"
-    "PASAN (natural): 'Tu mesa te espera', 'Te esperamos pronto', 'Gracias de corazón', "
-    "'Nos hiciste el día', 'Vente por un pad thai', 'Qué gusto que la pasaras bien'.\n"
-    "NO PASAN (artificial): 'así da gusto recibirte', 'comida ágil', 'deleitar tu paladar', "
-    "'experiencia culinaria', 'sabor de golpe', frases acartonadas o de marketing.")
+    "Eres un mesero mexicano franco y MUY indulgente. Tu trabajo es DEJAR PASAR respuestas a "
+    "reseñas: casi todas son naturales. Solo marcas ARTIFICIAL si puedes CITAR una frase concreta "
+    "que un mexicano real jamás escribiría en una respuesta a un cliente: jerga de folleto "
+    "publicitario, lenguaje de robot, o traducción literal rara. La calidez, el entusiasmo, los "
+    "emojis, los modismos, agradecer, invitar a volver y mencionar un platillo NO son artificiales.\n"
+    "NATURAL (déjalas pasar TODAS): 'Nos hiciste el día', 'Gracias de corazón', 'Te esperamos pronto', "
+    "'Qué gusto que te encantara', 'Será un gusto consentirte de nuevo', 'Vente por tu Pad Thai', "
+    "'Gracias por destacar las bebidas y la atención', 'Qué bonito saber que te sentiste a gusto', "
+    "'auténtica comida tailandesa', 'tu antojo de comida tailandesa' (mencionar nuestra cocina es natural).\n"
+    "ARTIFICIAL (solo estas dos cosas): (a) folleto/robot — 'deleitar tu paladar', 'experiencia "
+    "culinaria', 'comida ágil', 'explosión de sabor en cada bocado', 'sabor de golpe', 'viaje "
+    "culinario'; (b) error de AGENCIA: atribuir al cliente algo que hizo el restaurante ('la comida "
+    "te salió deliciosa' — el cliente no cocinó).\n"
+    "Regla de oro: si NO puedes citar una frase de folleto/robot/traducción ni un error de agencia, "
+    "es NATURAL. El entusiasmo NO es un defecto.")
 
 
-def evaluar_naturalidad(texto: str) -> tuple[bool, str]:
-    """C7 — segundo pase: ¿suena humano? Devuelve (natural, frase_artificial)."""
-    prompt = ("Revisa esta respuesta:\n\n\"" + texto + "\"\n\n"
-              "Dos preguntas: (1) ¿suena natural y humano? (2) ¿alguna frase atribuye a la persona "
-              "equivocada la acción (p. ej. 'la comida te salió deliciosa' — el cliente no cocinó)?\n"
-              "Si todo suena natural y la agencia es correcta, responde solo 'NATURAL'. Si hay una frase "
-              "robótica, de folleto, forzada o con agencia equivocada, responde 'ARTIFICIAL: <esa frase>'. "
-              "Ante la duda en naturalidad, es NATURAL; pero los errores de agencia SIEMPRE se marcan.")
+def _juez_un_pase(texto: str) -> tuple[bool, str]:
+    """Un pase del juez C7 (una llamada LLM). Ruidoso por sí solo → se confirma en evaluar_naturalidad."""
+    prompt = ("Revisa esta respuesta a una reseña:\n\n\"" + texto + "\"\n\n"
+              "¿Contiene una frase CONCRETA de folleto/robot/traducción rara (no basta con que sea "
+              "entusiasta o cálida), o un ERROR DE AGENCIA (atribuir al cliente algo que hizo el "
+              "restaurante)?\n"
+              "Si NO —suena a una persona real, aunque sea muy entusiasta— responde solo 'NATURAL'. "
+              "Si SÍ, responde 'ARTIFICIAL: <cita exacta de la frase ofensora>'. Por defecto es "
+              "NATURAL; solo marca ARTIFICIAL si puedes citar la frase específica.")
     r = (llm_client.generate_text(model_role=MODEL_ROLE, user_prompt=prompt,
                                   system_prompt=_NAT_SYS, max_tokens=60) or "").strip()
     natural = _norm(r).startswith("natural")
     return natural, ("" if natural else r)
+
+
+def evaluar_naturalidad(texto: str) -> tuple[bool, str]:
+    """C7 — segundo pase: ¿suena humano? Devuelve (natural, frase_artificial). Recalibrado para
+    flaggear SOLO texto genuinamente artificial (folleto/robot/traducción) o error de agencia.
+
+    El juez LLM es no-determinista: un solo pase a veces marca por ruido respuestas cálidas/correctas.
+    Por eso CONFIRMAMOS: solo se flaggea si DOS pases independientes coinciden en 'artificial'. Una
+    frase de folleto real (p. ej. 'deleitar tu paladar') trippea siempre; el ruido no se repite, así
+    que ante discrepancia damos el beneficio de la duda (natural)."""
+    natural1, motivo1 = _juez_un_pase(texto)
+    if natural1:
+        return True, ""
+    natural2, motivo2 = _juez_un_pase(texto)  # confirmación (solo cuando el 1er pase dudó)
+    if natural2:
+        return True, ""  # discrepancia → default natural
+    return False, (motivo1 or motivo2)
 
 
 def validar_variedad(borradores: list[str]) -> list[str]:

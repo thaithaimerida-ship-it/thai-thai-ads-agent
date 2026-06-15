@@ -24,6 +24,67 @@ def _payload():
     ]}
 
 
+def test_bandeja_lista_candidatos(monkeypatch):
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
+    data = negativos_service.contextos_bandeja()
+    assert data["total"] >= 1
+    assert any("casa thai" in c["term"] for c in data["items"])
+
+
+def test_bandeja_card_smart_sin_checkbox():
+    # Smart-only → SIN checkbox (solo flujo individual). SEARCH → checkbox con solo el id de búsqueda.
+    smart_only = {"term": "bangkok casa thai", "variantes_count": 1, "gasto_total": 10, "ya_bloqueado_ts": None,
+                  "campanas": [{"name": "Local (Smart)", "id": "22612348265", "channel": "SMART",
+                                "gasto": 10, "permitido": False, "nota": "marca"}]}
+    h = acciones_bloqueo._bandeja_card(smart_only, "TOK")
+    assert "class='sel'" not in h and "Solo Smart" in h
+    con_search = {"term": "almar restaurante merida", "variantes_count": 1, "gasto_total": 16, "ya_bloqueado_ts": None,
+                  "campanas": [{"name": "Experiencia 2026", "id": "222", "channel": "SEARCH", "gasto": 16, "permitido": True}]}
+    h2 = acciones_bloqueo._bandeja_card(con_search, "TOK")
+    assert "class='sel'" in h2 and "data-ids='222'" in h2  # solo el id de búsqueda en el lote
+
+
+def test_lote_bloqueo_tope_10_un_correo(monkeypatch, tmp_path):
+    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "true")
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
+    correos = {"n": 0}
+    monkeypatch.setattr(negativos_service.acciones_email, "enviar",
+                        lambda a, c: correos.__setitem__("n", correos["n"] + 1) or {"enviado": False})
+    items = [{"term": "bankok casa thai", "campaign_ids": ["111"]} for _ in range(12)]
+    res = negativos_service.confirmar_lote(items)
+    assert len(res["resultados"]) == 10 and res["bloqueados"] == 10   # tope 10
+    assert correos["n"] == 1                                          # un solo correo
+
+
+def test_lote_bloqueo_fallo_parcial_no_detiene(monkeypatch, tmp_path):
+    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "true")
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
+    monkeypatch.setattr(negativos_service.acciones_email, "enviar", lambda a, c: {"enviado": False})
+    res = negativos_service.confirmar_lote([
+        {"term": "bankok casa thai", "campaign_ids": ["111"]},
+        {"term": "pizzeria arbitraria inexistente", "campaign_ids": ["111"]}])
+    assert res["bloqueados"] == 1 and res["fallidos"] == 1            # el fallo no detuvo al otro
+    assert [r["motivo"] for r in res["resultados"] if r["status"] != "ok"] == ["termino_no_valido"]
+
+
+def test_lote_bloqueo_ejecuta_per_termino_y_jamas_broad(monkeypatch, tmp_path):
+    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "true")
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
+    monkeypatch.setattr(negativos_service.acciones_email, "enviar", lambda a, c: {"enviado": False})
+    res = negativos_service.confirmar_lote([{"term": "bankok casa thai", "campaign_ids": ["111"]}])
+    r = res["resultados"][0]
+    assert r["status"] == "ok" and r["match_types"] == ["EXACT"]      # per-término, EXACT (jamás BROAD)
+
+
+def test_bandeja_sin_token_403(client, monkeypatch):
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    assert client.get("/acciones/bloqueos").status_code == 403
+    assert client.post("/acciones/bloqueos/lote", json={"items": []}).status_code == 403
+
+
 @pytest.fixture
 def client():
     app = FastAPI()

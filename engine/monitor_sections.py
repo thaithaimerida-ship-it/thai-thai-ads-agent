@@ -362,12 +362,27 @@ def build_reviews_summary(context: dict[str, Any] | None, reference_date: str | 
         for r in nuevas if 0 < _stars(r) <= 4
     ]
 
+    # Pendientes = 5★ sin responder (la cola que atiende la bandeja /acciones/resenas), más
+    # recientes primero. El correo muestra 3 + "+N más" y un botón a la bandeja.
+    sin_responder = [r for r in reviews if _stars(r) == 5 and not r.get("has_reply")]
+    sin_responder.sort(key=lambda r: _safe_ts(r.get("create_time")) or datetime(2000, 1, 1), reverse=True)
+    pendientes = []
+    for r in sin_responder[:3]:
+        c = (r.get("comment") or "").strip()
+        pendientes.append({
+            "estrellas": 5,
+            "reviewer": (r.get("reviewer") or "Cliente"),
+            "extracto_corto": (c[:90] + "…") if len(c) > 90 else (c or "(sin texto)"),
+        })
+
     return {
         "data_broken": False,
         "promedio_general": promedio,
         "nuevas_semana": {"total": len(nuevas), "cinco": cinco, "cuatro": cuatro, "tres_o_menos": tres_menos},
         "cinco_sin_responder": cinco_sin_responder,
         "requieren_atencion": requieren,
+        "pendientes": pendientes,
+        "pendientes_total": len(sin_responder),
         "borradores_ia_disponibles": False,
     }
 

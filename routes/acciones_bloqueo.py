@@ -9,6 +9,7 @@ JAMÁS BROAD, JAMÁS batch, jamás campañas no marcadas. Re-validación server-
 from __future__ import annotations
 
 import html
+import urllib.parse
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -29,6 +30,15 @@ class DejarBody(BaseModel):
     term: str
 
 
+class ItemLoteBloqueo(BaseModel):
+    term: str
+    campaign_ids: list[str] = []
+
+
+class LoteBloqueoBody(BaseModel):
+    items: list[ItemLoteBloqueo] = []
+
+
 @router.get("/acciones/bloqueo", response_class=HTMLResponse)
 async def bloqueo_ui(term: str = "", token: str = ""):
     _require_token(token)
@@ -47,6 +57,21 @@ async def bloqueo_confirmar(body: ConfirmarBody, token: str = ""):
 async def bloqueo_dejar(body: DejarBody, token: str = ""):
     _require_token(token)
     return JSONResponse(content=negativos_service.dejar(body.term))
+
+
+@router.get("/acciones/bloqueos", response_class=HTMLResponse)
+async def bloqueos_bandeja(token: str = ""):
+    """Bandeja: TODOS los candidatos a bloqueo, cada uno como tarjeta (igual que reseñas)."""
+    _require_token(token)
+    data = negativos_service.contextos_bandeja()
+    return HTMLResponse(content=render_bandeja(data, token))
+
+
+@router.post("/acciones/bloqueos/lote")
+async def bloqueos_lote(body: LoteBloqueoBody, token: str = ""):
+    _require_token(token)
+    items = [{"term": i.term, "campaign_ids": i.campaign_ids} for i in body.items]
+    return JSONResponse(content=negativos_service.confirmar_lote(items))
 
 
 def _esc(v) -> str:
@@ -164,4 +189,116 @@ function dejar(){
    .then(function(r){return r.json();}).then(function(j){m.className="ok";m.textContent="✓ Marcado como búsqueda válida. No se volverá a preguntar.";})
    .catch(function(){m.className="err";m.textContent="Error de red";});
 }
+</script></body></html>"""
+
+
+# ── Bandeja (plural) ──────────────────────────────────────────────────────────
+def _bandeja_card(ctx: dict, token: str) -> str:
+    term_raw = ctx.get("term") or ""
+    term = _esc(term_raw)
+    n = ctx.get("variantes_count", 0)
+    gasto = round(float(ctx.get("gasto_total") or 0))
+    filas, search_ids = [], []
+    for c in ctx.get("campanas") or []:
+        nombre = _esc(c.get("name"))
+        g = _esc(round(float(c.get("gasto") or 0)))
+        if c.get("channel") == "SEARCH" and c.get("permitido"):
+            search_ids.append(str(c.get("id")))
+            filas.append(f"<div class='camp'>✓ <b>{nombre}</b> <span class='pill'>EXACT</span> <span class='gasto'>${g}</span></div>")
+        else:
+            nota = f"<div class='nota'>{_esc(c.get('nota'))}</div>" if c.get("nota") else ""
+            filas.append(f"<div class='camp off'>{nombre} <span class='pill'>theme (Smart)</span> · individual <span class='gasto'>${g}</span>{nota}</div>")
+    ya = ctx.get("ya_bloqueado_ts")
+    estado = f"<div class='estado'>✓ Ya bloqueado el {_esc(str(ya)[:10])}</div>" if ya else ""
+    if ya:
+        chk = ""
+    elif search_ids:
+        chk = (f"<label class='selrow'><input type='checkbox' class='sel' data-ids='{_esc(','.join(search_ids))}' onchange='upd()'> "
+               "seleccionar para el lote (EXACT en búsqueda)</label>")
+    else:
+        chk = "<div class='nota'>Solo Smart (manual) — usa “Revisar y bloquear”.</div>"
+    link = f"/acciones/bloqueo?term={urllib.parse.quote(term_raw)}&token={_esc(token)}"
+    return (f"<div class='card' data-term=\"{term}\">{chk}"
+            f"<div class='term'>\"{term}\"</div>"
+            f"<div class='kpi'>{_esc(_variantes(n))} · gasto <b>${gasto}</b></div>{estado}"
+            f"<div class='camps'>{''.join(filas)}</div>"
+            f"<div class='row'><a class='btn' href=\"{link}\">Revisar y bloquear</a>"
+            f"<button class='btn-sec' onclick='dejar(this)'>Dejar</button></div>"
+            f"<div class='msg'></div></div>")
+
+
+def render_bandeja(data: dict, token: str) -> str:
+    items = data.get("items") or []
+    cards = "".join(_bandeja_card(c, token) for c in items) or \
+        "<div class='empty'>No hay candidatos a bloqueo ahora mismo. 🎉</div>"
+    dry = "<span class='pill dry'>DRY-RUN: nada se aplica de verdad</span>" if data.get("dry_run") else ""
+    return _BANDEJA.replace("__TOKEN__", _esc(token)).replace("__CARDS__", cards).replace("__DRY__", dry)
+
+
+_BANDEJA = r"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bandeja de bloqueos — Thai Thai</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;background:#f0ede6;color:#1a1a1a;margin:0;padding:14px 8px;}
+  .box{max-width:600px;margin:0 auto;}
+  .head{background:#fff;border:1px solid #ddd6c8;border-radius:10px;padding:14px 16px;margin-bottom:12px;}
+  h1{font-size:18px;margin:0 0 4px;font-weight:600;} .muted{color:#777;font-size:12px;line-height:1.5;}
+  .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:bold;background:#EAF3DE;color:#27500A;}
+  .dry{background:#E7F0FA;color:#114277;}
+  .card{background:#fff;border:1px solid #e2dccf;border-radius:10px;padding:14px;margin-bottom:12px;}
+  .selrow{display:block;font-size:11px;color:#555;margin-bottom:8px;cursor:pointer;} .selrow input{margin-right:5px;vertical-align:middle;}
+  .term{font-size:17px;font-weight:bold;} .kpi{font-size:12.5px;color:#444;margin:5px 0;}
+  .camp{border:1px solid #e2dccf;border-radius:8px;padding:9px 11px;margin:6px 0;font-size:12.5px;}
+  .camp.off{opacity:.75;background:#faf7f2;} .gasto{float:right;color:#777;font-weight:bold;} .nota{color:#8a5a1f;font-size:11px;margin-top:4px;}
+  .estado{background:#EAF3DE;color:#27500A;border-radius:8px;padding:9px 11px;font-size:12.5px;font-weight:bold;margin:6px 0;}
+  .row{display:flex;gap:8px;margin-top:10px;}
+  .btn{flex:1.5;background:#9b2f2f;color:#fff;text-decoration:none;text-align:center;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:bold;}
+  .btn-sec{flex:1;background:#fff;color:#2d2a26;border:1px solid #ccc;border-radius:8px;padding:10px;font-size:13px;cursor:pointer;font-weight:bold;}
+  .msg{font-size:12px;margin-top:7px;font-weight:bold;} .ok{color:#1a7f37;} .err{color:#9b2f2f;}
+  #lote{display:none;position:sticky;bottom:8px;width:100%;background:#9b2f2f;color:#fff;border:none;border-radius:8px;padding:13px;font-size:14px;cursor:pointer;font-weight:bold;margin:10px 0 4px;box-shadow:0 6px 16px rgba(0,0,0,.2);}
+  #lote[disabled]{background:#c89b9b;cursor:not-allowed;} #loteMsg{font-size:12px;margin:4px 0 8px;font-weight:bold;}
+  .empty{background:#fff;border:1px solid #e2dccf;border-radius:10px;padding:20px;text-align:center;color:#777;}
+  .footer{font-size:10.5px;color:#999;text-align:center;padding:12px;}
+</style></head><body><div class="box">
+<div class="head"><h1>🚫 Bandeja de bloqueos</h1>
+<p class="muted">Todos los candidatos a bloqueo. Marca varios y usa el botón, o revisa uno por uno. El negativo EXACT (búsqueda) va en el lote; el Smart se aplica a mano (individual). __DRY__</p></div>
+<div id="list">__CARDS__</div>
+<button id="lote" disabled onclick="bloquearLote()">Bloquear seleccionados (0)</button>
+<div id="loteMsg"></div>
+<div class="footer">🔒 Nada se aplica sin tu confirmación · jamás BROAD, jamás campañas no marcadas · Smart a mano · marca protegida.</div>
+</div>
+<script>
+"use strict";
+var T="__TOKEN__", MAXSEL=10;
+function el(id){return document.getElementById(id);}
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+function cssesc(s){return String(s).replace(/["\\]/g,"\\$&");}
+function _checks(){return Array.prototype.slice.call(document.querySelectorAll(".sel"));}
+function _sel(){return _checks().filter(function(c){return c.checked && !c.disabled;});}
+function upd(){
+  var sel=_sel();
+  _checks().forEach(function(c){ if(!c.checked) c.disabled=(sel.length>=MAXSEL); });
+  var b=el("lote"); b.textContent="Bloquear seleccionados ("+sel.length+")"; b.disabled=sel.length===0; b.style.display=sel.length>0?"block":"none";
+  el("loteMsg").innerHTML = sel.length>=MAXSEL ? "<span style='color:#8b5e14'>Máximo 10 por lote.</span>":"";
+}
+function bloquearLote(){
+  var sel=_sel(); if(!sel.length) return;
+  var items=sel.map(function(c){ var card=c.closest(".card"); return {term:card.getAttribute("data-term"), campaign_ids:(c.getAttribute("data-ids")||"").split(",").filter(Boolean)}; });
+  var b=el("lote"); b.disabled=true; b.textContent="Aplicando…"; el("loteMsg").textContent="Aplicando "+items.length+"…";
+  fetch("/acciones/bloqueos/lote?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:items})})
+   .then(function(r){return r.json();})
+   .then(function(d){
+     (d.resultados||[]).forEach(function(r){ var card=document.querySelector('.card[data-term="'+cssesc(r.term)+'"]'); if(!card) return; var msg=card.querySelector(".msg"), cb=card.querySelector(".sel");
+       if(r.status==="ok"){ msg.innerHTML="<span class='ok'>✓ "+(d.dry_run?"Simulado":"Bloqueado")+"</span>"; if(cb){cb.checked=false;cb.disabled=true;} }
+       else { msg.innerHTML="<span class='err'>No se pudo: "+esc(r.motivo||"error")+"</span>"; } });
+     el("loteMsg").innerHTML="<span class='ok'>"+d.bloqueados+" "+(d.dry_run?"simulados":"bloqueados")+(d.fallidos?(" · "+d.fallidos+" fallaron"):"")+"</span>";
+     upd();
+   })
+   .catch(function(){ el("loteMsg").innerHTML="<span class='err'>Error de red</span>"; upd(); });
+}
+function dejar(btn){ var card=btn.closest(".card"); var term=card.getAttribute("data-term"); var msg=card.querySelector(".msg"); msg.className="msg"; msg.textContent="Guardando…";
+  fetch("/acciones/bloqueo/dejar?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({term:term})})
+   .then(function(r){return r.json();}).then(function(j){ msg.innerHTML="<span class='ok'>✓ Marcado como válido. No se vuelve a preguntar.</span>"; var cb=card.querySelector(".sel"); if(cb){cb.checked=false;cb.disabled=true;} upd(); })
+   .catch(function(){ msg.innerHTML="<span class='err'>Error de red</span>"; }); }
 </script></body></html>"""

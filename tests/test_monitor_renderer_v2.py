@@ -36,6 +36,7 @@ def _rich_context():
         "generated_date": "lunes 8 de junio de 2026",
         "links": {"ads": "https://ads.google.com/aw/overview",
                   "bloqueo_base": "https://x/acciones/bloqueo", "token": "T0K3N",
+                  "bloqueos": "https://x/acciones/bloqueos?token=T0K3N",
                   "resenas": "https://x/acciones/resenas?token=T0K3N",
                   "revision": "https://x/acciones/bloqueo?token=T0K3N"},
         "campaign_budgets": {"Thai Merida - Delivery Search": 267.0},
@@ -362,7 +363,11 @@ def test_max_5_decisiones():
         _term(query=f"restaurante externo {i}", clicks=3, cost=20 + i, conversion_quality="none") for i in range(8)
     ], date_range="LAST_30_DAYS"), _rich_context())
     assert len(digest["decisions"]) == 5
-    assert digest["html_email"].count("Revisar y bloquear →") == 5  # one block button per decision
+    html = digest["html_email"]
+    # Módulo cerrado (contrato v6.2): SIN botones por ítem; UN solo botón a la bandeja.
+    assert html.count("Revisar y bloquear →") == 0
+    assert "Revisar y bloquear en la bandeja →" in html
+    assert "/acciones/bloqueos?token=" in html
 
 
 def test_grid_campana_sin_columna_cpa():
@@ -418,22 +423,30 @@ def test_snapshot_html_lunes():
         last = idx
     assert "Thai Thai Monitor" in html and "THAI THAI MONITOR" not in html
     assert "Nada se ejecuta sin tu confirmación" in html  # A10 footer
-    assert digest["subject_email"].startswith("🍜 Thai Thai")
+    assert digest["subject_email"].startswith("Thai Thai Monitor —")
 
 
-def test_snapshot_html_viernes():
+def test_snapshot_html_viernes_es_el_completo():
+    # Contrato v6.2 (2026-06-12): el viernes ahora envía el MISMO reporte completo del lunes.
     ctx = _rich_context()
-    ctx["mode"] = "friday"
+    ctx["mode"] = "friday"  # ya no cambia el formato — debe salir el completo igual
     digest = build_monitor_digest(_payload([_term(query="bankok casa thai", cost=44.0, clicks=35)]), ctx)
     html = digest["html_email"]
-    assert digest["subject_email"] == "🍜 Thai Thai — Cierre de viernes"
-    assert "Gasto acumulado" in html
-    assert "Decisiones pendientes del lunes" in html  # A11: short list
-    assert "Anomalías nuevas" in html
-    # A11: viernes corto — secciones completas omitidas
-    assert "Maps · 30 días" not in html
-    assert "Search Console" not in html
-    assert "Campañas" not in html
+    # Mismo asunto fijo con fecha que el lunes (la referencia trae generated_date).
+    assert digest["subject_email"].startswith("Thai Thai Monitor —")
+    # Las 9 secciones del formato completo, en orden — idénticas al snapshot de lunes.
+    headings = ["Posibles bloqueos — necesitan tu confirmación", "📊 Campañas — últimos 7 días",
+                "🔎 Qué buscó la gente para ver tus anuncios", "⭐ Reseñas", "📍 Tu negocio en Maps — 30 días",
+                "📢 Anuncios — ", "🌐 SEO de tu web", "🔍 Search Console · 7 días"]
+    last = -1
+    for h in headings:
+        idx = html.find(h)
+        assert idx != -1, f"falta sección en viernes: {h}"
+        assert idx > last, f"sección fuera de orden en viernes: {h}"
+        last = idx
+    # El viejo "viernes corto" ya no existe.
+    assert "Cierre de viernes" not in html
+    assert "Decisiones pendientes del lunes" not in html
 
 
 def test_correo_cero_decisiones():
@@ -470,3 +483,38 @@ def test_sugerencia_presupuesto_solo_texto():
         assert forbidden not in row
     assert digest["safety"]["touches_budgets"] is False
     assert "· manual" in digest["html_email"]  # A3 pill: "Sugerencia: ... · manual"
+
+
+def test_bloqueos_modulo_cerrado():
+    # Contrato v6.2: Posibles bloqueos = bloque cerrado, total arriba, SIN botones por ítem,
+    # un solo botón a la bandeja /acciones/bloqueos.
+    digest = build_monitor_digest(_payload([_term(query="bankok casa thai", cost=44.0, clicks=35)]), _rich_context())
+    html = digest["html_email"]
+    assert "búsqueda" in html and "gastados esta semana" in html   # total arriba
+    assert html.count("Revisar y bloquear →") == 0                  # sin botón por ítem
+    assert html.count(">Dejar<") == 0                               # sin "Dejar" por ítem
+    assert "Revisar y bloquear en la bandeja →" in html            # un botón a la bandeja
+    assert "/acciones/bloqueos?token=" in html
+
+
+def test_resenas_modulo_cerrado():
+    # Reseñas = bloque cerrado: pendientes + un botón a /acciones/resenas, sin el botón viejo.
+    digest = build_monitor_digest(_payload([_term(query="bankok casa thai", cost=44.0, clicks=35)]), _rich_context())
+    html = digest["html_email"]
+    assert "Pendientes de responder" in html
+    assert "nuevas esta semana · " in html and "sin responder en total" in html  # conteo
+    assert "Responder reseñas en la bandeja →" in html
+    assert "/acciones/resenas?token=" in html
+    assert "de 5★ con IA" not in html                               # botón viejo eliminado
+
+
+def test_reviews_summary_pendientes_top3():
+    from engine.monitor_sections import build_reviews_summary
+    reviews = [{"stars": 5, "comment": f"Excelente {i}", "create_time": f"2026-06-{10 + i:02d}T00:00:00Z",
+                "has_reply": False, "reviewer": f"Cliente {i}"} for i in range(5)]
+    reviews.append({"stars": 5, "comment": "ya respondida", "create_time": "2026-06-01T00:00:00Z",
+                    "has_reply": True, "reviewer": "X"})
+    rs = build_reviews_summary({"reviews": {"data_broken": False, "reviews": reviews}}, "2026-06-20T00:00:00Z")
+    assert len(rs["pendientes"]) == 3            # solo 3 en el correo
+    assert rs["pendientes_total"] == 5            # 5 sin responder (la respondida no cuenta)
+    assert all(p["estrellas"] == 5 for p in rs["pendientes"])

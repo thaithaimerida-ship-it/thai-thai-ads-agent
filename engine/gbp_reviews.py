@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import date, timedelta
 from typing import Any
 
 import requests
@@ -57,6 +58,60 @@ def get_access_token() -> str:
 def _reviews_url() -> str:
     acc, loc = _account_location()
     return f"{_BASE}/accounts/{acc}/locations/{loc}/reviews"
+
+
+# ── Performance (Maps 30 días) — read-only, mismo OAuth que las reseñas ──────────
+_PERF_BASE = "https://businessprofileperformance.googleapis.com/v1"
+_PERF_METRICS = [
+    "BUSINESS_IMPRESSIONS_DESKTOP_MAPS", "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH",
+    "BUSINESS_IMPRESSIONS_MOBILE_MAPS", "BUSINESS_IMPRESSIONS_MOBILE_SEARCH",
+    "BUSINESS_DIRECTION_REQUESTS", "CALL_CLICKS", "WEBSITE_CLICKS",
+    "BUSINESS_FOOD_MENU_CLICKS",
+]
+_PERF_CACHE: dict[str, Any] = {"ts": 0.0, "agg": None}
+
+
+def fetch_performance_30d(token: str | None = None, end_lag_days: int = 3) -> dict[str, int]:
+    """Agregado de las métricas diarias de GBP Performance en una ventana de 30 días
+    (read-only). Devuelve {METRIC: total_int}. La API rezaga 3-5 días, así que la ventana
+    termina `end_lag_days` atrás. Una sola llamada HTTP (fetchMultiDailyMetricsTimeSeries)."""
+    token = token or get_access_token()
+    _, loc = _account_location()
+    end = date.today() - timedelta(days=end_lag_days)
+    start = end - timedelta(days=30)
+    params = [("dailyMetrics", m) for m in _PERF_METRICS]
+    params += [
+        ("dailyRange.start_date.year", str(start.year)),
+        ("dailyRange.start_date.month", str(start.month)),
+        ("dailyRange.start_date.day", str(start.day)),
+        ("dailyRange.end_date.year", str(end.year)),
+        ("dailyRange.end_date.month", str(end.month)),
+        ("dailyRange.end_date.day", str(end.day)),
+    ]
+    url = f"{_PERF_BASE}/locations/{loc}:fetchMultiDailyMetricsTimeSeries"
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=30)
+    resp.raise_for_status()
+    j = resp.json()
+    agg: dict[str, int] = {}
+    for ts in j.get("multiDailyMetricTimeSeries", []):
+        for dm in ts.get("dailyMetricTimeSeries", []):
+            metric = dm.get("dailyMetric")
+            total = sum(int(p.get("value", 0)) for p in dm.get("timeSeries", {}).get("datedValues", []))
+            if metric:
+                agg[metric] = total
+    return agg
+
+
+def fetch_performance_30d_cached(ttl: float = 3600.0) -> dict[str, int]:
+    """Igual que fetch_performance_30d pero cacheado en memoria (TTL 1h) — evita re-pegar
+    a la API en cargas repetidas del mismo proceso."""
+    now = time.time()
+    if _PERF_CACHE["agg"] is not None and (now - _PERF_CACHE["ts"]) < ttl:
+        return _PERF_CACHE["agg"]
+    agg = fetch_performance_30d()
+    _PERF_CACHE["agg"] = agg
+    _PERF_CACHE["ts"] = now
+    return agg
 
 
 def fetch_reviews(token: str | None = None, max_pages: int = 8) -> list[dict[str, Any]]:

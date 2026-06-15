@@ -178,7 +178,7 @@ def test_html_email_exists_in_digest():
 
     digest = build_monitor_digest(payload)
 
-    assert digest["subject_email"].startswith("🍜 Thai Thai")
+    assert digest["subject_email"].startswith("Thai Thai Monitor —")
     assert "<html" in digest["html_email"]
     assert "Thai Thai Monitor" in digest["html_email"]
 
@@ -229,10 +229,14 @@ def test_max_5_decisions_rendered():
 
     decisions = [_decision(term=f"restaurante externo {i}", cost=i + 1) for i in range(8)]
     rendered = render_monitor_email(_digest(decisions=decisions))
+    html = rendered["html_email"]
 
-    assert rendered["html_email"].count("Revisar y bloquear →") == 5  # one block button per decision (A2)
-    assert "restaurante externo 4" in rendered["html_email"]
-    assert "restaurante externo 5" not in rendered["html_email"]
+    # Módulo cerrado (contrato v6.2): SIN botones por ítem; se listan 5 y "+3 más en la bandeja".
+    assert html.count("Revisar y bloquear →") == 0
+    assert "Revisar y bloquear en la bandeja →" in html
+    assert "restaurante externo 4" in html       # 5º renderizado (índices 0-4)
+    assert "restaurante externo 5" not in html    # 6º: ya no se renderiza
+    assert "+3 más en la bandeja" in html         # 8 totales - 5 mostrados
 
 
 def test_zero_decisions_email():
@@ -240,9 +244,10 @@ def test_zero_decisions_email():
 
     rendered = render_monitor_email(_digest(decisions=[]))
 
-    assert rendered["subject_email"] == "🍜 Thai Thai — Todo normal, sin decisiones"
-    assert "Sin decisiones pendientes" in rendered["html_email"]
-    assert "Sin decisiones pendientes" in rendered["text_email"]
+    # Contrato v6.2: asunto fijo con fecha; formato completo (no el viejo "viernes corto").
+    assert rendered["subject_email"] == "Thai Thai Monitor — últimos 7 días"
+    assert "Sin decisiones esta semana" in rendered["html_email"]
+    assert "Sin decisiones esta semana" in rendered["text_email"]
 
 
 def test_internal_warnings_never_leak_to_email():

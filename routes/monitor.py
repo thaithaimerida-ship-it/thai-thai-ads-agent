@@ -17,7 +17,7 @@ from engine.monitor_sources import (
     build_keepalive_db,
     build_search_console_context,
     build_seo_context,
-    load_gbp_context,
+    load_gbp_context_live,
     load_gloriafood_internal,
 )
 from routes.analysis import VALID_DATE_RANGES, _build_search_terms_payload, _normalize_date_range
@@ -39,6 +39,7 @@ def _links() -> dict:
     return {
         "ads": "https://ads.google.com/aw/overview",
         "bloqueo_base": f"{_BASE_URL}/acciones/bloqueo",
+        "bloqueos": f"{_BASE_URL}/acciones/bloqueos?token={_ACTIONS_TOKEN}",  # bandeja (checkboxes)
         "resenas": f"{_BASE_URL}/acciones/resenas?token={_ACTIONS_TOKEN}",
         "revision": f"{_BASE_URL}/acciones/bloqueo?token={_ACTIONS_TOKEN}",
         "token": _ACTIONS_TOKEN,
@@ -66,39 +67,41 @@ def _ads_quality(client, target_id: str, date_range: str) -> dict:
     return build_ads_quality_from_list(ads, _RANGE_DAYS.get(date_range, 7))
 
 
-def _build_context(date_range: str, mode: str) -> dict:
-    """Assemble the read-only enrichment context. Never raises — missing sources
-    degrade to data_broken / search-term fallback."""
-    context: dict = {
-        "mode": "friday" if str(mode).strip().lower() == "friday" else "monday",
-        "links": _links(),
-    }
+def _ctx_gbp() -> dict:
+    """Reseñas + Maps 30d EN VIVO (read-only). Cada slice ya degrada por su cuenta."""
     try:
-        context.update(load_gbp_context())
+        return load_gbp_context_live()
     except Exception:
-        context["gbp"] = {"data_broken": True}
-        context["reviews"] = {"data_broken": True}
+        return {"gbp": {"data_broken": True}, "reviews": {"data_broken": True}}
+
+
+def _ctx_gloriafood() -> dict:
     try:
         interno = load_gloriafood_internal()
-        if interno:
-            context["pedidos_gloriafood_interno"] = interno
+        return {"pedidos_gloriafood_interno": interno} if interno else {}
     except Exception:
-        pass
-    # PageSpeed only when a key is configured (keyless PSI is rate-limited / 429).
-    if os.getenv("PAGESPEED_API_KEY"):
-        try:
-            context.update(build_seo_context())
-        except Exception:
-            context["seo"] = {"data_broken": True}
-    else:
-        context["seo"] = {"data_broken": True}
+        return {}
 
+
+def _ctx_seo() -> dict:
+    # PageSpeed solo con key configurada (PSI sin key se rate-limita / 429).
+    if not os.getenv("PAGESPEED_API_KEY"):
+        return {"seo": {"data_broken": True}}
     try:
-        context.update(build_search_console_context())
+        return build_seo_context()
     except Exception:
-        context["search_console"] = {"data_broken": True}
+        return {"seo": {"data_broken": True}}
 
-    # Google Ads sources (read-only). Token may be down → leave sections to fall back.
+
+def _ctx_search_console() -> dict:
+    try:
+        return build_search_console_context()
+    except Exception:
+        return {"search_console": {"data_broken": True}}
+
+
+def _ctx_ads(date_range: str) -> dict:
+    """Google Ads (read-only). Token caído → secciones caen a su fallback."""
     try:
         from engine.ads_client import fetch_campaign_conversion_breakdown, fetch_campaign_data, get_ads_client
         target_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID")
@@ -108,18 +111,44 @@ def _build_context(date_range: str, mode: str) -> dict:
         # 30d window for the 'provisional' health (señales + CTR vs propio promedio 30d).
         campaigns_30d = fetch_campaign_data(client, target_id, "LAST_30_DAYS")
         breakdown_30d = fetch_campaign_conversion_breakdown(client, target_id, "LAST_30_DAYS")
+        out: dict = {}
         if campaigns:
-            context["campaign_metrics"] = build_campaign_metrics(campaigns, breakdown, campaigns_30d, breakdown_30d)
-        context["ads_quality"] = _ads_quality(client, target_id, date_range)
+            out["campaign_metrics"] = build_campaign_metrics(campaigns, breakdown, campaigns_30d, breakdown_30d)
+        out["ads_quality"] = _ads_quality(client, target_id, date_range)
+        return out
     except Exception as exc:
         logger.warning("monitor context: Google Ads sources unavailable — %s", exc)
+        return {}
 
+
+def _ctx_keepalive() -> dict:
     # Keepalive de la DB de reservas (Supabase free-tier se pausa a los 7 días sin actividad).
     try:
-        context["keepalive_db"] = build_keepalive_db()
+        return {"keepalive_db": build_keepalive_db()}
     except Exception:
-        context["keepalive_db"] = {"ok": False, "checked": True, "error": "keepalive no ejecutado"}
+        return {"keepalive_db": {"ok": False, "checked": True, "error": "keepalive no ejecutado"}}
 
+
+def _build_context(date_range: str, mode: str) -> dict:
+    """Assemble the read-only enrichment context. Never raises — missing sources degrade
+    to data_broken / search-term fallback. Las 6 fuentes (GBP, GloriaFood, SEO, Search
+    Console, Ads, keepalive) son llamadas I/O independientes → se corren EN PARALELO para
+    bajar el tiempo total de /monitor/send (cada bloque trae su propio try/except, así que
+    una fuente caída nunca tumba el correo ni bloquea a las demás)."""
+    import concurrent.futures as _cf
+
+    context: dict = {
+        "mode": "friday" if str(mode).strip().lower() == "friday" else "monday",
+        "links": _links(),
+    }
+    tareas = [_ctx_gbp, _ctx_gloriafood, _ctx_seo, _ctx_search_console, _ctx_keepalive,
+              lambda: _ctx_ads(date_range)]
+    with _cf.ThreadPoolExecutor(max_workers=len(tareas)) as ex:
+        for fut in [ex.submit(t) for t in tareas]:
+            try:
+                context.update(fut.result())
+            except Exception:
+                pass  # ya cubierto dentro de cada bloque; red extra
     return context
 
 
@@ -127,7 +156,7 @@ def _build_context(date_range: str, mode: str) -> dict:
 async def monitor_digest(date_range: str = "LAST_7_DAYS", mode: str = "monday"):
     """Monitor Digest V3: read-only summary + rendered email for the weekly digest.
 
-    mode=friday renders the short Friday close (decisions + anomalies + spend only).
+    Contrato v6.2: formato completo único (lunes y viernes idénticos). `mode` queda sin efecto.
     """
     date_range = _normalize_date_range(date_range)
     if date_range not in VALID_DATE_RANGES:
@@ -139,10 +168,22 @@ async def monitor_digest(date_range: str = "LAST_7_DAYS", mode: str = "monday"):
     return build_monitor_digest(payload, _build_context(date_range, mode))
 
 
+_DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+             "septiembre", "octubre", "noviembre", "diciembre"]
+
+
 def _hoy_merida() -> tuple[str, str]:
-    """(fecha 'YYYY-MM-DD', modo render 'monday'|'friday') en hora de Mérida."""
+    """(fecha 'YYYY-MM-DD', etiqueta del día 'lunes'|'viernes') en hora de Mérida.
+    La etiqueta solo rotula el envío en el log; ya NO cambia el formato (contrato v6.2)."""
     now = datetime.now(ZoneInfo("America/Merida"))
-    return now.strftime("%Y-%m-%d"), ("friday" if now.weekday() == 4 else "monday")
+    return now.strftime("%Y-%m-%d"), ("viernes" if now.weekday() == 4 else "lunes")
+
+
+def _fecha_humana() -> str:
+    """Fecha de envío legible en español (hora de Mérida), p. ej. 'viernes 12 de junio de 2026'."""
+    n = datetime.now(ZoneInfo("America/Merida"))
+    return f"{_DIAS_ES[n.weekday()]} {n.day} de {_MESES_ES[n.month - 1]} de {n.year}"
 
 
 def _auth_monitor_send(token: str, authorization: str) -> None:
@@ -166,26 +207,33 @@ def _auth_monitor_send(token: str, authorization: str) -> None:
 
 
 @router.post("/monitor/send")
-async def monitor_send(token: str = "", tipo: str = "", force: bool = False,
+async def monitor_send(token: str = "", tipo: str = "", force: bool = False, marca: str = "",
                        date_range: str = "LAST_7_DAYS", authorization: str = Header(default="")):
-    """Genera el digest, lo renderiza (lunes completo / viernes corto según el día America/Merida
-    o `tipo`) y lo envía por SMTP a thaithaimerida@gmail.com. Idempotente por día (force=true
-    reenvía). Reemplaza al Apps Script. El renderer v6.2 NO se toca."""
+    """Genera el digest, lo renderiza (formato completo — el MISMO para lunes y viernes, contrato
+    v6.2) y lo envía por SMTP a thaithaimerida@gmail.com. Idempotente por día (force=true reenvía).
+    Reemplaza al Apps Script. `tipo` (lunes|viernes) solo rotula el envío; ya no cambia el formato.
+    `marca` (opcional) agrega un sufijo al asunto — útil para envíos de prueba que no deben
+    agruparse en el mismo hilo de Gmail que los reales."""
     _auth_monitor_send(token, authorization)
     date_range = _normalize_date_range(date_range)
     if date_range not in VALID_DATE_RANGES:
         raise HTTPException(status_code=400, detail=f"date_range invalido: '{date_range}'.")
-    fecha, modo_dia = _hoy_merida()
-    mode = ("friday" if tipo == "viernes" else "monday") if tipo in ("lunes", "viernes") else modo_dia
+    fecha, dia = _hoy_merida()
+    modo = tipo if tipo in ("lunes", "viernes") else dia  # etiqueta para el log/respuesta
 
     if not force and acciones_log.monitor_ya_enviado_hoy(fecha):
-        return JSONResponse({"status": "already_sent", "fecha": fecha, "modo": mode})
+        return JSONResponse({"status": "already_sent", "fecha": fecha, "modo": modo})
 
     payload = _build_search_terms_payload(date_range)
-    digest = build_monitor_digest(payload, _build_context(date_range, mode))
-    res = monitor_mailer.enviar_digest(digest.get("subject_email"), digest.get("html_email"), digest.get("text_email"))
-    acciones_log.registrar({"accion": "monitor_send", "fecha": fecha, "modo": mode,
+    context = _build_context(date_range, modo)
+    context["generated_date"] = _fecha_humana()  # fecha de envío → asunto y encabezado
+    digest = build_monitor_digest(payload, context)
+    subject = digest.get("subject_email")
+    if marca.strip():
+        subject = f"{subject} · {marca.strip()[:40]}"  # sufijo de prueba (acotado)
+    res = monitor_mailer.enviar_digest(subject, digest.get("html_email"), digest.get("text_email"))
+    acciones_log.registrar({"accion": "monitor_send", "fecha": fecha, "modo": modo,
                             "resultado": "ok" if res.get("enviado") else "error", "force": bool(force), "correo": res})
     ok = bool(res.get("enviado"))
-    return JSONResponse({"status": "sent" if ok else "error", "fecha": fecha, "modo": mode, "correo": res},
+    return JSONResponse({"status": "sent" if ok else "error", "fecha": fecha, "modo": modo, "correo": res},
                         status_code=200 if ok else 502)

@@ -71,12 +71,9 @@ def _important_anomalies(digest: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def build_subject_email(digest: dict[str, Any]) -> str:
-    n = len(digest.get("decisions", []) or [])
-    if n:
-        return f"🍜 Thai Thai — {n} decisiones esta semana"
-    if _important_anomalies(digest):
-        return f"🍜 Thai Thai — {len(_important_anomalies(digest))} aviso(s) importante(s)"
-    return "🍜 Thai Thai — Todo normal, sin decisiones"
+    # Contrato v6.2 (2026-06-12): asunto fijo con la fecha de envío, igual para lunes y viernes.
+    fecha = _text(digest.get("generated_date"), _human_range(digest.get("date_range")))
+    return f"Thai Thai Monitor — {fecha}"
 
 
 def _bar(pct: float, color: str, track: str = "#eee", height: int = 6) -> str:
@@ -166,31 +163,40 @@ def _header(digest: dict[str, Any], text: list[str]) -> str:
 
 # ── A2 posibles bloqueos ─────────────────────────────────────────────────────
 def _posibles_bloqueos(digest: dict[str, Any], text: list[str]) -> str:
-    decisions = (digest.get("decisions", []) or [])[:MAX_RENDERED_DECISIONS]
+    todas = digest.get("decisions", []) or []
+    decisions = todas[:MAX_RENDERED_DECISIONS]
+    total_n = len(todas)
+    total_gasto = sum(_number(d.get("cost_mxn")) for d in todas)
+    bandeja = (digest.get("links") or {}).get("bloqueos") or "#"
     inner = [
         "<div style=\"border:1px solid #e8b4b4;border-radius:8px;padding:12px;\">"
         "<p style=\"font-size:12.5px;font-weight:bold;color:#A32D2D;margin:0 0 4px;\">⚠ Posibles bloqueos — necesitan tu confirmación</p>"
-        "<p style=\"font-size:10.5px;color:#666;margin:0 0 10px;line-height:1.5;\">Estas búsquedas dispararon tus anuncios pero parecen ser de otros negocios. "
-        "Si confirmas, se bloquean: tu anuncio deja de aparecer (y de pagar) cuando alguien las busque.</p>"
     ]
     text.append("Posibles bloqueos — necesitan tu confirmación")
     if decisions:
+        inner.append(
+            "<p style=\"font-size:11px;color:#A32D2D;margin:0 0 10px;\">"
+            f"<b>{total_n} búsqueda{'s' if total_n != 1 else ''}</b> de otros negocios dispararon tus anuncios · "
+            f"<b>{_escape(_money_mxn(total_gasto))}</b> gastados esta semana.</p>"
+        )
+        text.append(f"{total_n} búsquedas de otros negocios · {_money_mxn(total_gasto)} gastados esta semana")
         for i, d in enumerate(decisions, start=1):
             variantes = _number(d.get("variantes_count"))
             var = f" <span style=\"font-size:10.5px;color:#999;\">({_int_text(variantes)} variantes)</span>" if variantes > 1 else ""
             camps = _escape(", ".join(d.get("campaigns") or []) or "—")
             inner.append(
-                "<div style=\"background:#f6f3ec;border-radius:6px;padding:10px 12px;margin-bottom:8px;\">"
-                f"<p style=\"font-size:13px;margin:0;\"><b>{i}. \"{_escape(d.get('term'))}\"</b>{var} — {_escape(_money(d.get('cost_mxn')))} gastados<br>"
-                f"<span style=\"font-size:11px;color:#666;\">Apareció en: {camps}</span></p>"
-                "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin-top:8px;\"><tr>"
-                f"<td width=\"58%\" style=\"padding-right:6px;\">{_btn(d.get('link_bloquear') or '#', 'Revisar y bloquear →', True)}</td>"
-                f"<td width=\"42%\">{_btn(d.get('link_dejar') or '#', 'Dejar', False)}</td>"
-                "</tr></table></div>"
+                "<div style=\"background:#f6f3ec;border-radius:6px;padding:9px 12px;margin-bottom:6px;\">"
+                f"<p style=\"font-size:13px;margin:0;\"><b>{i}. \"{_escape(d.get('term'))}\"</b>{var} — {_escape(_money(d.get('cost_mxn')))}<br>"
+                f"<span style=\"font-size:11px;color:#666;\">Apareció en: {camps}</span></p></div>"
             )
-            text.append(f"• {i}. \"{_text(d.get('term'))}\" — {_money(d.get('cost_mxn'))} gastados — Apareció en: {', '.join(d.get('campaigns') or [])} [Revisar y bloquear]/[Dejar]")
-        inner.append("<p style=\"font-size:10.5px;color:#999;margin-top:9px;line-height:1.5;\">\"Revisar y bloquear\" abre una página segura: ves variantes, "
-                     "campañas y gasto, y confirmas. Solo ahí se ejecuta. \"Dejar\" lo marca válido y no se vuelve a preguntar.</p>")
+            text.append(f"• {i}. \"{_text(d.get('term'))}\" — {_money(d.get('cost_mxn'))} — {', '.join(d.get('campaigns') or [])}")
+        if total_n > len(decisions):
+            inner.append(f"<p style=\"font-size:11px;color:#999;margin:2px 0 10px;\">+{total_n - len(decisions)} más en la bandeja.</p>")
+            text.append(f"+{total_n - len(decisions)} más en la bandeja")
+        inner.append(f"<div style=\"margin-top:4px;\">{_btn(bandeja, 'Revisar y bloquear en la bandeja →', True)}</div>")
+        inner.append("<p style=\"font-size:10.5px;color:#999;margin-top:9px;line-height:1.5;\">En la bandeja marcas varias y las bloqueas juntas, o revisas "
+                     "una por una. Nada se ejecuta sin tu confirmación.</p>")
+        text.append(f"→ Revisar y bloquear en la bandeja: {bandeja}")
     else:
         inner.append("<p>Sin decisiones esta semana. Sin decisiones pendientes.</p>")
         text.append("Sin decisiones esta semana. Sin decisiones pendientes.")
@@ -351,12 +357,35 @@ def _resenas(digest: dict[str, Any], text: list[str]) -> str:
     for r in rv.get("requieren_atencion") or []:
         if int(_number(r.get("estrellas"))) <= 3:
             inner.append(f"<p style=\"font-size:11.5px;color:#791F1F;margin-top:10px;\">⚠️ {_int_text(r.get('estrellas'))}★ requiere tu atención: \"{_escape(r.get('extracto_corto'))}\"</p>")
+
+    # Módulo cerrado: hasta 3 pendientes (5★ sin responder) + "+N más" + UN botón a la bandeja.
+    pendientes = rv.get("pendientes") or []
+    pend_total = int(_number(rv.get("pendientes_total")))
+    if pendientes:
+        inner.append("<p style=\"font-size:11.5px;color:#3C3489;font-weight:bold;margin:12px 0 2px;\">Pendientes de responder (5★)</p>")
+        inner.append(f"<p style=\"font-size:11px;color:#534AB7;margin:0 0 6px;\">"
+                     f"<b>{_int_text(rv.get('cinco_sin_responder'))}</b> nuevas esta semana · "
+                     f"<b>{pend_total}</b> sin responder en total</p>")
+        for p in pendientes:
+            inner.append(
+                "<div style=\"background:#f6f3ec;border-radius:6px;padding:8px 10px;margin-bottom:5px;\">"
+                f"<p style=\"font-size:11.5px;margin:0;\"><b>{_escape(p.get('reviewer'))}</b> · 5★<br>"
+                f"<span style=\"color:#555;\">\"{_escape(p.get('extracto_corto'))}\"</span></p></div>"
+            )
+        extra = pend_total - len(pendientes)
+        if extra > 0:
+            inner.append(f"<p style=\"font-size:11px;color:#999;margin:0 0 8px;\">+{extra} más en la bandeja.</p>")
     link = (digest.get("links") or {}).get("resenas")
-    if link and _number(rv.get("cinco_sin_responder")) > 0:
-        inner.append(f"<div style=\"margin-top:10px;\">{_btn(link, f'Responder las {sin_resp} de 5★ con IA →', True)}</div>")
-    inner.append("<p style=\"font-size:10.5px;color:#534AB7;margin-top:6px;line-height:1.5;\">Abre una página segura: cada reseña con su respuesta "
-                 "redactada por IA, ajustas si quieres y publicas una por una. La de 1★ solo se muestra — esa la respondes tú directo en Google.</p></div>")
-    text.append(f"Reseñas: promedio {promedio_txt} · {_int_text(nuevas.get('total'))} nuevas · {sin_resp} de 5★ sin responder")
+    if link and pend_total > 0:
+        inner.append(f"<div style=\"margin-top:8px;\">{_btn(link, 'Responder reseñas en la bandeja →', True)}</div>")
+    inner.append("<p style=\"font-size:10.5px;color:#534AB7;margin-top:6px;line-height:1.5;\">En la bandeja cada reseña trae su respuesta "
+                 "redactada por IA: ajustas si quieres, marcas varias y publicas. La de 1★ solo se muestra — esa la respondes tú directo en Google.</p></div>")
+    text.append(f"Reseñas: promedio {promedio_txt} · {sin_resp} nuevas esta semana · {_int_text(pend_total)} sin responder en total")
+    if pendientes:
+        for p in pendientes:
+            text.append(f"  • {_text(p.get('reviewer'))} (5★): \"{_text(p.get('extracto_corto'))}\"")
+        if pend_total > len(pendientes):
+            text.append(f"  +{pend_total - len(pendientes)} más en la bandeja")
     text.append("")
     return _section("⭐ Reseñas", "".join(inner))
 
@@ -540,44 +569,6 @@ def _render_full_html(digest: dict[str, Any]) -> tuple[str, list[str]]:
     return body, text
 
 
-# ── A11 viernes ──────────────────────────────────────────────────────────────
-def _render_friday_html(digest: dict[str, Any]) -> tuple[str, list[str]]:
-    decisions = (digest.get("decisions", []) or [])[:MAX_RENDERED_DECISIONS]
-    anomalies = _important_anomalies(digest)
-    gasto = sum(_number(r.get("gasto_7d", r.get("spend_mxn"))) for r in digest.get("campaign_rows", []) or [])
-    parts = ["<div class=\"section\"><p style=\"font-size:12px;color:#777;margin:0;\">Cierre de viernes — solo lo que necesita tu ojo.</p></div>",
-             "<div class=\"section\"><h2>Decisiones pendientes del lunes</h2>"]
-    text = [BRAND_TITLE, "Cierre de viernes", ""]
-    alerta = _keepalive_alert(digest, text)
-    if alerta:
-        parts.insert(0, alerta)
-    if decisions:
-        for d in decisions:
-            parts.append(
-                "<div style=\"background:#f6f3ec;border-radius:6px;padding:10px 12px;margin-bottom:8px;\">"
-                f"<p style=\"font-size:13px;margin:0 0 6px;\"><b>\"{_escape(d.get('term'))}\"</b> · {_escape(_money(d.get('cost_mxn')))}</p>"
-                "<table role=\"presentation\" width=\"100%\"><tr>"
-                f"<td width=\"58%\" style=\"padding-right:6px;\">{_btn(d.get('link_bloquear') or '#', 'Revisar y bloquear →', True)}</td>"
-                f"<td width=\"42%\">{_btn(d.get('link_dejar') or '#', 'Dejar', False)}</td></tr></table></div>"
-            )
-            text.append(f"• \"{_text(d.get('term'))}\" · {_money(d.get('cost_mxn'))} — [bloquear]/[dejar]")
-    else:
-        parts.append("<p>Sin decisiones pendientes. Todo en orden.</p>")
-        text.append("Sin decisiones pendientes. Todo en orden.")
-    parts.append("</div><div class=\"section\"><h2>Anomalías nuevas</h2>")
-    text.append("Anomalías nuevas")
-    if anomalies:
-        for a in anomalies:
-            parts.append(f"<p style=\"font-size:12px;\">{_escape(a.get('term'))}: {_escape(_money(a.get('spend_mxn')))}.</p>")
-            text.append(f"{_text(a.get('term'))}: {_money(a.get('spend_mxn'))}")
-    else:
-        parts.append("<p>Sin anomalías nuevas.</p>")
-        text.append("Sin anomalías nuevas.")
-    parts.append(f"</div><div class=\"section\"><h2>Gasto acumulado</h2><p style=\"font-size:18px;font-weight:bold;\">{_escape(_money_mxn(gasto))}</p></div>")
-    text.append(f"Gasto acumulado: {_money_mxn(gasto)}")
-    return "".join(parts), text
-
-
 def _html_document(title: str, body: str) -> str:
     return (
         "<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\">"
@@ -599,11 +590,9 @@ def _html_document(title: str, body: str) -> str:
 
 
 def render_monitor_email(digest: dict[str, Any], mode: str = "monday") -> dict[str, str]:
+    # Contrato v6.2 (2026-06-12): un solo formato completo para lunes y viernes. El parámetro
+    # `mode` se conserva por compatibilidad de firma pero ya no cambia el render.
     subject = build_subject_email(digest)
-    if str(mode).strip().lower() == "friday":
-        body, text_lines = _render_friday_html(digest)
-        subject = "🍜 Thai Thai — Cierre de viernes"
-    else:
-        body, text_lines = _render_full_html(digest)
+    body, text_lines = _render_full_html(digest)
     text_lines.append(FOOTER)
     return {"subject_email": subject, "html_email": _html_document(BRAND_TITLE, body), "text_email": "\n".join(text_lines)}
