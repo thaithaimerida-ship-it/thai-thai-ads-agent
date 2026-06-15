@@ -8,11 +8,59 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any
 
-from engine import acciones_email, acciones_log, negativos_apply
+from engine import acciones_email, acciones_log, ads_client, negative_matcher, negativos_apply
 
 _DICT_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "term_dictionary.json")
+
+# Fuente de verdad del dedupe: los negativos REALES de Google Ads (no el log efímero, que se
+# borra en cada deploy). Caché en memoria con TTL corto para no re-pegar a la API en cada carga.
+_NEG_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+
+
+def _negativos_cuenta(ttl: float = 120.0) -> dict[str, Any]:
+    """Negativos a nivel campaña de la cuenta (read-only, cacheado). {} ante error de API
+    (fail-open: si no podemos leer Ads, NO ocultamos candidatos en silencio)."""
+    now = time.time()
+    if _NEG_CACHE["data"] is not None and (now - _NEG_CACHE["ts"]) < ttl:
+        return _NEG_CACHE["data"]
+    try:
+        data = ads_client.fetch_negative_keywords(ads_client.get_ads_client(), negativos_apply._CID)
+    except Exception:
+        return _NEG_CACHE["data"] or {}
+    _NEG_CACHE["data"], _NEG_CACHE["ts"] = data, now
+    return data
+
+
+def _cobertura(term: str, campanas: list[dict[str, Any]], negs: dict[str, Any]) -> tuple[str | None, dict | None]:
+    """Cobertura del término por negativos REALES en sus campañas SEARCH (conservador):
+    'exact'  → existe un negativo EXACT idéntico (cero duda → ocultar);
+    'amplio' → solo lo cubre un PHRASE/BROAD preexistente (mostrar con nota → Hugo decide);
+    None     → no está cubierto. Devuelve (estado, negativo_que_cubre)."""
+    tnorm = negative_matcher._normalize(term)
+    amplio = None
+    for c in campanas or []:
+        if c.get("channel") != "SEARCH":
+            continue
+        for n in (negs.get(str(c.get("id"))) or {}).get("negatives", []):
+            nnorm = negative_matcher._normalize(n.get("text", ""))
+            mt = (n.get("match_type") or "").upper()
+            if mt == "EXACT" and nnorm == tnorm:
+                return "exact", n
+            if negative_matcher._blocks(tnorm, nnorm, mt):
+                amplio = n  # seguimos buscando por si hay un EXACT idéntico más adelante
+    return ("amplio", amplio) if amplio else (None, None)
+
+
+def _humaniza_ads_error(msg: str) -> str:
+    m = (msg or "").lower()
+    if "80 char" in m or "less than 80" in m:
+        return "El término supera 80 caracteres y Google Ads lo rechaza."
+    if "10 word" in m:
+        return "El término supera 10 palabras y Google Ads lo rechaza."
+    return (msg or "Google Ads no aplicó el negativo.").strip()[:160]
 
 
 def _cargar_diccionario() -> dict[str, Any]:
@@ -51,8 +99,10 @@ def es_bloqueable(term: str, decisiones: list[dict[str, Any]], dictionary: dict[
     return any(negativos_apply._norm(r) in tnorm for r in (dictionary.get("competitor_roots") or []))
 
 
-def contexto_bloqueo(term: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Contexto para la UI: variantes agrupadas, campañas (con canal/gasto), qué se aplicará."""
+def contexto_bloqueo(term: str, payload: dict[str, Any] | None = None,
+                     negativos: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Contexto para la UI: variantes agrupadas, campañas (con canal/gasto), qué se aplicará.
+    `negativos` (negativos reales de Ads) lo pasa la bandeja para un solo fetch; si es None se lee."""
     payload = payload or _payload_busqueda()
     dictionary = _cargar_diccionario()
     decisiones = _decisiones(payload)
@@ -81,25 +131,43 @@ def contexto_bloqueo(term: str, payload: dict[str, Any] | None = None) -> dict[s
                                       "búsquedas legítimas." if not permitido else
                                       "Este se aplica manualmente en Google Ads (te enviaré las instrucciones por correo).")})
 
+    negs = negativos if negativos is not None else _negativos_cuenta()
+    estado, neg_cubre = _cobertura(term, campanas, negs)
+    motivo_invalido = negativos_apply.motivo_keyword_invalido(term)
+    nota_cob = ""
+    if estado == "amplio" and neg_cubre:
+        nota_cob = (f"Ya cubierto por un negativo {neg_cubre.get('match_type')} existente "
+                    f"(«{neg_cubre.get('text')}») — revisar.")
+
     return {
         "term": term, "bloqueable": es_bloqueable(term, decisiones, dictionary),
         "variantes": variantes, "variantes_count": len(variantes),
         "gasto_total": round(sum(c["gasto"] for c in campanas), 2),
         "contiene_marca": marca, "campanas": campanas,
-        "ya_bloqueado_ts": acciones_log.bloqueo_real_ts(term),  # bloqueo REAL previo, si lo hay
+        # Fuente de verdad = Ads real (no el log efímero):
+        "ya_bloqueado": estado == "exact",        # EXACT idéntico ya en Ads → no reaparece
+        "ya_bloqueado_ts": "en Google Ads" if estado == "exact" else None,  # compat
+        "cobertura_amplia": estado == "amplio",   # solo PHRASE/BROAD → mostrar con nota
+        "cobertura_nota": nota_cob,
+        "aplicable": motivo_invalido is None,      # cumple reglas de keyword de Google (≤80/≤10)
+        "motivo_no_aplicable": motivo_invalido or "",
         "dry_run": negativos_apply.dry_run_negativos(),
     }
 
 
 def confirmar_bloqueo(term: str, campaign_ids: list[str], payload: dict[str, Any] | None = None,
-                      enviar_correo: bool = True) -> dict[str, Any]:
+                      enviar_correo: bool = True, negativos: dict[str, Any] | None = None) -> dict[str, Any]:
     """Confirma el bloqueo de UN término en las campañas marcadas. Re-valida server-side.
-    `enviar_correo=False` lo usa el lote (un solo correo al final)."""
-    ctx = contexto_bloqueo(term, payload)
+    El status refleja el `applied` REAL: si Google Ads no aplica, status='error' (no 'ok'),
+    sin correo de éxito. `enviar_correo=False` lo usa el lote (un solo correo al final)."""
+    dry = negativos_apply.dry_run_negativos()
+    ctx = contexto_bloqueo(term, payload, negativos=negativos)
     if not ctx["bloqueable"]:
-        return {"status": "rechazada", "motivo": "termino_no_valido"}
-    if acciones_log.termino_ya_bloqueado(term):
-        return {"status": "rechazada", "motivo": "ya_bloqueado"}
+        return {"status": "rechazada", "motivo": "termino_no_valido", "term": term}
+    if not ctx["aplicable"]:  # candado nuevo: keyword inválida (>80 chars / >10 palabras)
+        return {"status": "error", "motivo": "keyword_invalido", "mensaje": ctx["motivo_no_aplicable"], "term": term}
+    if ctx.get("ya_bloqueado"):  # EXACT idéntico ya en Ads (fuente de verdad, no el log)
+        return {"status": "rechazada", "motivo": "ya_bloqueado", "term": term}
 
     ids = set(str(i) for i in (campaign_ids or []))
     marcadas = []
@@ -110,20 +178,37 @@ def confirmar_bloqueo(term: str, campaign_ids: list[str], payload: dict[str, Any
             continue
         marcadas.append(c)
     if not marcadas:
-        return {"status": "rechazada", "motivo": "sin_campanas_validas"}
+        return {"status": "rechazada", "motivo": "sin_campanas_validas", "term": term}
 
     resultados = negativos_apply.aplicar_bloqueo(term, marcadas)
-    dry = negativos_apply.dry_run_negativos()
     manuales = [r for r in resultados if r.get("status") == "manual_required"]
-    applied = any(r.get("applied") for r in resultados)  # algún negativo REAL aplicado a Ads
+    aplicadas = [r for r in resultados if r.get("applied")]
+    fallidas = [r for r in resultados if not r.get("applied") and r.get("status") != "manual_required"]
+    applied = bool(aplicadas)
+    # Éxito REAL: dry-run (ensayo), o algún negativo aplicado, o solo manuales (Smart pendiente).
+    if dry:
+        exito, motivo_fallo = True, ""
+    elif fallidas and not aplicadas:
+        det = fallidas[0].get("detalle") or {}
+        exito, motivo_fallo = False, _humaniza_ads_error(det.get("message") or fallidas[0].get("message") or "")
+    else:
+        exito, motivo_fallo = True, ""
+
     entry = {
         "accion": "bloquear", "term": term, "variantes_count": ctx["variantes_count"],
         "campanas": [r["campaign"] for r in resultados],
         "match_types": [r["match_type"] for r in resultados],
-        "dry_run": dry, "applied": applied, "resultado": "dry_run" if dry else "ok",
+        "dry_run": dry, "applied": applied, "resultado": "dry_run" if dry else ("ok" if exito else "error"),
         "pending_manual": [r["campaign"] for r in manuales], "detalle": resultados,
     }
-    registrado = acciones_log.registrar(entry)
+    registrado = acciones_log.registrar(entry)  # auditoría (refleja applied real)
+
+    base = {"dry_run": dry, "resultados": resultados, "term": term,
+            "campanas": entry["campanas"], "match_types": entry["match_types"],
+            "pending_manual": entry["pending_manual"], "registro": registrado}
+    if not exito:  # NO se aplicó → status error, sin correo de éxito
+        return {**base, "status": "error", "motivo": "no_aplicado",
+                "mensaje": motivo_fallo or "Google Ads no aplicó el negativo."}
 
     nombres = ", ".join(r["campaign"] for r in resultados)
     n = ctx["variantes_count"]
@@ -139,9 +224,7 @@ def confirmar_bloqueo(term: str, campaign_ids: list[str], payload: dict[str, Any
                        f"  Theme negativo a pegar: {term}\n"
                        f"  Ruta: Campaña → Palabras clave → Temas de palabras clave negativas → Agregar.\n")
     correo = acciones_email.enviar(asunto, cuerpo) if enviar_correo else {"enviado": False, "motivo": "lote"}
-    return {"status": "ok", "dry_run": dry, "resultados": resultados, "term": term,
-            "campanas": entry["campanas"], "match_types": entry["match_types"],
-            "pending_manual": entry["pending_manual"], "correo": correo, "registro": registrado}
+    return {**base, "status": "ok", "correo": correo}
 
 
 def contextos_bandeja(payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -150,6 +233,7 @@ def contextos_bandeja(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = payload or _payload_busqueda()
     dictionary = _cargar_diccionario()
     decisiones = _decisiones(payload)
+    negs = _negativos_cuenta()  # negativos REALES de Ads (un solo fetch para toda la bandeja)
     items, vistos = [], set()
     for d in decisiones:
         term = d.get("term")
@@ -159,9 +243,12 @@ def contextos_bandeja(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         if gk in vistos:
             continue
         vistos.add(gk)
-        ctx = contexto_bloqueo(term, payload)
-        if ctx.get("bloqueable"):
-            items.append(ctx)
+        ctx = contexto_bloqueo(term, payload, negativos=negs)
+        if not ctx.get("bloqueable"):
+            continue
+        if ctx.get("ya_bloqueado"):  # EXACT idéntico ya en Ads → JAMÁS reaparece (sin importar deploys)
+            continue
+        items.append(ctx)
     items.sort(key=lambda c: c.get("gasto_total", 0), reverse=True)
     return {"total": len(items), "dry_run": negativos_apply.dry_run_negativos(), "items": items}
 
@@ -170,32 +257,32 @@ def confirmar_lote(items: list[dict[str, Any]]) -> dict[str, Any]:
     """Bloquea una SELECCIÓN, UNO POR UNO (mismo confirmar_bloqueo: re-validación + log por
     término). Tope 10. Fallo parcial no detiene. UN solo correo con el resumen."""
     items = (items or [])[:10]
-    payload = _payload_busqueda()  # un fetch para todo el lote
+    payload = _payload_busqueda()  # un fetch de search terms para todo el lote
+    negs = _negativos_cuenta()     # un fetch de negativos reales para todo el lote
     resultados = []
     for it in items:
         term = it.get("term", "")
         ids = it.get("campaign_ids") or []
-        res = confirmar_bloqueo(term, ids, payload=payload, enviar_correo=False)
+        res = confirmar_bloqueo(term, ids, payload=payload, enviar_correo=False, negativos=negs)
         resultados.append({
             "term": term, "status": res.get("status"), "motivo": res.get("motivo", ""),
+            "mensaje": res.get("mensaje", ""),
             "campanas": res.get("campanas", []), "match_types": res.get("match_types", []),
             "pending_manual": res.get("pending_manual", []),
         })
 
-    ok = [r for r in resultados if r["status"] == "ok"]
-    fail = [r for r in resultados if r["status"] != "ok"]
+    ok = [r for r in resultados if r["status"] == "ok"]        # aplicados de verdad (o dry-run)
+    fail = [r for r in resultados if r["status"] != "ok"]      # rechazados / no aplicados
     dry = negativos_apply.dry_run_negativos()
     verbo = "simulados" if dry else "bloqueados"
-    asunto = f"🚫 {len(ok)} término{'s' if len(ok) != 1 else ''} {verbo}"
-    if fail:
-        asunto += f" · {len(fail)} falló" if len(fail) == 1 else f" · {len(fail)} fallaron"
-    lineas = [f"{len(ok)} término(s) {verbo}" + (f", {len(fail)} fallaron." if fail else "."), ""]
+    asunto = f"🚫 {len(ok)} {verbo}" + (f" · {len(fail)} no se pudieron" if fail else "")
+    lineas = [f"{len(ok)} {verbo} · {len(fail)} no se pudieron." if fail else f"{len(ok)} {verbo}.", ""]
     for r in ok:
         lineas.append(f"✓ '{r['term']}' → {', '.join(r['campanas'])} ({', '.join(r['match_types'])})")
     if fail:
-        lineas += ["", "Fallaron:"]
+        lineas += ["", "No se pudieron:"]
         for r in fail:
-            lineas.append(f"✗ '{r['term']}': {r['motivo']}")
+            lineas.append(f"✗ '{r['term']}': {r.get('mensaje') or r['motivo']}")
     correo = acciones_email.enviar(asunto, "\n".join(lineas))
     return {"bloqueados": len(ok), "fallidos": len(fail), "dry_run": dry,
             "resultados": resultados, "correo": correo}
