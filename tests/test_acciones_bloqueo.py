@@ -24,6 +24,19 @@ def _payload():
     ]}
 
 
+def _negs(cid, text, match_type="EXACT", name="Thai Merida - Delivery Search"):
+    """Shape de fetch_negative_keywords: {campaign_id: {campaign_name, channel_type, negatives:[...]}}"""
+    return {cid: {"campaign_name": name, "channel_type": "SEARCH",
+                  "negatives": [{"text": text, "match_type": match_type, "resource_name": "x"}]}}
+
+
+@pytest.fixture(autouse=True)
+def _sin_lectura_ads(monkeypatch):
+    """Por defecto los tests NO leen negativos de Ads (fail-open: cuenta sin negativos).
+    Los tests de dedupe (B) sobreescriben _negativos_cuenta con datos controlados."""
+    monkeypatch.setattr(negativos_service, "_negativos_cuenta", lambda *a, **k: {})
+
+
 def test_bandeja_lista_candidatos(monkeypatch):
     monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
     data = negativos_service.contextos_bandeja()
@@ -250,34 +263,112 @@ def test_smart_manual_required_pending_y_receta(monkeypatch, tmp_path):
     assert registro["pending_manual"] == ["Thai Merida - Local"]
 
 
-def test_dry_run_no_consume_termino_pero_real_si(monkeypatch, tmp_path):
-    # BUG 1: simulacros repetibles; solo el bloqueo REAL (applied=True) consume el término.
+def test_dry_run_repetible_y_dedupe_por_ads(monkeypatch, tmp_path):
+    # Simulacros repetibles; bloqueo REAL aplica; el dedupe ahora es por ADS (no el log efímero).
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
     p = _payload()
-    # 1) dos simulacros → ambos proceden
     monkeypatch.setenv("DRY_RUN_NEGATIVOS", "true")
     assert negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)["status"] == "ok"
     assert negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)["status"] == "ok"
-    # 2) bloqueo REAL → procede (no estaba consumido)
+    # bloqueo REAL → aplica (Ads aún sin el negativo, por el fixture autouse)
     monkeypatch.setenv("DRY_RUN_NEGATIVOS", "false")
     monkeypatch.setattr(negativos_apply, "_client", lambda: object())
     monkeypatch.setattr(negativos_apply.ads_client, "add_negative_keyword",
                         lambda *a, **k: {"status": "success", "match_type": "EXACT"})
     real = negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)
     assert real["status"] == "ok" and real["dry_run"] is False
-    # 3) segundo bloqueo REAL → rechazado
+    # ahora Ads YA tiene el negativo EXACT → segundo intento rechazado por la fuente de verdad
+    monkeypatch.setattr(negativos_service, "_negativos_cuenta", lambda *a, **k: _negs("111", "bankok casa thai"))
     seg = negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=p)
     assert seg["status"] == "rechazada" and seg["motivo"] == "ya_bloqueado"
 
 
-def test_termino_bloqueado_real_muestra_estado_no_boton(monkeypatch, tmp_path):
-    # BUG 1b: un término ya bloqueado de verdad llega a la página como ESTADO, no botón.
-    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
-    acciones_log.registrar({"accion": "bloquear", "term": "bankok casa thai", "applied": True, "resultado": "ok"})
+def test_termino_ya_en_ads_exact_muestra_estado_no_boton(monkeypatch):
+    # B: un término ya bloqueado EXACT en Ads → la página individual lo muestra como ESTADO, sin botón.
+    monkeypatch.setattr(negativos_service, "_negativos_cuenta", lambda *a, **k: _negs("111", "bankok casa thai"))
     ctx = negativos_service.contexto_bloqueo("bankok casa thai", payload=_payload())
-    assert ctx["ya_bloqueado_ts"] is not None
+    assert ctx["ya_bloqueado"] is True
     html = acciones_bloqueo.render_bloqueo(ctx, "TOK")
-    assert "Ya bloqueado el" in html and "disabled" in html
+    assert "Ya bloqueado en Google Ads" in html and "disabled" in html
+
+
+# ── BUG A: nunca éxito falso ──────────────────────────────────────────────────
+def test_keyword_muy_larga_no_aplicable_valida_antes_de_api(monkeypatch, tmp_path):
+    # >80 chars → status error keyword_invalido ANTES de pegar a la API (caso plaza luxury).
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "false")
+    monkeypatch.setattr(negativos_service, "es_bloqueable", lambda *a, **k: True)
+    largo = ("plaza luxury local 11 av andres garcia lavin 349 lunes a domingo 12 00 pm 10 30 "
+             "cocina cierra oriental city merida")
+    p = {"status": "success", "date_range": "LAST_7_DAYS",
+         "search_terms": [_row(largo, "Thai Merida - Delivery Search", "111")]}
+    called = {"add": 0}
+    monkeypatch.setattr(negativos_apply.ads_client, "add_negative_keyword",
+                        lambda *a, **k: called.__setitem__("add", called["add"] + 1) or {"status": "success"})
+    res = negativos_service.confirmar_bloqueo(largo, ["111"], payload=p)
+    assert res["status"] == "error" and res["motivo"] == "keyword_invalido"
+    assert "80 caracteres" in res["mensaje"]
+    assert called["add"] == 0  # se validó ANTES de llamar a Google Ads
+
+
+def test_apply_falla_no_da_falso_exito(monkeypatch, tmp_path):
+    # Si Google Ads rechaza en la mutación → status error (no 'ok'), sin correo de éxito.
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setenv("DRY_RUN_NEGATIVOS", "false")
+    monkeypatch.setattr(negativos_apply, "_client", lambda: object())
+    monkeypatch.setattr(negativos_apply.ads_client, "add_negative_keyword",
+                        lambda *a, **k: {"status": "error", "message": "Keyword text should be less than 80 chars."})
+    correos = {"n": 0}
+    monkeypatch.setattr(negativos_service.acciones_email, "enviar",
+                        lambda *a, **k: correos.__setitem__("n", correos["n"] + 1) or {"enviado": True})
+    res = negativos_service.confirmar_bloqueo("bankok casa thai", ["111"], payload=_payload())
+    assert res["status"] == "error" and res["motivo"] == "no_aplicado"
+    assert "80 caracteres" in res["mensaje"]
+    assert correos["n"] == 0  # NO se manda correo de éxito en un fallo
+
+
+def test_lote_distingue_bloqueados_de_fallidos_en_correo(monkeypatch):
+    # El lote cuenta el applied REAL y el correo dice "N bloqueados · M no se pudieron".
+    def fake_confirmar(term, ids, payload=None, enviar_correo=False, negativos=None):
+        if "plaza luxury" in term:
+            return {"status": "error", "motivo": "keyword_invalido",
+                    "mensaje": "El término supera 80 caracteres y Google Ads lo rechaza.", "term": term}
+        return {"status": "ok", "dry_run": False, "campanas": ["Thai Merida - Delivery Search"],
+                "match_types": ["EXACT"], "term": term}
+    monkeypatch.setattr(negativos_service, "confirmar_bloqueo", fake_confirmar)
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: {})
+    monkeypatch.setattr(negativos_apply, "dry_run_negativos", lambda: False)
+    cap = {}
+    monkeypatch.setattr(negativos_service.acciones_email, "enviar",
+                        lambda asunto, cuerpo: cap.update(asunto=asunto, cuerpo=cuerpo) or {"enviado": True})
+    terms = ["win chang caucel", "los habaneros merida", "restaurante siqueff", "restaurante trompos merida",
+             "plaza luxury local 11 ..."]
+    res = negativos_service.confirmar_lote([{"term": t, "campaign_ids": ["111"]} for t in terms])
+    assert res["bloqueados"] == 4 and res["fallidos"] == 1
+    assert "4 bloqueados · 1 no se pudieron" in cap["asunto"]
+    assert "plaza luxury" in cap["cuerpo"] and "80 caracteres" in cap["cuerpo"]
+
+
+# ── BUG B: dedupe por Ads (fuente de verdad) ──────────────────────────────────
+def test_contextos_bandeja_excluye_exact_en_ads(monkeypatch):
+    # Un EXACT idéntico en Ads → NO se ofrece como candidato (jamás reaparece, sin importar deploys).
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
+    monkeypatch.setattr(negativos_service, "_decisiones", lambda payload: [{"term": "bankok casa thai"}])
+    monkeypatch.setattr(negativos_service, "_negativos_cuenta", lambda *a, **k: _negs("111", "bankok casa thai"))
+    data = negativos_service.contextos_bandeja()
+    assert "bankok casa thai" not in [i["term"] for i in data["items"]]
+
+
+def test_contextos_bandeja_broad_se_muestra_con_nota(monkeypatch):
+    # Cubierto solo por un BROAD preexistente → se MUESTRA con nota (no se oculta; Hugo decide).
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
+    monkeypatch.setattr(negativos_service, "_decisiones", lambda payload: [{"term": "bankok casa thai"}])
+    monkeypatch.setattr(negativos_service, "_negativos_cuenta",
+                        lambda *a, **k: _negs("111", "casa thai", match_type="BROAD"))
+    data = negativos_service.contextos_bandeja()
+    item = next(i for i in data["items"] if i["term"] == "bankok casa thai")
+    assert item["ya_bloqueado"] is False          # NO se oculta
+    assert item["cobertura_amplia"] is True and "BROAD" in item["cobertura_nota"]
 
 
 def test_cosmetico_variante_singular_plural():

@@ -35,6 +35,18 @@ def contiene_marca(term: str) -> bool:
     return bool(_BRAND_RE.search(_norm(term)))
 
 
+# Google Ads: un keyword (incluido un negativo) admite máximo 80 caracteres y 10 palabras.
+# Más allá, la API lo rechaza ("Keyword text should be less than 80 chars").
+def motivo_keyword_invalido(term: str) -> str | None:
+    """Motivo legible si el término viola las reglas de keyword de Google Ads, o None si es válido."""
+    t = (term or "").strip()
+    if len(t) > 80:
+        return "El término supera 80 caracteres y Google Ads lo rechaza."
+    if len(t.split()) > 10:
+        return "El término supera 10 palabras y Google Ads lo rechaza."
+    return None
+
+
 def _client():
     # MISMO constructor que la ruta de lectura: env vars (canónicas en Cloud Run) → yaml solo
     # local. Antes usaba load_from_storage("google-ads.yaml"), un archivo ausente en Cloud Run

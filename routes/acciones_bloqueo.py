@@ -78,8 +78,9 @@ async def bloqueo_confirmar(body: ConfirmarBody, token: str = ""):
     if ok:
         mensaje = "Simulado (dry-run) — no se bloqueó de verdad" if dry else "Bloqueado"
     else:
-        motivo = res.get("motivo", "")
-        mensaje = _MOTIVO_MSG.get(motivo, motivo or "No se pudo bloquear")
+        # confirmar_bloqueo ya trae el motivo REAL ("…supera 80 caracteres…") en mensaje;
+        # si no, mapeamos el código de motivo.
+        mensaje = res.get("mensaje") or _MOTIVO_MSG.get(res.get("motivo", ""), res.get("motivo") or "No se pudo bloquear")
     return JSONResponse(content={**res, "ok": ok, "dry_run": dry, "mensaje": mensaje},
                         status_code=200 if ok else 409)
 
@@ -122,7 +123,8 @@ async def bloqueos_lote(body: LoteBloqueoBody, token: str = ""):
         r_ok = r.get("status") == "ok"
         r["ok"] = r_ok
         r["dry_run"] = dry
-        r["mensaje"] = _mensaje_resultado(r_ok, dry, r.get("motivo", ""))
+        # confirmar_lote ya trae el motivo REAL por término en `mensaje`; si no, lo mapeamos.
+        r["mensaje"] = (r.get("mensaje") if (not r_ok and r.get("mensaje")) else _mensaje_resultado(r_ok, dry, r.get("motivo", "")))
     res["ok"] = True  # la petición se procesó; el desglose va por término en `resultados`
     return JSONResponse(content=res)
 
@@ -157,11 +159,17 @@ def render_bloqueo(ctx: dict, token: str) -> str:
     dry = ctx.get("dry_run")
     dry_badge = "<span class='pill dry'>DRY-RUN: nada se aplica de verdad</span>" if dry else ""
 
-    ya_ts = ctx.get("ya_bloqueado_ts")
-    if ya_ts:
-        fecha = _esc(str(ya_ts)[:10])
-        estado = f"<div class='estado'>✓ Ya bloqueado el {fecha}. No es necesario volver a aplicarlo.</div>"
+    if ctx.get("ya_bloqueado"):  # EXACT idéntico ya en Ads (fuente de verdad)
+        estado = "<div class='estado'>✓ Ya bloqueado en Google Ads (EXACT). No es necesario volver a aplicarlo.</div>"
         confirm_dis = "disabled"
+    elif not ctx.get("aplicable", True):  # keyword inválida (>80 chars / >10 palabras)
+        estado = (f"<div class='estado' style='background:#FCEBEB;color:#791F1F'>"
+                  f"⚠ No bloqueable: {_esc(ctx.get('motivo_no_aplicable'))}</div>")
+        confirm_dis = "disabled"
+    elif ctx.get("cobertura_amplia"):  # solo PHRASE/BROAD lo cubre → se puede bloquear igual, Hugo decide
+        estado = (f"<div class='estado' style='background:#FAEEDA;color:#633806'>"
+                  f"{_esc(ctx.get('cobertura_nota'))}</div>")
+        confirm_dis = ""
     else:
         estado = ""
         confirm_dis = ""
@@ -232,7 +240,7 @@ function confirmar(){
     headers:{"Content-Type":"application/json"},body:JSON.stringify({term:TERM,campaign_ids:sel})})
    .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
    .then(function(res){ if(res.ok){m.className="ok";m.textContent="✓ "+(res.j.dry_run?"Simulado (dry-run)":"Bloqueado");}
-     else{b.disabled=false;m.className="err";m.textContent="No se pudo: "+(res.j.motivo||"error");} })
+     else{b.disabled=false;m.className="err";m.textContent="No se pudo: "+(res.j.mensaje||res.j.motivo||"error");} })
    .catch(function(){b.disabled=false;m.className="err";m.textContent="Error de red";});
 }
 function dejar(){
@@ -261,11 +269,19 @@ def _bandeja_card(ctx: dict, token: str) -> str:
         else:
             nota = f"<div class='nota'>{_esc(c.get('nota'))}</div>" if c.get("nota") else ""
             filas.append(f"<div class='camp off'>{nombre} <span class='pill'>theme (Smart)</span> · individual <span class='gasto'>${g}</span>{nota}</div>")
-    ya = ctx.get("ya_bloqueado_ts")
-    estado = f"<div class='estado'>✓ Ya bloqueado el {_esc(str(ya)[:10])}</div>" if ya else ""
+    ya = ctx.get("ya_bloqueado")
+    aplicable = ctx.get("aplicable", True)
+    estado = "<div class='estado'>✓ Ya bloqueado en Google Ads</div>" if ya else ""
+    # Nota cuando solo lo cubre un PHRASE/BROAD preexistente → se muestra, NO se oculta (Hugo decide).
+    nota_cob = (f"<div class='nota' style='color:#8a5a1f'>{_esc(ctx.get('cobertura_nota'))}</div>"
+                if ctx.get("cobertura_amplia") else "")
     ids_attr = _esc(",".join(search_ids))
     if ya:
         chk, row = "", ""  # ya bloqueado: nada que hacer
+    elif not aplicable:
+        # Keyword inválida (>80 chars / >10 palabras) → Google Ads jamás la acepta: NO ofrecer.
+        chk = f"<div class='nota' style='color:#791F1F'>No bloqueable: {_esc(ctx.get('motivo_no_aplicable'))}</div>"
+        row = "<div class='row'><button class='btn-sec' onclick='dejar(this)'>Dejar</button></div>"
     elif search_ids:
         chk = (f"<label class='selrow'><input type='checkbox' class='sel' data-ids='{ids_attr}' onchange='upd()'> "
                "seleccionar para el lote (EXACT en búsqueda)</label>")
@@ -277,7 +293,7 @@ def _bandeja_card(ctx: dict, token: str) -> str:
         row = f"<div class='row'><button class='btn-sec' onclick='dejar(this)'>Dejar</button></div>"
     return (f"<div class='card' data-term=\"{term}\">{chk}"
             f"<div class='term'>\"{term}\"</div>"
-            f"<div class='kpi'>{_esc(_variantes(n))} · gasto <b>${gasto}</b></div>{estado}"
+            f"<div class='kpi'>{_esc(_variantes(n))} · gasto <b>${gasto}</b></div>{estado}{nota_cob}"
             f"<div class='camps'>{''.join(filas)}</div>"
             f"{row}"
             f"<div class='msg'></div></div>")
