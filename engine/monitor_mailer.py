@@ -6,7 +6,6 @@ idempotencia. Reutiliza la config SMTP de los correos de confirmación (config.a
 from __future__ import annotations
 
 import logging
-import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -15,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 def enviar_digest(subject: str, html: str, text: str, destinatario: str | None = None) -> dict:
-    """Envía el correo del monitor (multipart text+html) a MONITOR_EMAIL_TO
-    (default thaithaimerida@gmail.com). Devuelve {enviado, ...}."""
-    to = destinatario or os.getenv("MONITOR_EMAIL_TO", "thaithaimerida@gmail.com")
+    """Envía el correo del monitor (multipart text+html) al destinatario único
+    `MONITOR_RECIPIENT` (default administracion@thaithaimerida.com.mx). Devuelve {enviado, ...}."""
     try:
         from config.agent_config import (
-            EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, EMAIL_FROM, EMAIL_FROM_NAME, GMAIL_APP_PASSWORD,
+            EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, EMAIL_FROM, EMAIL_FROM_NAME, GMAIL_APP_PASSWORD, MONITOR_RECIPIENT,
         )
+        to = destinatario or MONITOR_RECIPIENT
         if not GMAIL_APP_PASSWORD:
             return {"enviado": False, "motivo": "GMAIL_APP_PASSWORD no configurado"}
         msg = MIMEMultipart("alternative")
