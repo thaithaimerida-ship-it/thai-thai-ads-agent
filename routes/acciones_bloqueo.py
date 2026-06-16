@@ -87,8 +87,16 @@ async def bloqueo_confirmar(body: ConfirmarBody, token: str = ""):
 
 @router.post("/acciones/bloqueo/dejar")
 async def bloqueo_dejar(body: DejarBody, token: str = ""):
+    """Descarta un término (no se vuelve a ofrecer). NO toca Ads. Devuelve SIEMPRE JSON
+    {ok, mensaje} — nunca un 500 sin body (el JS muestra el motivo real, no 'Error de red')."""
     _require_token(token)
-    return JSONResponse(content=negativos_service.dejar(body.term))
+    try:
+        res = negativos_service.dejar(body.term)
+    except Exception as exc:
+        logger.exception("bloqueo_dejar: fallo con '%s'", body.term)
+        return JSONResponse(content={"ok": False, "mensaje": _error_mensaje(exc)}, status_code=500)
+    ok = res.get("status") == "ok"
+    return JSONResponse(content={**res, "ok": ok, "mensaje": "Descartado" if ok else "No se pudo descartar"})
 
 
 @router.get("/acciones/bloqueos", response_class=HTMLResponse)
@@ -303,6 +311,12 @@ def render_bandeja(data: dict, token: str) -> str:
     items = data.get("items") or []
     cards = "".join(_bandeja_card(c, token) for c in items) or \
         "<div class='empty'>No hay candidatos a bloqueo ahora mismo. 🎉</div>"
+    nb = int(data.get("no_bloqueables") or 0)
+    if nb:  # rastro fuera del flujo principal: basura del feed que Google jamás aceptaría
+        cards += (f"<div class='card' style='opacity:.75'><div class='nota'>🗑️ {nb} término"
+                  f"{'s' if nb != 1 else ''} no bloqueable{'s' if nb != 1 else ''} "
+                  "(&gt;80 caracteres o &gt;10 palabras) descartado"
+                  f"{'s' if nb != 1 else ''} automáticamente — Google Ads no los acepta.</div></div>")
     dry = "<span class='pill dry'>DRY-RUN: nada se aplica de verdad</span>" if data.get("dry_run") else ""
     return _BANDEJA.replace("__TOKEN__", _esc(token)).replace("__CARDS__", cards).replace("__DRY__", dry)
 
@@ -378,10 +392,21 @@ function bloquearLote(){
    })
    .catch(function(){ el("loteMsg").innerHTML="<span class='err'>Error de red</span>"; upd(); });
 }
-function dejar(btn){ var card=btn.closest(".card"); var term=card.getAttribute("data-term"); var msg=card.querySelector(".msg"); msg.className="msg"; msg.textContent="Guardando…";
+function dejar(btn){
+  var card=btn.closest(".card"); var term=card.getAttribute("data-term"); var msg=card.querySelector(".msg");
+  btn.disabled=true; msg.className="msg"; msg.textContent="Descartando…";
+  var cb=card.querySelector(".sel"); if(cb){cb.checked=false;cb.disabled=true;cb.setAttribute("data-done","1");}
   fetch("/acciones/bloqueo/dejar?token="+encodeURIComponent(T),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({term:term})})
-   .then(function(r){return r.json();}).then(function(j){ msg.innerHTML="<span class='ok'>✓ Marcado como válido. No se vuelve a preguntar.</span>"; var cb=card.querySelector(".sel"); if(cb){cb.checked=false;cb.disabled=true;cb.setAttribute("data-done","1");} upd(); })
-   .catch(function(){ msg.innerHTML="<span class='err'>Error de red</span>"; }); }
+   .then(function(r){ return r.json().then(function(j){ return {http:r.status, j:j}; }); })
+   .then(function(res){ var j=res.j||{};
+     if(j.ok){ // quitar la tarjeta in-place con leyenda
+       card.innerHTML="<div class='estado'>✓ Descartado — no se volverá a ofrecer.</div>"; upd();
+     } else {
+       if(cb){cb.disabled=false;cb.removeAttribute("data-done");}
+       msg.innerHTML="<span class='err'>No se pudo descartar: "+esc(j.mensaje||j.detail||("HTTP "+res.http))+"</span>"; btn.disabled=false; upd();
+     }
+   })
+   .catch(function(){ if(cb){cb.disabled=false;cb.removeAttribute("data-done");} msg.innerHTML="<span class='err'>Error de red</span>"; btn.disabled=false; }); }
 function bloquear(btn){
   var card=btn.closest(".card"); var term=card.getAttribute("data-term"); var msg=card.querySelector(".msg");
   var idsAttr=btn.getAttribute("data-ids")||""; var ids=idsAttr.split(",").filter(Boolean);

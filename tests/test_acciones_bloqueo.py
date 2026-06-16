@@ -224,18 +224,48 @@ def test_dry_run_no_llama_ads_api(monkeypatch):
     assert r["status"] == "dry_run" and r["applied"] is False
 
 
-def test_dejar_actualiza_diccionario_sin_tocar_ads(monkeypatch, tmp_path):
-    dict_path = tmp_path / "dict.json"
-    dict_path.write_text('{"acknowledged_external_roots": [], "competitor_roots": ["casa thai"]}', encoding="utf-8")
-    monkeypatch.setattr(negativos_service, "_DICT_PATH", str(dict_path))
+def test_dejar_persiste_en_log_sin_tocar_ads_ni_diccionario(monkeypatch, tmp_path):
+    # 'dejar' persiste en el LOG (writable), NO escribe term_dictionary.json (read-only en prod).
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(negativos_service, "_DICT_PATH", "/ruta/read-only/que-no-existe.json")  # si lo tocara, fallaría
     monkeypatch.setattr(negativos_apply.ads_client, "add_negative_keyword",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("dejar no toca Ads")))
     res = negativos_service.dejar("la rueda")
-    assert res["toca_ads"] is False and res["agregado"] is True
-    import json
-    data = json.loads(dict_path.read_text(encoding="utf-8"))
-    assert "la rueda" in data["acknowledged_external_roots"]
+    assert res["status"] == "ok" and res["toca_ads"] is False
+    assert "la rueda" in acciones_log.terminos_dejados()
+
+
+def test_dejar_termino_no_bloqueable_largo_funciona(monkeypatch, tmp_path):
+    # Caso del bug: un término >80 chars (no bloqueable) DEBE poder descartarse sin crashear.
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    largo = "plaza luxury local 11 av andres garcia lavin 349 lunes a domingo 12 00 pm cocina cierra merida"
+    res = negativos_service.dejar(largo)
+    assert res["status"] == "ok"
+    assert largo in acciones_log.terminos_dejados()
+
+
+def test_contextos_bandeja_excluye_descartado(monkeypatch, tmp_path):
+    # Tras 'Dejar', el término NO reaparece como candidato (excluido por el log).
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
+    monkeypatch.setattr(negativos_service, "_decisiones", lambda payload: [{"term": "bankok casa thai"}])
+    assert "bankok casa thai" in [i["term"] for i in negativos_service.contextos_bandeja()["items"]]
+    negativos_service.dejar("bankok casa thai")
+    assert "bankok casa thai" not in [i["term"] for i in negativos_service.contextos_bandeja()["items"]]
+
+
+def test_dejar_endpoint_devuelve_json_ok(client, monkeypatch):
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "dejar",
+                        lambda term, *a, **k: {"status": "ok", "term": term, "toca_ads": False})
+    r = client.post("/acciones/bloqueo/dejar?token=secreto", json={"term": "x"})
+    assert r.status_code == 200 and r.json()["ok"] is True and r.json()["mensaje"] == "Descartado"
+    # si revienta → 500 con JSON {ok:false, mensaje} (nunca body no-JSON → 'Error de red')
+    def _boom(term, *a, **k):
+        raise PermissionError("[Errno 13] Permission denied: 'term_dictionary.json'")
+    monkeypatch.setattr(acciones_bloqueo.negativos_service, "dejar", _boom)
+    r2 = client.post("/acciones/bloqueo/dejar?token=secreto", json={"term": "x"})
+    assert r2.status_code == 500 and r2.json()["ok"] is False and "Error del servidor" in r2.json()["mensaje"]
 
 
 def test_smart_manual_required_pending_y_receta(monkeypatch, tmp_path):
@@ -357,6 +387,26 @@ def test_contextos_bandeja_excluye_exact_en_ads(monkeypatch):
     monkeypatch.setattr(negativos_service, "_negativos_cuenta", lambda *a, **k: _negs("111", "bankok casa thai"))
     data = negativos_service.contextos_bandeja()
     assert "bankok casa thai" not in [i["term"] for i in data["items"]]
+
+
+def test_contextos_bandeja_filtra_no_bloqueables(monkeypatch, tmp_path):
+    # >80 chars / >10 palabras: basura del feed → NO es candidato desde el inicio (no depende de "Dejar").
+    monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
+    largo = ("plaza luxury local 11 av andres garcia lavin 349 lunes a domingo 12 00 pm cocina "
+             "cierra oriental city merida")
+    monkeypatch.setattr(negativos_service, "_payload_busqueda", lambda *a, **k: _payload())
+    monkeypatch.setattr(negativos_service, "_decisiones",
+                        lambda payload: [{"term": largo}, {"term": "bankok casa thai"}])
+    data = negativos_service.contextos_bandeja()
+    terms = [i["term"] for i in data["items"]]
+    assert largo not in terms              # no aparece como candidato
+    assert "bankok casa thai" in terms     # el válido sí
+    assert data["no_bloqueables"] >= 1     # queda el rastro/contador
+
+
+def test_render_bandeja_contador_no_bloqueables():
+    html = acciones_bloqueo.render_bandeja({"dry_run": False, "items": [], "no_bloqueables": 2}, "TOK")
+    assert "2 términos no bloqueables" in html and "descartados automáticamente" in html
 
 
 def test_contextos_bandeja_broad_se_muestra_con_nota(monkeypatch):
