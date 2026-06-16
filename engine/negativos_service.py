@@ -234,7 +234,9 @@ def contextos_bandeja(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     dictionary = _cargar_diccionario()
     decisiones = _decisiones(payload)
     negs = _negativos_cuenta()  # negativos REALES de Ads (un solo fetch para toda la bandeja)
+    descartados = _descartados()  # términos que Hugo descartó con "Dejar"
     items, vistos = [], set()
+    no_bloqueables = 0
     for d in decisiones:
         term = d.get("term")
         if not term:
@@ -243,6 +245,11 @@ def contextos_bandeja(payload: dict[str, Any] | None = None) -> dict[str, Any]:
         if gk in vistos:
             continue
         vistos.add(gk)
+        if negativos_apply.motivo_keyword_invalido(term):  # >80 chars / >10 palabras: Google JAMÁS lo
+            no_bloqueables += 1                             # acepta → no es candidato (basura del feed)
+            continue
+        if negativos_apply._norm(term) in descartados:  # "Dejar" → no se vuelve a ofrecer
+            continue
         ctx = contexto_bloqueo(term, payload, negativos=negs)
         if not ctx.get("bloqueable"):
             continue
@@ -250,7 +257,8 @@ def contextos_bandeja(payload: dict[str, Any] | None = None) -> dict[str, Any]:
             continue
         items.append(ctx)
     items.sort(key=lambda c: c.get("gasto_total", 0), reverse=True)
-    return {"total": len(items), "dry_run": negativos_apply.dry_run_negativos(), "items": items}
+    return {"total": len(items), "dry_run": negativos_apply.dry_run_negativos(),
+            "items": items, "no_bloqueables": no_bloqueables}
 
 
 def confirmar_lote(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -288,17 +296,14 @@ def confirmar_lote(items: list[dict[str, Any]]) -> dict[str, Any]:
             "resultados": resultados, "correo": correo}
 
 
+def _descartados() -> set[str]:
+    """Términos descartados con 'Dejar' (normalizados), desde el log writable de acciones."""
+    return {negativos_apply._norm(t) for t in acciones_log.terminos_dejados() if t}
+
+
 def dejar(term: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Marca el término como búsqueda válida en el diccionario (no se vuelve a preguntar).
-    NO toca Google Ads."""
-    dictionary = _cargar_diccionario()
-    tnorm = negativos_apply._norm(term).strip()
-    lista = dictionary.setdefault("acknowledged_external_roots", [])
-    agregado = False
-    if tnorm and tnorm not in [negativos_apply._norm(x) for x in lista]:
-        lista.append(term.strip())
-        agregado = True
-        with open(_DICT_PATH, "w", encoding="utf-8") as f:
-            json.dump(dictionary, f, ensure_ascii=False, indent=2)
-    acciones_log.registrar({"accion": "dejar", "term": term, "resultado": "ok", "agregado": agregado})
-    return {"status": "ok", "agregado": agregado, "toca_ads": False}
+    """Descarta el término: no se vuelve a ofrecer en la bandeja. NO toca Google Ads.
+    Persiste en el LOG de acciones (writable en Cloud Run). Antes escribía term_dictionary.json,
+    que es read-only en la imagen → PermissionError 500. Funciona con términos no bloqueables (>80)."""
+    registrado = acciones_log.registrar({"accion": "dejar", "term": (term or "").strip(), "resultado": "ok"})
+    return {"status": "ok", "term": term, "toca_ads": False, "registro": registrado}

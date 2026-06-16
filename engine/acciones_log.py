@@ -77,6 +77,13 @@ def monitor_ya_enviado_hoy(fecha: str, path: str | None = None) -> bool:
     )
 
 
+def terminos_dejados(path: str | None = None) -> list[str]:
+    """Términos descartados con 'Dejar' (accion='dejar'). El log es la fuente writable en
+    Cloud Run (el diccionario committeado es read-only). Sirve para no re-ofrecerlos."""
+    return [r["term"] for r in _leer(path)
+            if r.get("accion") == "dejar" and r.get("term")]
+
+
 def textos_publicados_reales(n: int = 10, path: str | None = None) -> list[str]:
     """Últimos n textos de publicaciones REALES (published=True), del más reciente al más
     antiguo. Sirve para no repetir respuestas del banco contra lo ya publicado de verdad."""
