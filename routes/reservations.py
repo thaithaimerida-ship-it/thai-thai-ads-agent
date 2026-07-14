@@ -33,18 +33,6 @@ class ReservationRequest(BaseModel):
     origen: Optional[str] = "landing"
 
 
-def _get_supabase_conn():
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        return None
-    try:
-        import psycopg2
-        return psycopg2.connect(database_url, connect_timeout=5)
-    except Exception as e:
-        print(f"[db_supabase_error] Conexión fallida, usando SQLite: {e}")
-        return None
-
-
 def _check_email_config() -> dict:
     sender = os.getenv("EMAIL_SENDER", "")
     password = os.getenv("EMAIL_APP_PASSWORD", "")
@@ -315,36 +303,10 @@ async def create_reservation(reservation: ReservationRequest):
 
 @router.get("/reservations")
 async def get_reservations(limit: int = 50):
-    """Retorna las reservas más recientes."""
+    """Lee las reservas más recientes de la pestaña `Reservas` (Google Sheets)."""
     try:
-        pg_conn = _get_supabase_conn()
-        if pg_conn:
-            cursor = pg_conn.cursor()
-            cursor.execute("""
-                SELECT id, name, email, phone,
-                       date::text, time::text, guests, occasion, status, created_at::text
-                FROM reservations
-                ORDER BY created_at DESC LIMIT %s
-            """, (limit,))
-            rows = cursor.fetchall()
-            pg_conn.close()
-        else:
-            import sqlite3
-            conn = sqlite3.connect(get_db_path())
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, name, email, phone, date, time, guests, occasion, status, created_at
-                FROM reservations ORDER BY created_at DESC LIMIT ?
-            """, (limit,))
-            rows = cursor.fetchall()
-            conn.close()
-
-        reservations = [{
-            "id": r[0], "name": r[1], "email": r[2], "phone": r[3],
-            "date": r[4], "time": r[5], "guests": r[6],
-            "occasion": r[7], "status": r[8], "created_at": r[9]
-        } for r in rows]
-
-        return {"status": "success", "total": len(reservations), "reservations": reservations}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        reservas = reservas_sheets.list_reservations(limit=limit)
+        return {"status": "success", "total": len(reservas), "reservations": reservas}
+    except Exception as e:  # noqa: BLE001
+        print(f"[get_reservations_error] {e}")
+        return {"status": "error", "message": str(e), "reservations": []}
