@@ -124,5 +124,18 @@ def test_record_and_read_persist_failure_roundtrip():
     rs.record_persist_failure("id-2", _data(), "Sheets 500", _bucket=b)
     fails = rs.read_persist_failures(_bucket=b)
     assert [f["id"] for f in fails] == ["id-1", "id-2"]
+    assert fails[0]["error"] == "Sheets 503"
     rs.clear_persist_failures(_bucket=b)
     assert rs.read_persist_failures(_bucket=b) == []
+
+
+def test_unconfirmed_roundtrip_and_separate_from_failures():
+    b = _FakeBucket()
+    rs.record_unconfirmed("u-1", _data(), "email_cliente:error, email_dueño:error, whatsapp:error", _bucket=b)
+    rs.record_persist_failure("f-1", _data(), "Sheets 503", _bucket=b)
+    unconf = rs.read_unconfirmed(_bucket=b)
+    fails = rs.read_persist_failures(_bucket=b)
+    assert [u["id"] for u in unconf] == ["u-1"] and "whatsapp:error" in unconf[0]["notif"]
+    assert [f["id"] for f in fails] == ["f-1"]  # blobs separados, no se mezclan
+    rs.clear_unconfirmed(_bucket=b)
+    assert rs.read_unconfirmed(_bucket=b) == [] and rs.read_persist_failures(_bucket=b) == [f for f in fails]

@@ -10,12 +10,14 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from engine.db_sync import get_db_path
+from engine import reservas_sheets
 from engine.url_safety import UnsafeUrlError, safe_urlopen
 
 router = APIRouter(tags=["reservations"])
 CALLMEBOT_BASE_URL = "https://api.callmebot.com/whatsapp.php"
 CALLMEBOT_ALLOWED_HOSTS = {"api.callmebot.com"}
+# WhatsApp público del restaurante — se le da al cliente si no pudimos confirmarle.
+RESTAURANT_WHATSAPP_DISPLAY = "+52 999 931 7457"
 
 
 class ReservationRequest(BaseModel):
@@ -26,6 +28,9 @@ class ReservationRequest(BaseModel):
     time: str
     guests: str
     occasion: Optional[str] = None
+    # Opcionales, retrocompatibles con el frontend actual (no cambia el contrato).
+    notas: Optional[str] = None
+    origen: Optional[str] = "landing"
 
 
 def _get_supabase_conn():
@@ -192,6 +197,8 @@ def send_email_to_owner(reservation: ReservationRequest):
     password = os.getenv("EMAIL_APP_PASSWORD")
     restaurant_email = os.getenv("EMAIL_RESTAURANT", sender)
     occasion_line = f"<p style='margin:6px 0'><b>Ocasion:</b> {reservation.occasion}</p>" if reservation.occasion else ""
+    notas_line = f"<p style='margin:6px 0;color:#a1a1aa'><b>Notas:</b> {reservation.notas}</p>" if reservation.notas else ""
+    origen_line = f"<p style='margin:6px 0;color:#71717a;font-size:12px'><b>Origen:</b> {reservation.origen}</p>" if reservation.origen else ""
     wa_link = f"https://wa.me/{reservation.phone.replace('+','').replace(' ','').replace('-','')}"
 
     restaurant_html = f"""
@@ -207,6 +214,8 @@ def send_email_to_owner(reservation: ReservationRequest):
           {occasion_line}
           <p style="margin:6px 0;color:#a1a1aa"><b>Tel:</b> {reservation.phone}</p>
           <p style="margin:6px 0;color:#a1a1aa"><b>Email:</b> {reservation.email}</p>
+          {notas_line}
+          {origen_line}
         </div>
         <a href="{wa_link}" style="display:inline-block;background:#25d366;color:#fff;text-decoration:none;padding:14px 28px;border-radius:10px;font-weight:bold;font-size:16px">Responder por WhatsApp</a>
       </div>
@@ -228,55 +237,80 @@ def send_email_to_owner(reservation: ReservationRequest):
         print(f"[owner_email_failed] error={e}")
 
 
+def _notify_all(reservation: "ReservationRequest") -> tuple[str, bool]:
+    """Dispara los 3 canales, cada uno AISLADO en su try/except. Si uno falla, los otros
+    siguen. Retorna (resumen 'email_cliente:ok, email_dueño:ok, whatsapp:error', alguna_ok)."""
+    resultados = []
+    any_ok = False
+    for etiqueta, fn in (
+        ("email_cliente", send_email_to_customer),
+        ("email_dueño", send_email_to_owner),
+        ("whatsapp", send_whatsapp_restaurant),
+    ):
+        try:
+            fn(reservation)
+            resultados.append(f"{etiqueta}:ok")
+            any_ok = True
+        except Exception as e:  # noqa: BLE001
+            print(f"[notify_failed] canal={etiqueta} error={e}")
+            resultados.append(f"{etiqueta}:error")
+    return ", ".join(resultados), any_ok
+
+
 @router.post("/reservations")
 async def create_reservation(reservation: ReservationRequest):
-    """Guarda una reserva en la base de datos y envía notificaciones."""
-    try:
-        pg_conn = _get_supabase_conn()
-        if pg_conn:
-            cursor = pg_conn.cursor()
-            cursor.execute("""
-                INSERT INTO reservations (name, email, phone, date, time, guests, occasion)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (reservation.name, reservation.email, reservation.phone, reservation.date,
-                  reservation.time, int(reservation.guests), reservation.occasion or ""))
-            reservation_id = cursor.fetchone()[0]
-            pg_conn.commit()
-            pg_conn.close()
-            db_source = "supabase"
-        else:
-            import sqlite3
-            conn = sqlite3.connect(get_db_path())
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO reservations (name, email, phone, date, time, guests, occasion)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (reservation.name, reservation.email, reservation.phone, reservation.date,
-                  reservation.time, reservation.guests, reservation.occasion or ""))
-            conn.commit()
-            reservation_id = cursor.lastrowid
-            conn.close()
-            db_source = "sqlite_fallback"
+    """Orden nuevo: validar → NOTIFICAR (independiente) → PERSISTIR en Sheets.
+    Una reserva NUNCA se pierde por almacenamiento. 200 si al menos una notificación salió."""
+    # 1) Validación: Pydantic ya validó el payload al entrar.
 
-        print(f"[reservation_created] id={reservation_id} name={reservation.name} date={reservation.date} db={db_source}")
+    # 2) Notificar — cada canal aislado. El correo al dueño trae TODOS los datos: red de seguridad final.
+    notif_result, any_ok = _notify_all(reservation)
+    print(f"[reservation_notified] name={reservation.name} date={reservation.date} -> {notif_result}")
 
-        email_cfg = _check_email_config()
-        if not email_cfg["ok"]:
-            print(f"[reservation_warning] emails desactivados: {email_cfg['issues']}")
+    # 3) Persistir en Google Sheets — su fallo NO rompe la respuesta.
+    data = reservation.model_dump()
+    persist = reservas_sheets.append_reservation(data, notif_result)
+    persisted = persist["ok"]
 
-        send_email_to_customer(reservation)
-        send_email_to_owner(reservation)
-        send_whatsapp_restaurant(reservation)
+    if not persisted:
+        # Reserva NO quedó en Sheets → red de seguridad = correo al dueño (si salió). Marca durable.
+        print(f"[reservation_persist_FAILED] id={persist['id']} error={persist['error']} data={data}")
+        try:
+            reservas_sheets.record_persist_failure(persist["id"], data, persist["error"] or "desconocido")
+        except Exception as e:  # noqa: BLE001
+            print(f"[reservation_persist_mark_failed] error={e}")
+    elif not any_ok:
+        # Reserva SÍ quedó en Sheets pero el cliente no recibió confirmación (todos los canales
+        # fallaron) → marcar para que el monitor alerte "contáctalos".
+        print(f"[reservation_unconfirmed] id={persist['id']} data={data} notif={notif_result}")
+        try:
+            reservas_sheets.record_unconfirmed(persist["id"], data, notif_result)
+        except Exception as e:  # noqa: BLE001
+            print(f"[reservation_unconfirmed_mark_failed] error={e}")
 
-        return {
-            "status": "success",
-            "reservation_id": reservation_id,
-            "message": f"Reserva confirmada para {reservation.name} el {reservation.date} a las {reservation.time}"
-        }
-    except Exception as e:
-        print(f"[reservation_failed] error={e}")
-        raise HTTPException(status_code=500, detail=f"No se pudo guardar la reserva: {e}")
+    # 4) 502 SOLO cuando no hay rastro en ningún lado: ni en Sheets ni ninguna notificación.
+    if not persisted and not any_ok:
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo registrar ni notificar la reserva por ningún medio",
+        )
+
+    # 5) 200. Si guardó pero no pudimos avisar al cliente, decírselo y darle el WhatsApp.
+    if any_ok:
+        message = f"Reserva confirmada para {reservation.name} el {reservation.date} a las {reservation.time}"
+    else:
+        message = (
+            "Tu reserva quedó registrada, pero no pudimos enviarte la confirmación en este momento. "
+            f"Escríbenos por WhatsApp al {RESTAURANT_WHATSAPP_DISPLAY} para confirmarla."
+        )
+
+    return {
+        "status": "success",
+        "reservation_id": persist["id"],
+        "persisted": persisted,
+        "notified": any_ok,
+        "message": message,
+    }
 
 
 @router.get("/reservations")

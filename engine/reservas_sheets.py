@@ -35,7 +35,8 @@ SHEETS_RW_SCOPES = [
 ]
 _MERIDA = ZoneInfo("America/Merida")
 _GCS_BUCKET = os.getenv("AGENT_GCS_BUCKET", "thai-thai-agent-data")
-_FAILURES_BLOB = "reservas/persist_failures.json"
+_FAILURES_BLOB = "reservas/persist_failures.json"      # reserva NO guardada en Sheets
+_UNCONFIRMED_BLOB = "reservas/unconfirmed.json"        # reserva guardada, cliente SIN confirmar
 _MAX_ATTEMPTS = 3
 
 
@@ -168,7 +169,10 @@ def list_reservations(limit: int = 50, *, _ws=None) -> list:
     return list(reversed(dicts))[:limit]
 
 
-# ── Marca de fallos de persistencia en GCS (durable entre deploys) ──────────
+# ── Marcadores durables en GCS (sobreviven reinicios/deploys) ───────────────
+# Dos tipos de incidente, cada uno en su blob:
+#   _FAILURES_BLOB   → reserva NO guardada en Sheets (red de seguridad = correo dueño)
+#   _UNCONFIRMED_BLOB → reserva SÍ guardada pero cliente sin confirmación (hay que contactarlo)
 
 def _get_bucket(_bucket=None):
     if _bucket is not None:
@@ -181,44 +185,68 @@ def _get_bucket(_bucket=None):
         return None
 
 
-def read_persist_failures(*, _bucket=None) -> list:
+def _read_issues(blob_name: str, *, _bucket=None) -> list:
     bucket = _get_bucket(_bucket)
     if bucket is None:
         return []
     try:
-        blob = bucket.blob(_FAILURES_BLOB)
+        blob = bucket.blob(blob_name)
         if not blob.exists():
             return []
         return json.loads(blob.download_as_text() or "[]")
     except Exception as e:  # noqa: BLE001
-        logger.error("[reservas_sheets] no se pudo leer fallos GCS: %s", e)
+        logger.error("[reservas_sheets] no se pudo leer %s: %s", blob_name, e)
         return []
 
 
-def record_persist_failure(reservation_id: str, data: dict, error: str, *, _bucket=None) -> None:
+def _record_issue(blob_name: str, reservation_id: str, data: dict, extra: dict, *, _bucket=None) -> None:
     bucket = _get_bucket(_bucket)
     if bucket is None:
-        logger.error("[reservas_sheets] FALLO no persistido (sin GCS) id=%s data=%s", reservation_id, data)
+        logger.error("[reservas_sheets] incidente no persistido (sin GCS) blob=%s id=%s data=%s",
+                     blob_name, reservation_id, data)
         return
     try:
-        failures = read_persist_failures(_bucket=bucket)
-        failures.append({
-            "id": reservation_id,
-            "when": _now_merida().strftime("%Y-%m-%d %H:%M:%S"),
-            "data": data,
-            "error": error,
-        })
-        bucket.blob(_FAILURES_BLOB).upload_from_string(
-            json.dumps(failures, ensure_ascii=False), content_type="application/json")
+        issues = _read_issues(blob_name, _bucket=bucket)
+        entry = {"id": reservation_id, "when": _now_merida().strftime("%Y-%m-%d %H:%M:%S"), "data": data}
+        entry.update(extra)
+        issues.append(entry)
+        bucket.blob(blob_name).upload_from_string(
+            json.dumps(issues, ensure_ascii=False), content_type="application/json")
     except Exception as e:  # noqa: BLE001
-        logger.error("[reservas_sheets] no se pudo marcar fallo GCS id=%s: %s", reservation_id, e)
+        logger.error("[reservas_sheets] no se pudo marcar %s id=%s: %s", blob_name, reservation_id, e)
+
+
+def _clear_issues(blob_name: str, *, _bucket=None) -> None:
+    bucket = _get_bucket(_bucket)
+    if bucket is None:
+        return
+    try:
+        bucket.blob(blob_name).upload_from_string("[]", content_type="application/json")
+    except Exception as e:  # noqa: BLE001
+        logger.error("[reservas_sheets] no se pudo limpiar %s: %s", blob_name, e)
+
+
+# Reserva NO guardada en Sheets
+def read_persist_failures(*, _bucket=None) -> list:
+    return _read_issues(_FAILURES_BLOB, _bucket=_bucket)
+
+
+def record_persist_failure(reservation_id: str, data: dict, error: str, *, _bucket=None) -> None:
+    _record_issue(_FAILURES_BLOB, reservation_id, data, {"error": error}, _bucket=_bucket)
 
 
 def clear_persist_failures(*, _bucket=None) -> None:
-    bucket = _get_bucket(_bucket)
-    if bucket is None:
-        return
-    try:
-        bucket.blob(_FAILURES_BLOB).upload_from_string("[]", content_type="application/json")
-    except Exception as e:  # noqa: BLE001
-        logger.error("[reservas_sheets] no se pudo limpiar fallos GCS: %s", e)
+    _clear_issues(_FAILURES_BLOB, _bucket=_bucket)
+
+
+# Reserva guardada pero cliente SIN confirmación (todas las notificaciones fallaron)
+def read_unconfirmed(*, _bucket=None) -> list:
+    return _read_issues(_UNCONFIRMED_BLOB, _bucket=_bucket)
+
+
+def record_unconfirmed(reservation_id: str, data: dict, notif_result: str, *, _bucket=None) -> None:
+    _record_issue(_UNCONFIRMED_BLOB, reservation_id, data, {"notif": notif_result}, _bucket=_bucket)
+
+
+def clear_unconfirmed(*, _bucket=None) -> None:
+    _clear_issues(_UNCONFIRMED_BLOB, _bucket=_bucket)
