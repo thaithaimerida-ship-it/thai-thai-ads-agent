@@ -48,6 +48,7 @@ def build_reservas_persist_status() -> dict[str, Any]:
         "checked": True,
         "persist_failures": {"count": 0, "ids": []},
         "unconfirmed": {"count": 0, "items": []},
+        "posible_duplicado": {"count": 0, "items": []},
     }
     try:
         fails = reservas_sheets.read_persist_failures()
@@ -69,6 +70,21 @@ def build_reservas_persist_status() -> dict[str, Any]:
         out["unconfirmed"] = {"count": len(unconf), "items": items}
     except Exception as e:  # noqa: BLE001
         print(f"[reservas_persist_status] unconfirmed error: {e}")
+        out["checked"] = False
+    try:
+        dups = reservas_sheets.read_posible_duplicados()
+        items = []
+        for u in dups:
+            d = u.get("data") or {}
+            items.append({
+                "nombre_nuevo": u.get("nombre_nuevo", ""),
+                "nombres_existentes": u.get("nombres_existentes", []),
+                "fecha": d.get("date", ""),
+                "hora": d.get("time", ""),
+            })
+        out["posible_duplicado"] = {"count": len(dups), "items": items}
+    except Exception as e:  # noqa: BLE001
+        print(f"[reservas_persist_status] posible_duplicado error: {e}")
         out["checked"] = False
     return out
 

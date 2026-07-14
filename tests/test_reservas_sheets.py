@@ -54,41 +54,184 @@ def test_origen_defaults_to_landing_when_missing():
 
 
 class _FakeWS:
-    def __init__(self, ids=()):
-        self._ids = list(ids)
-        self.appended = []
+    """Simula la pestaña Reservas: header fijo + filas (mutables). Registra appends y update_cell."""
+    def __init__(self, seed=None, spreadsheet_id="RID"):
+        self.rows = [list(r) for r in (seed or [])]  # todas las filas de datos (mutables)
+        self.appended = []                            # solo las agregadas vía append_row
+        self.updated = []                             # (fila, col, valor) de cada update_cell
         self.fail_times = 0
+        self.spreadsheet_id = spreadsheet_id
+
+    def get_all_values(self):
+        return [rs.RESERVAS_HEADER] + self.rows
 
     def col_values(self, n):
-        return ["id"] + self._ids
+        return [rs.RESERVAS_HEADER[n - 1]] + [r[n - 1] for r in self.rows]
 
     def append_row(self, row, **kw):
         if self.fail_times > 0:
             self.fail_times -= 1
             raise RuntimeError("Sheets API 503")
-        self.appended.append(row)
-        self._ids.append(row[0])  # simula que la fila queda en la columna A
+        r = list(row)
+        self.rows.append(r)
+        self.appended.append(r)
+
+    def update_cell(self, row, col, value):
+        self.updated.append((row, col, value))
+        self.rows[row - 2][col - 1] = value  # fila 1 = header
 
 
+def _seed_row(data, **overrides):
+    d = {**data, **overrides}
+    rid = rs.build_reservation_id(d)  # id NO depende de name/occasion
+    return rs.reservation_row(rid, "2026-01-01 00:00:00", d, "")
+
+
+# ── Caso 4: id nuevo → append ────────────────────────────────────────────────
+def test_new_id_appends():
+    ws = _FakeWS()
+    out = rs.append_reservation(_data(), "email_cliente:ok", _ws=ws)
+    assert out["status"] == "new" and len(ws.appended) == 1
+
+
+# ── Caso 1: doble-clic idéntico → skip silencioso (criterio #4) ──────────────
 def test_two_identical_posts_5s_apart_do_not_duplicate():
-    """Criterio de aceptación #4: doble clic / reenvío del navegador segundos después
-    = mismo id determinístico = una sola fila."""
     ws = _FakeWS()
     d = _data()
     t1 = datetime(2026, 7, 14, 21, 5, 9, tzinfo=ZoneInfo("America/Merida"))
     t2 = datetime(2026, 7, 14, 21, 5, 14, tzinfo=ZoneInfo("America/Merida"))  # 5s después
     out1 = rs.append_reservation(d, "email_cliente:ok", now=t1, _ws=ws)
     out2 = rs.append_reservation(d, "email_cliente:ok", now=t2, _ws=ws)
-    assert out1["id"] == out2["id"]      # id independiente del reloj
-    assert out1["ok"] and out2["ok"]
-    assert len(ws.appended) == 1          # NO duplica pese a los 5s de diferencia
+    assert out1["id"] == out2["id"]
+    assert out2["status"] == "duplicate_ignored"
+    assert len(ws.appended) == 1          # NO duplica
+
+
+def test_trailing_space_and_case_still_dedup_silently():
+    """Normalización: 'Ana López' vs '  ANA  LÓPEZ ' = mismo nombre → NO es posible_duplicado."""
+    ws = _FakeWS()
+    d = _data()
+    rs.append_reservation(d, "x", _ws=ws)
+    out = rs.append_reservation({**d, "name": "  ANA   LÓPEZ  "}, "x", _ws=ws)
+    assert out["status"] == "duplicate_ignored"
+    assert len(ws.appended) == 1
+
+
+# ── Caso 2: mismo id, distinto nombre → append + marca posible_duplicado ─────
+def test_same_id_diff_name_appends_and_marks_possible_duplicate(monkeypatch):
+    d = _data()
+    ws = _FakeWS(seed=[_seed_row(d, name="Pareja de Ana")])  # mismo email/tel/fecha/hora/personas
+    marks = []
+    monkeypatch.setattr(rs, "record_posible_duplicado", lambda *a, **k: marks.append(a))
+    out = rs.append_reservation(d, "email_cliente:ok", _ws=ws)
+    assert out["status"] == "possible_duplicate"
+    assert len(ws.appended) == 1          # NO se pierde: se agrega igual
+    assert len(marks) == 1                # marcada para alerta
+
+
+# ── Caso 3: mismo id+nombre, distinta ocasión → corrige in-place + bitácora ──
+def test_same_id_same_name_diff_occasion_updates_inplace(monkeypatch):
+    monkeypatch.setenv("RESERVAS_SHEET_ID", "RID")
+    monkeypatch.setenv("GOOGLE_SHEETS_SPREADSHEET_ID", "CONTA")
+    d = _data()  # occasion "Cumpleaños"
+    seed = _seed_row(d, occasion="Aniversario")   # mismo id+nombre, otra ocasión
+    ws = _FakeWS(seed=[seed], spreadsheet_id="RID")
+    occ_i = rs.RESERVAS_HEADER.index("ocasion")
+    marks, dupmarks = [], []
+    monkeypatch.setattr(rs, "record_cambio_ocasion", lambda *a, **k: marks.append(a))
+    monkeypatch.setattr(rs, "record_posible_duplicado", lambda *a, **k: dupmarks.append(a))
+    out = rs.append_reservation(d, "email_cliente:ok", _ws=ws)
+    assert out["status"] == "occasion_change"
+    assert ws.appended == []                              # NO fila nueva
+    assert ws.updated == [(2, occ_i + 1, "Cumpleaños")]   # UNA celda, fila 2, columna ocasion
+    assert ws.rows[0][occ_i] == "Cumpleaños"              # corregida in-place (no se pierde)
+    for i, col in enumerate(rs.RESERVAS_HEADER):          # ninguna otra columna cambió
+        if col != "ocasion":
+            assert ws.rows[0][i] == seed[i]
+    assert len(marks) == 1                                # bitácora GCS cambio_ocasion
+    assert dupmarks == []                                 # SIN alerta de posible_duplicado
+
+
+# ── CRUCE possible_duplicate × occasion_change: aislar la fila correcta ──────
+def test_occasion_change_isolates_correct_row_among_shared_id(monkeypatch):
+    """Dos filas con el MISMO id, distinto nombre (cuenta compartida). Un occasion_change
+    para UNO de esos nombres debe corregir SOLO su fila, no la del otro que comparte id."""
+    monkeypatch.setenv("RESERVAS_SHEET_ID", "RID")
+    monkeypatch.setenv("GOOGLE_SHEETS_SPREADSHEET_ID", "CONTA")
+    base = _data()
+    row_hugo = _seed_row(base, name="Hugo", occasion="cita romántica")
+    row_maria = _seed_row(base, name="Maria", occasion="cumpleaños")  # mismo id, otro nombre
+    # mismo id en ambas (el id no depende de name/occasion):
+    assert row_hugo[0] == row_maria[0]
+    ws = _FakeWS(seed=[row_hugo, row_maria], spreadsheet_id="RID")
+    occ_i = rs.RESERVAS_HEADER.index("ocasion")
+    nom_i = rs.RESERVAS_HEADER.index("nombre")
+    monkeypatch.setattr(rs, "record_cambio_ocasion", lambda *a, **k: None)
+
+    incoming = {**base, "name": "Hugo", "occasion": "aniversario"}  # id=X, nombre Hugo
+    out = rs.append_reservation(incoming, "x", _ws=ws)
+
+    assert out["status"] == "occasion_change"
+    assert ws.updated == [(2, occ_i + 1, "aniversario")]  # SOLO fila 2 (Hugo)
+    assert ws.rows[0][nom_i] == "Hugo" and ws.rows[0][occ_i] == "aniversario"   # Hugo corregido
+    assert ws.rows[1][nom_i] == "Maria" and ws.rows[1][occ_i] == "cumpleaños"   # Maria INTACTA
+
+
+# ── Guardas del único values.update del módulo ───────────────────────────────
+def test_update_occasion_refuses_accounting_book(monkeypatch):
+    import pytest
+    monkeypatch.setenv("RESERVAS_SHEET_ID", "RID")
+    monkeypatch.setenv("GOOGLE_SHEETS_SPREADSHEET_ID", "CONTA")
+    d = _data()
+    ws = _FakeWS(seed=[_seed_row(d, occasion="X")], spreadsheet_id="CONTA")  # apunta a CONTABILIDAD
+    with pytest.raises(RuntimeError):
+        rs._update_occasion_cell(ws, rs.build_reservation_id(d), d)
+    assert ws.updated == []  # NO escribió nada
+
+
+def test_update_occasion_refuses_when_reservas_id_equals_conta(monkeypatch):
+    """Misconfig: RESERVAS_SHEET_ID accidentalmente == libro de contabilidad → LANZA."""
+    import pytest
+    monkeypatch.setenv("RESERVAS_SHEET_ID", "CONTA")
+    monkeypatch.setenv("GOOGLE_SHEETS_SPREADSHEET_ID", "CONTA")
+    d = _data()
+    ws = _FakeWS(seed=[_seed_row(d, occasion="X")], spreadsheet_id="CONTA")
+    with pytest.raises(RuntimeError):
+        rs._update_occasion_cell(ws, rs.build_reservation_id(d), d)
+    assert ws.updated == []
+
+
+def test_update_occasion_refuses_ambiguous_match(monkeypatch):
+    """0 o >1 filas con id+nombre → NO escribe 'la fila que creo'."""
+    import pytest
+    monkeypatch.setenv("RESERVAS_SHEET_ID", "RID")
+    monkeypatch.setenv("GOOGLE_SHEETS_SPREADSHEET_ID", "CONTA")
+    d = _data()
+    ws = _FakeWS(seed=[_seed_row(d), _seed_row(d)], spreadsheet_id="RID")  # 2 filas mismo id+nombre
+    with pytest.raises(RuntimeError):
+        rs._update_occasion_cell(ws, rs.build_reservation_id(d), d)
+    assert ws.updated == []
+
+
+def test_update_cell_is_the_only_range_write_in_module():
+    """Grep del código: update_cell aparece UNA sola vez y solo en _update_occasion_cell;
+    ninguna otra escritura por rango (batch_update / values().update) en el módulo."""
+    import inspect
+    from engine import reservas_sheets as m
+    src = inspect.getsource(m)
+    assert src.count("update_cell(") == 1
+    fn_src = inspect.getsource(m._update_occasion_cell)
+    assert "update_cell(" in fn_src
+    assert src.replace(fn_src, "").count("update_cell(") == 0  # ninguna otra función lo usa
+    assert "batch_update(" not in src
+    assert "values().update" not in src
 
 
 def test_append_retries_then_succeeds():
     ws = _FakeWS(); ws.fail_times = 2
     sleeps = []
     out = rs.append_reservation(_data(), "email_cliente:ok", _ws=ws, _sleep=sleeps.append)
-    assert out["ok"] is True
+    assert out["ok"] is True and out["status"] == "new"
     assert len(ws.appended) == 1
     assert sleeps == [1, 2]  # backoff exponencial 1,2 (tras fallos 1 y 2)
 

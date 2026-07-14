@@ -3,12 +3,11 @@ Persistencia de reservas en Google Sheets (pestaña `Reservas`).
 Regla de oro: un fallo aquí NUNCA rompe la reserva — se marca en GCS y el
 monitor (lunes/viernes) alerta. Python puro + gspread (service account).
 
-SEGURIDAD DE ESCRITURA: el spreadsheet también contiene la contabilidad
-(Cortes_de_Caja, Ingresos_BD, ...). Este módulo escribe EXCLUSIVAMENTE con
-worksheet.append_row (spreadsheets.values.append) sobre el worksheet `Reservas`.
-La pestaña se resuelve POR NOMBRE; una vez resuelta, el append queda scoped al
-sheetId de ese objeto, así que no puede tocar otras pestañas. PROHIBIDO
-values.update / rangos absolutos.
+LIBRO DEDICADO: las reservas viven en un spreadsheet PROPIO (RESERVAS_SHEET_ID),
+separado del de contabilidad (GOOGLE_SHEETS_SPREADSHEET_ID). La service account
+tiene Editor solo en este libro; en el de contabilidad sigue read-only. Aun así,
+este módulo escribe EXCLUSIVAMENTE con worksheet.append_row (spreadsheets.values.
+append) sobre el worksheet `Reservas`; PROHIBIDO values.update / rangos absolutos.
 
 FAIL-LOUD: el path de escritura NUNCA crea estado nuevo desde un except. Si la
 pestaña `Reservas` no existe, o el spreadsheet ID / la credencial son inválidos,
@@ -19,6 +18,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -37,6 +38,8 @@ _MERIDA = ZoneInfo("America/Merida")
 _GCS_BUCKET = os.getenv("AGENT_GCS_BUCKET", "thai-thai-agent-data")
 _FAILURES_BLOB = "reservas/persist_failures.json"      # reserva NO guardada en Sheets
 _UNCONFIRMED_BLOB = "reservas/unconfirmed.json"        # reserva guardada, cliente SIN confirmar
+_POSIBLE_DUP_BLOB = "reservas/posible_duplicado.json"  # mismo id/slot, distinto nombre → alerta
+_OCCASION_BLOB = "reservas/cambios_ocasion.json"       # mismo id+nombre, distinta ocasión → registro (sin alerta)
 _MAX_ATTEMPTS = 3
 
 
@@ -58,6 +61,15 @@ def build_reservation_id(data: dict) -> str:
         str(data.get("guests", "")).strip(),  # personas
     ])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _norm(s) -> str:
+    """Normaliza texto para COMPARAR (no para el id): NFC (unifica acentos) +
+    colapsa espacios internos + trim + casefold. Así 'Hugo', 'Hugo ' y 'HUGO'
+    se consideran iguales, pero 'Hugo' vs 'Hugo G' NO."""
+    s = unicodedata.normalize("NFC", str(s or ""))
+    s = re.sub(r"\s+", " ", s).strip()
+    return s.casefold()
 
 
 def reservation_row(reservation_id: str, fecha_creacion: str, data: dict, notif_result: str) -> list:
@@ -83,9 +95,11 @@ def _open_spreadsheet():
     acceso / el ID es inválido (gspread.open_by_key propaga la excepción)."""
     import gspread
     from engine.credentials import get_credentials
-    spreadsheet_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+    # Libro DEDICADO de reservas — separado del de contabilidad. La SA tiene Editor solo aquí;
+    # en el libro de contabilidad (GOOGLE_SHEETS_SPREADSHEET_ID) sigue read-only.
+    spreadsheet_id = os.getenv("RESERVAS_SHEET_ID")
     if not spreadsheet_id:
-        raise RuntimeError("GOOGLE_SHEETS_SPREADSHEET_ID no configurado")
+        raise RuntimeError("RESERVAS_SHEET_ID no configurado")
     creds = get_credentials(scopes=SHEETS_RW_SCOPES)
     if creds is None:
         raise RuntimeError("Credenciales de service account no disponibles")
@@ -114,19 +128,105 @@ def ensure_reservas_worksheet():
         return ws
 
 
-def id_exists(ws, reservation_id: str) -> bool:
-    # Trade-off aceptado: lee SOLO la columna A (1 request, no el sheet entero). Es O(n)
-    # en nº de reservas, pero al volumen de Thai Thai (unas pocas/día) la columna A tarda
-    # años en ser un problema. Si algún día el volumen se dispara, cambiar por un índice.
+def _rows_for_id(ws, reservation_id: str) -> list:
+    """Filas existentes con ese id → [{'nombre','ocasion'}]. Lee la hoja (get_all_values).
+    Trade-off aceptado: O(n) en nº de reservas; al volumen de Thai Thai es despreciable
+    años. Si el volumen se dispara, cambiar por un índice."""
     try:
-        return reservation_id in set(ws.col_values(1))
+        values = ws.get_all_values()
     except Exception:
-        return False
+        return []
+    if len(values) < 2:
+        return []
+    header = values[0]
+    try:
+        i_id, i_nom, i_occ = header.index("id"), header.index("nombre"), header.index("ocasion")
+    except ValueError:
+        return []
+    out = []
+    for r in values[1:]:
+        if len(r) > i_id and r[i_id] == reservation_id:
+            out.append({"nombre": r[i_nom] if len(r) > i_nom else "",
+                        "ocasion": r[i_occ] if len(r) > i_occ else ""})
+    return out
+
+
+def _classify_dup(existing: list, data: dict) -> tuple:
+    """Decide qué hacer cuando el id (5 campos) ya existe. Compara nombre/ocasión
+    NORMALIZADOS. Retorna (status, extra):
+      'new'                -> id no existe → append
+      'possible_duplicate' -> mismo id, distinto nombre → append + marca + ALERTA
+      'occasion_change'    -> mismo id+nombre, distinta ocasión → corrige in-place + bitácora (sin alerta)
+      'duplicate_ignored'  -> mismo id+nombre+ocasión → skip silencioso (doble-clic real)"""
+    if not existing:
+        return "new", {}
+    norm_name = _norm(data.get("name"))
+    same_name = [r for r in existing if _norm(r["nombre"]) == norm_name]
+    if not same_name:
+        return "possible_duplicate", {"nombres_existentes": [r["nombre"] for r in existing]}
+    norm_occ = _norm(data.get("occasion"))
+    if any(_norm(r["ocasion"]) == norm_occ for r in same_name):
+        return "duplicate_ignored", {}
+    return "occasion_change", {"ocasion_anterior": same_name[0]["ocasion"]}
+
+
+def _mark(fn, *args) -> None:
+    """Ejecuta un record_* de GCS sin dejar que su fallo rompa la reserva."""
+    try:
+        fn(*args)
+    except Exception as e:  # noqa: BLE001
+        logger.error("[reservas_sheets] no se pudo marcar incidente: %s", e)
+
+
+def _ws_spreadsheet_id(ws) -> str | None:
+    sid = getattr(ws, "spreadsheet_id", None)
+    if sid:
+        return sid
+    sp = getattr(ws, "spreadsheet", None)
+    return getattr(sp, "id", None)
+
+
+def _assert_reservas_book(ws) -> None:
+    """HARD GUARD del único values.update del módulo: la celda SOLO se toca en el libro
+    DEDICADO de reservas (RESERVAS_SHEET_ID). Si el ws apunta al libro de CONTABILIDAD
+    (GOOGLE_SHEETS_SPREADSHEET_ID) o a cualquier otro, LANZA y no escribe nada. Esto impide
+    que un values.update toque contabilidad aunque en el futuro alguien confunda env vars."""
+    reservas_id = os.getenv("RESERVAS_SHEET_ID")
+    conta_id = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+    ws_id = _ws_spreadsheet_id(ws)
+    if not reservas_id:
+        raise RuntimeError("update abortado: RESERVAS_SHEET_ID no configurado")
+    if ws_id != reservas_id:
+        raise RuntimeError("update abortado: el worksheet no pertenece a RESERVAS_SHEET_ID")
+    if conta_id and ws_id == conta_id:
+        raise RuntimeError("update abortado: el target es el libro de CONTABILIDAD")
+
+
+def _update_occasion_cell(ws, reservation_id: str, data: dict) -> None:
+    """Actualiza SOLO la celda `ocasion` de la ÚNICA fila que hace match por id + nombre
+    normalizado. Guardas: (1) hard guard de libro; (2) match exacto — si hay 0 o >1 filas,
+    LANZA (nunca 'la fila que creo'). Escribe una sola celda de una sola fila."""
+    _assert_reservas_book(ws)
+    values = ws.get_all_values()
+    header = values[0]
+    i_id, i_nom, i_occ = header.index("id"), header.index("nombre"), header.index("ocasion")
+    norm_name = _norm(data.get("name"))
+    matches = [n for n, r in enumerate(values[1:], start=2)  # fila 1-based; header es la fila 1
+               if len(r) > i_id and r[i_id] == reservation_id
+               and len(r) > i_nom and _norm(r[i_nom]) == norm_name]
+    if len(matches) != 1:
+        raise RuntimeError(f"update_occasion abortado: se esperaba 1 fila match, hay {len(matches)}")
+    ws.update_cell(matches[0], i_occ + 1, str(data.get("occasion") or ""))  # 1 celda, 1 fila
+    logger.info("[reservas_sheets] ocasión corregida in-place id=%s fila=%d", reservation_id, matches[0])
 
 
 def append_reservation(data: dict, notif_result: str, *, now=None, _ws=None, _sleep=None) -> dict:
-    """Escribe UNA reserva. Idempotente por id. 3 reintentos backoff exponencial.
-    Retorna {ok, id, row, error}. NUNCA lanza."""
+    """Persiste UNA reserva con dedup-CON-ALERTA (id determinístico de 5 campos):
+      - doble-clic idéntico (nombre+ocasión iguales, normalizados) → skip silencioso;
+      - mismo id, distinto nombre (cuenta compartida / re-tecleo) → append + marca posible_duplicado;
+      - mismo id+nombre, distinta ocasión → corrige la ocasión in-place (1 celda) + bitácora cambio_ocasion;
+      - id nuevo → append.
+    3 reintentos backoff. Retorna {ok, id, row, error, status}. NUNCA lanza."""
     import time
     sleep = _sleep or time.sleep
     now = now or _now_merida()
@@ -138,25 +238,30 @@ def append_reservation(data: dict, notif_result: str, *, now=None, _ws=None, _sl
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             ws = _ws or _get_worksheet()
-            if id_exists(ws, reservation_id):
-                logger.info("[reservas_sheets] id ya existe, no se duplica: %s", reservation_id)
-                return {"ok": True, "id": reservation_id, "row": row, "error": None}
-            # append_row → spreadsheets.values.append sobre ESTE worksheet (Reservas).
-            # Sin table_range ni rango absoluto: append puro, imposible pisar otras pestañas.
-            ws.append_row(
-                row,
-                value_input_option="USER_ENTERED",
-                insert_data_option="INSERT_ROWS",
-            )
-            logger.info("[reservas_sheets] fila escrita id=%s", reservation_id)
-            return {"ok": True, "id": reservation_id, "row": row, "error": None}
+            existing = _rows_for_id(ws, reservation_id)
+            status, extra = _classify_dup(existing, data)
+            if status in ("new", "possible_duplicate"):
+                # append_row → spreadsheets.values.append sobre ESTE worksheet (Reservas).
+                # Sin rango absoluto: append puro, imposible pisar otras pestañas.
+                ws.append_row(row, value_input_option="USER_ENTERED", insert_data_option="INSERT_ROWS")
+            elif status == "occasion_change":
+                # Corrige la ocasión in-place (única celda, guardas duras). Va en el flujo
+                # principal: si falla, reintenta; si agota, se reporta (no se pierde en silencio).
+                _update_occasion_cell(ws, reservation_id, data)
+            # Side-effects durables (best-effort, tras éxito en la hoja):
+            if status == "possible_duplicate":
+                _mark(record_posible_duplicado, reservation_id, data, extra)
+            elif status == "occasion_change":
+                _mark(record_cambio_ocasion, reservation_id, data, extra)  # bitácora, sin alerta
+            logger.info("[reservas_sheets] id=%s status=%s", reservation_id, status)
+            return {"ok": True, "id": reservation_id, "row": row, "error": None, "status": status}
         except Exception as e:  # noqa: BLE001
             last_err = str(e)
             logger.warning("[reservas_sheets] intento %d/%d falló: %s", attempt, _MAX_ATTEMPTS, last_err)
             if attempt < _MAX_ATTEMPTS:
                 sleep(2 ** (attempt - 1))  # 1, 2
 
-    return {"ok": False, "id": reservation_id, "row": row, "error": last_err}
+    return {"ok": False, "id": reservation_id, "row": row, "error": last_err, "status": "error"}
 
 
 def list_reservations(limit: int = 50, *, _ws=None) -> list:
@@ -250,3 +355,33 @@ def record_unconfirmed(reservation_id: str, data: dict, notif_result: str, *, _b
 
 def clear_unconfirmed(*, _bucket=None) -> None:
     _clear_issues(_UNCONFIRMED_BLOB, _bucket=_bucket)
+
+
+# Mismo id/slot, distinto nombre → posible duplicado (cuenta compartida) → ALERTA en monitor
+def read_posible_duplicados(*, _bucket=None) -> list:
+    return _read_issues(_POSIBLE_DUP_BLOB, _bucket=_bucket)
+
+
+def record_posible_duplicado(reservation_id: str, data: dict, extra: dict, *, _bucket=None) -> None:
+    _record_issue(_POSIBLE_DUP_BLOB, reservation_id, data,
+                  {"nombre_nuevo": str(data.get("name", "")),
+                   "nombres_existentes": extra.get("nombres_existentes", [])}, _bucket=_bucket)
+
+
+def clear_posible_duplicados(*, _bucket=None) -> None:
+    _clear_issues(_POSIBLE_DUP_BLOB, _bucket=_bucket)
+
+
+# Mismo id+nombre, distinta ocasión → registro durable (SIN alerta) para no perder el cambio
+def read_cambios_ocasion(*, _bucket=None) -> list:
+    return _read_issues(_OCCASION_BLOB, _bucket=_bucket)
+
+
+def record_cambio_ocasion(reservation_id: str, data: dict, extra: dict, *, _bucket=None) -> None:
+    _record_issue(_OCCASION_BLOB, reservation_id, data,
+                  {"ocasion_anterior": str(extra.get("ocasion_anterior", "")),
+                   "ocasion_nueva": str(data.get("occasion") or "")}, _bucket=_bucket)
+
+
+def clear_cambios_ocasion(*, _bucket=None) -> None:
+    _clear_issues(_OCCASION_BLOB, _bucket=_bucket)

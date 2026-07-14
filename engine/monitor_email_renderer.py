@@ -567,6 +567,29 @@ def _reservas_persist_alert(digest: dict[str, Any], text: list[str]) -> str:
             "en la pestaña <b>Reservas</b>.</p></div>"
         )
 
+    dup = rp.get("posible_duplicado") or {}
+    n_dup = dup.get("count", 0)
+    if n_dup:
+        text.append(f"⚠ ALERTA: {n_dup} reservas con mismo contacto/slot pero distinto nombre "
+                    "(¿duplicado o cuenta compartida?) — revisa:")
+        filas_html = []
+        for it in dup.get("items") or []:
+            nuevo = _escape(it.get("nombre_nuevo") or "?")
+            prev = _escape(", ".join(it.get("nombres_existentes") or []) or "?")
+            fecha = _escape(it.get("fecha") or "")
+            hora = _escape(it.get("hora") or "")
+            text.append(f"   · {it.get('nombre_nuevo','')} vs {', '.join(it.get('nombres_existentes') or [])} "
+                        f"· {it.get('fecha','')} {it.get('hora','')}")
+            filas_html.append(f"<li style=\"margin:2px 0;\"><b>{nuevo}</b> vs {prev} · {fecha} {hora}</li>")
+        bloques.append(
+            "<div style=\"border:2px solid #7A5C00;background:#fff9e6;border-radius:8px;padding:12px;margin-bottom:12px;\">"
+            f"<p style=\"font-size:13px;font-weight:bold;color:#7A5C00;margin:0 0 4px;\">⚠ {n_dup} reservas: mismo contacto/slot, distinto nombre</p>"
+            "<p style=\"font-size:11.5px;color:#4a3a00;margin:0 0 6px;line-height:1.5;\">Mismo email+teléfono+fecha+hora+personas "
+            "que otra reserva, pero con nombre distinto. Puede ser un duplicado o una cuenta compartida (pareja/familia). "
+            "Ambas se guardaron — revisa y borra la que sobre:</p>"
+            f"<ul style=\"font-size:11.5px;color:#4a3a00;margin:0;padding-left:18px;\">{''.join(filas_html)}</ul></div>"
+        )
+
     unconf = rp.get("unconfirmed") or {}
     n_unc = unconf.get("count", 0)
     if n_unc:

@@ -42,6 +42,35 @@ def test_persist_failures_alert():
     assert "están en tu correo" in out["text_email"]
 
 
+def test_status_reads_posible_duplicado(monkeypatch):
+    monkeypatch.setattr(monitor_sources.reservas_sheets, "read_persist_failures", lambda: [])
+    monkeypatch.setattr(monitor_sources.reservas_sheets, "read_unconfirmed", lambda: [])
+    monkeypatch.setattr(monitor_sources.reservas_sheets, "read_posible_duplicados",
+                        lambda: [{"id": "d1", "nombre_nuevo": "Luis", "nombres_existentes": ["Ana"],
+                                  "data": {"date": "2026-07-20", "time": "20:30"}}])
+    r = monitor_sources.build_reservas_persist_status()
+    assert r["posible_duplicado"]["count"] == 1
+    assert r["posible_duplicado"]["items"][0]["nombre_nuevo"] == "Luis"
+    assert r["posible_duplicado"]["items"][0]["nombres_existentes"] == ["Ana"]
+
+
+def test_posible_duplicado_alert_lists_both_names():
+    d = _digest()
+    d["reservas_persist"] = {
+        "checked": True,
+        "persist_failures": {"count": 0, "ids": []},
+        "unconfirmed": {"count": 0, "items": []},
+        "posible_duplicado": {"count": 1, "items": [
+            {"nombre_nuevo": "Luis Pérez", "nombres_existentes": ["Ana López"],
+             "fecha": "2026-07-20", "hora": "20:30"}]},
+    }
+    out = render_monitor_email(d)
+    assert "distinto nombre" in out["html_email"]
+    assert "Luis Pérez" in out["html_email"] and "Ana López" in out["html_email"]
+    assert "Luis Pérez" in out["text_email"] and "Ana López" in out["text_email"]
+    assert "2026-07-20" in out["html_email"]
+
+
 def test_unconfirmed_alert_lists_contact_details():
     d = _digest()
     d["reservas_persist"] = {
