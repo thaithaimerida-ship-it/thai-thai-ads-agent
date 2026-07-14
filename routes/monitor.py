@@ -14,7 +14,7 @@ from engine import acciones_log, monitor_mailer
 from engine.monitor_digest_v3 import build_monitor_digest
 from engine.monitor_sections import build_ads_quality_from_list, build_campaign_metrics
 from engine.monitor_sources import (
-    build_keepalive_db,
+    build_reservas_persist_status,
     build_search_console_context,
     build_seo_context,
     load_gbp_context_live,
@@ -121,12 +121,14 @@ def _ctx_ads(date_range: str) -> dict:
         return {}
 
 
-def _ctx_keepalive() -> dict:
-    # Keepalive de la DB de reservas (Supabase free-tier se pausa a los 7 días sin actividad).
+def _ctx_reservas_persist() -> dict:
+    # Incidentes de reservas (marcas durables en GCS): no guardadas en Sheets + guardadas sin confirmar.
     try:
-        return {"keepalive_db": build_keepalive_db()}
+        return {"reservas_persist": build_reservas_persist_status()}
     except Exception:
-        return {"keepalive_db": {"ok": False, "checked": True, "error": "keepalive no ejecutado"}}
+        return {"reservas_persist": {"checked": False,
+                                     "persist_failures": {"count": 0, "ids": []},
+                                     "unconfirmed": {"count": 0, "items": []}}}
 
 
 def _build_context(date_range: str, mode: str) -> dict:
@@ -141,7 +143,7 @@ def _build_context(date_range: str, mode: str) -> dict:
         "mode": "friday" if str(mode).strip().lower() == "friday" else "monday",
         "links": _links(),
     }
-    tareas = [_ctx_gbp, _ctx_gloriafood, _ctx_seo, _ctx_search_console, _ctx_keepalive,
+    tareas = [_ctx_gbp, _ctx_gloriafood, _ctx_seo, _ctx_search_console, _ctx_reservas_persist,
               lambda: _ctx_ads(date_range)]
     with _cf.ThreadPoolExecutor(max_workers=len(tareas)) as ex:
         for fut in [ex.submit(t) for t in tareas]:

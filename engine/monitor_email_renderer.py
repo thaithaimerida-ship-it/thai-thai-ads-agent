@@ -544,25 +544,57 @@ def _search_console(digest: dict[str, Any], text: list[str]) -> str:
     return _section(_sc_title(sc), "".join(inner))
 
 
-def _keepalive_alert(digest: dict[str, Any], text: list[str]) -> str:
-    """Alerta SOLO si el keepalive de la DB de reservas falló (Supabase pausado/caído)."""
-    k = digest.get("keepalive_db") or {}
-    if not k.get("checked") or k.get("ok"):
+def _reservas_persist_alert(digest: dict[str, Any], text: list[str]) -> str:
+    """Dos alertas independientes de reservas (marcas durables en GCS):
+      1) persist_failures → reservas que NO se guardaron en el libro (están en el correo).
+      2) unconfirmed → reservas guardadas pero SIN confirmación al cliente: lista nombre/tel/
+         fecha-hora para contactarlos sin ir al Sheet.
+    """
+    rp = digest.get("reservas_persist") or {}
+    if not rp.get("checked"):
         return ""
-    err = _escape(k.get("error") or "sin detalle")
-    text.append(f"⚠ ALERTA: la base de datos de reservas no respondió ({k.get('error')}). Revisa Supabase — "
-                "el plan gratuito se pausa tras 7 días sin actividad y las reservas dejan de guardarse.")
-    return (
-        "<div style=\"border:2px solid #A32D2D;background:#fbe9e7;border-radius:8px;padding:12px;margin-bottom:12px;\">"
-        "<p style=\"font-size:13px;font-weight:bold;color:#A32D2D;margin:0 0 4px;\">⚠ La base de datos de reservas no respondió</p>"
-        f"<p style=\"font-size:11.5px;color:#5a1f1f;margin:0;line-height:1.5;\">El keepalive falló: {err}. Revisa Supabase "
-        "cuanto antes — el plan gratuito se pausa tras 7 días sin actividad y las reservas dejan de guardarse.</p></div>"
-    )
+    bloques = []
+
+    n_fail = (rp.get("persist_failures") or {}).get("count", 0)
+    if n_fail:
+        text.append(f"⚠ ALERTA: {n_fail} reservas no se guardaron en el libro (Google Sheets) — "
+                    "están en tu correo. Captúralas a mano en la pestaña Reservas.")
+        bloques.append(
+            "<div style=\"border:2px solid #A32D2D;background:#fbe9e7;border-radius:8px;padding:12px;margin-bottom:12px;\">"
+            f"<p style=\"font-size:13px;font-weight:bold;color:#A32D2D;margin:0 0 4px;\">⚠ {n_fail} reservas no se guardaron en el libro</p>"
+            "<p style=\"font-size:11.5px;color:#5a1f1f;margin:0;line-height:1.5;\">Estas reservas SÍ te llegaron por "
+            "correo (la notificación nunca se pierde), pero no pudieron escribirse en Google Sheets. Captúralas a mano "
+            "en la pestaña <b>Reservas</b>.</p></div>"
+        )
+
+    unconf = rp.get("unconfirmed") or {}
+    n_unc = unconf.get("count", 0)
+    if n_unc:
+        items = unconf.get("items") or []
+        text.append(f"⚠ ALERTA: {n_unc} reservas guardadas SIN confirmación al cliente — contáctalos:")
+        filas_html = []
+        for it in items:
+            nombre = _escape(it.get("nombre") or "(sin nombre)")
+            tel = _escape(it.get("telefono") or "(sin teléfono)")
+            fecha = _escape(it.get("fecha") or "")
+            hora = _escape(it.get("hora") or "")
+            text.append(f"   · {it.get('nombre','')} · {it.get('telefono','')} · {it.get('fecha','')} {it.get('hora','')}")
+            filas_html.append(
+                f"<li style=\"margin:2px 0;\"><b>{nombre}</b> · {tel} · {fecha} {hora}</li>")
+        bloques.append(
+            "<div style=\"border:2px solid #A36A00;background:#fff4e0;border-radius:8px;padding:12px;margin-bottom:12px;\">"
+            f"<p style=\"font-size:13px;font-weight:bold;color:#A36A00;margin:0 0 4px;\">⚠ {n_unc} reservas guardadas sin confirmación al cliente — contáctalos</p>"
+            "<p style=\"font-size:11.5px;color:#5a3a00;margin:0 0 6px;line-height:1.5;\">Estas reservas SÍ quedaron en el "
+            "libro, pero no pudimos avisar al cliente (correo/WhatsApp fallaron). Llámalos para confirmar:</p>"
+            f"<ul style=\"font-size:11.5px;color:#5a3a00;margin:0;padding-left:18px;\">{''.join(filas_html)}</ul></div>"
+        )
+
+    return "".join(bloques)
 
 
 def _render_full_html(digest: dict[str, Any]) -> tuple[str, list[str]]:
     text: list[str] = []
-    body = (_header(digest, text) + _keepalive_alert(digest, text) + _posibles_bloqueos(digest, text)
+    body = (_header(digest, text) + _reservas_persist_alert(digest, text) + _posibles_bloqueos(digest, text)
             + _campaigns(digest, text)
             + _busquedas(digest, text) + _resenas(digest, text) + _maps(digest, text)
             + _anuncios(digest, text) + _seo(digest, text) + _search_console(digest, text))

@@ -629,7 +629,13 @@ git commit -m "refactor(reservas): GET lee de Sheets; eliminar Supabase/SQLite d
 
 ---
 
-### Task 4: Monitor — reemplazar keepalive por alerta de "reservas no guardadas en Sheets"
+### Task 4: Monitor — reemplazar keepalive por DOS alertas de reservas
+
+> **AJUSTE (post Task 2):** el monitor renderea DOS alertas independientes, ambas leyendo GCS:
+> 1. **persist_failure** (`read_persist_failures`) → "N reservas no se guardaron en el libro — están en tu correo". Un conteo basta: esas reservas están en el correo del dueño con todos los datos.
+> 2. **unconfirmed** (`read_unconfirmed`) → "N reservas guardadas SIN confirmación al cliente — contáctalos". Estas SÍ están en Sheets (persisted=True) pero el cliente no recibió aviso. La alerta DEBE listar, por cada una, **nombre + teléfono + fecha/hora de la reserva** (de `entry["data"]`) para que Hugo pueda llamarles sin ir a buscar al Sheet. Un conteo suelto NO sirve aquí.
+
+
 
 **Files:**
 - Modify: `engine/monitor_sources.py:45-` (borrar `build_keepalive_db`; añadir `build_reservas_persist_status`)
