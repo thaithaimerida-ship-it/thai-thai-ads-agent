@@ -331,28 +331,40 @@ def _resenas(digest: dict[str, Any], text: list[str]) -> str:
         text.append("Reseñas: en reparación")
         return _section("⭐ Reseñas", _repair_block("Reseñas en reparación — sin datos confiables esta semana."))
     promedio = rv.get("promedio_general")
-    promedio_txt = f"{_number(promedio):.1f}" if promedio is not None else "—"
+    promedio_txt = f"{_number(promedio):.1f}" if promedio is not None else "—"   # 4.7 tal cual de la API
+    total_reviews = rv.get("total_reviews")
+    total_txt = _int_text(total_reviews) if total_reviews is not None else "—"
     nuevas = rv.get("nuevas_semana") or {}
-    cinco, cuatro, tres = _number(nuevas.get("cinco")), _number(nuevas.get("cuatro")), _number(nuevas.get("tres_o_menos"))
-    total = _number(nuevas.get("total")) or 1
+    dist = rv.get("distribucion") or {}
+    scan_ok = rv.get("scan_completo", True)
 
-    def brow(lbl, val):
-        pct = val / total * 100
-        bar = _bar(pct, "#534AB7", "#CECBF6", 6) if val > 0 else _bar(0, "#534AB7", "#CECBF6", 6)
-        return (f"<tr><td width=\"30\" style=\"font-size:11.5px;color:#3C3489;\">{lbl}</td>"
-                f"<td>{bar}</td><td width=\"18\" align=\"right\" style=\"font-size:11.5px;color:#3C3489;\">{_int_text(val)}</td></tr>")
+    # Barras = distribución HISTÓRICA por estrella (5★..1★) sobre el total real. Si el escaneo
+    # completo falló, NO inventamos barras: "no disponible esta vez" (rating y total sí salen).
+    if scan_ok and dist and total_reviews:
+        def brow(estrellas):
+            val = _number(dist.get(estrellas) if estrellas in dist else dist.get(str(estrellas)) or 0)
+            pct = (val / total_reviews * 100) if total_reviews else 0
+            return (f"<tr><td width=\"30\" style=\"font-size:11.5px;color:#3C3489;\">{estrellas}★</td>"
+                    f"<td>{_bar(pct, '#534AB7', '#CECBF6', 6)}</td>"
+                    f"<td width=\"40\" align=\"right\" style=\"font-size:11.5px;color:#3C3489;\">{_int_text(val)}</td></tr>")
+        barras = ("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
+                  + "".join(brow(e) for e in (5, 4, 3, 2, 1)) + "</table>")
+    else:
+        barras = "<p style=\"font-size:11.5px;color:#999;\">Distribución: no disponible esta vez.</p>"
 
     sin_resp = _int_text(rv.get("cinco_sin_responder"))
     inner = [
         "<div style=\"background:#EEEDFE;border-radius:8px;padding:14px;\">"
         "<table role=\"presentation\" width=\"100%\"><tr>"
-        f"<td width=\"90\" align=\"center\" valign=\"top\"><div style=\"font-size:34px;font-weight:bold;color:#26215C;line-height:1;\">{_escape(promedio_txt)}</div>"
-        "<div style=\"font-size:12px;color:#534AB7;\">★★★★½</div><div style=\"font-size:10.5px;color:#534AB7;\">promedio general</div></td>"
+        f"<td width=\"100\" align=\"center\" valign=\"top\"><div style=\"font-size:34px;font-weight:bold;color:#26215C;line-height:1;\">{_escape(promedio_txt)}</div>"
+        "<div style=\"font-size:15px;color:#534AB7;\">⭐</div>"
+        "<div style=\"font-size:10.5px;color:#534AB7;\">promedio general</div>"
+        f"<div style=\"font-size:10.5px;color:#534AB7;margin-top:4px;\">{_escape(total_txt)} reseñas</div></td>"
         "<td valign=\"top\">"
-        f"<p style=\"font-size:11.5px;color:#3C3489;font-weight:bold;margin:0 0 5px;\">{_int_text(nuevas.get('total'))} nuevas esta semana:</p>"
-        "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">"
-        + brow("5★", cinco) + brow("4★", cuatro) + brow("≤3★", tres)
-        + "</table></td></tr></table>"
+        "<p style=\"font-size:11.5px;color:#3C3489;font-weight:bold;margin:0 0 5px;\">Distribución (histórico):</p>"
+        + barras +
+        f"<p style=\"font-size:10.5px;color:#534AB7;margin:6px 0 0;\">{_int_text(nuevas.get('total'))} nuevas esta semana</p>"
+        "</td></tr></table>"
     ]
     for r in rv.get("requieren_atencion") or []:
         if int(_number(r.get("estrellas"))) <= 3:
@@ -378,9 +390,18 @@ def _resenas(digest: dict[str, Any], text: list[str]) -> str:
     link = (digest.get("links") or {}).get("resenas")
     if link and pend_total > 0:
         inner.append(f"<div style=\"margin-top:8px;\">{_btn(link, 'Responder reseñas en la bandeja →', True)}</div>")
-    inner.append("<p style=\"font-size:10.5px;color:#534AB7;margin-top:6px;line-height:1.5;\">En la bandeja cada reseña trae su respuesta "
-                 "redactada por IA: ajustas si quieres, marcas varias y publicas. La de 1★ solo se muestra — esa la respondes tú directo en Google.</p></div>")
-    text.append(f"Reseñas: promedio {promedio_txt} · {sin_resp} nuevas esta semana · {_int_text(pend_total)} sin responder en total")
+    # La cláusula de ≤4★ solo aparece si hay reseñas bajas reales esta semana (singular/plural).
+    n_bajas = int(_number(nuevas.get("cuatro"))) + int(_number(nuevas.get("tres_o_menos")))
+    if n_bajas > 0:
+        clausula = (" Las de ≤4★ solo se muestran — esas las respondes tú directo en Google."
+                    if n_bajas != 1 else
+                    " La de ≤4★ solo se muestra — esa la respondes tú directo en Google.")
+    else:
+        clausula = ""
+    inner.append("<p style=\"font-size:10.5px;color:#534AB7;margin-top:6px;line-height:1.5;\">"
+                 "En la bandeja cada reseña trae su respuesta redactada por IA: ajustas si quieres, "
+                 "marcas varias y publicas." + clausula + "</p></div>")
+    text.append(f"Reseñas: promedio {promedio_txt} · {total_txt} en total · {_int_text(pend_total)} sin responder")
     if pendientes:
         for p in pendientes:
             text.append(f"  • {_text(p.get('reviewer'))} (5★): \"{_text(p.get('extracto_corto'))}\"")

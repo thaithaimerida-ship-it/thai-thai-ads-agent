@@ -120,11 +120,15 @@ def build_gbp_context(audit: dict[str, Any]) -> dict[str, Any]:
             },
         }
 
-    reviews_raw = ((audit.get("reviews") or {}).get("data") or {}).get("reviews")
+    review_data = (audit.get("reviews") or {}).get("data") or {}
+    reviews_raw = review_data.get("reviews")
     if not isinstance(reviews_raw, list):
         reviews = {"data_broken": True}
     else:
-        reviews = {"data_broken": False, "reviews": _normalize_reviews(reviews_raw)}
+        # stats = salida de fetch_reviews_full (rating/total/distribución/pendientes/completo).
+        # FUENTE ÚNICA: los pendientes del correo salen de aquí, igual que la bandeja.
+        reviews = {"data_broken": False, "reviews": _normalize_reviews(reviews_raw),
+                   "stats": review_data.get("stats")}
 
     return {"gbp": gbp, "reviews": reviews}
 
@@ -353,7 +357,8 @@ def load_gbp_context_live() -> dict[str, Any]:
     except Exception:
         audit["performance_aggregate_30d"] = {}  # build_gbp_context → gbp data_broken
     try:
-        audit["reviews"] = {"data": {"reviews": gbp_reviews.fetch_reviews_cached()}}
+        full = gbp_reviews.fetch_reviews_full()  # FUENTE ÚNICA (escaneo completo, sin caché, 2x/sem)
+        audit["reviews"] = {"data": {"reviews": full["reviews"], "stats": full}}
     except Exception:
         audit["reviews"] = {}  # build_gbp_context → reviews data_broken
     return build_gbp_context(audit)

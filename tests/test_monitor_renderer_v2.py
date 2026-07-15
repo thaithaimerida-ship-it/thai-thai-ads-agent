@@ -62,6 +62,13 @@ def _rich_context():
                 {"stars": 4, "comment": "Buena experiencia, faltaba sabor.", "create_time": "2026-05-31T00:00:00Z", "has_reply": False, "reviewer": "Marta"},
                 {"stars": 1, "comment": "Mala experiencia y mal servicio.", "create_time": "2026-05-30T00:00:00Z", "has_reply": False, "reviewer": "Ilse"},
             ],
+            "stats": {  # FUENTE ÚNICA (fetch_reviews_full): rating/total/distribución/pendientes
+                "average_rating": 4.7, "total_reviews": 1204,
+                "distribucion": {5: 950, 4: 150, 3: 60, 2: 24, 1: 20},
+                "pendientes": [{"review_id": "a", "stars": 5, "reviewer": "Ana",
+                                "comment": "Comida deliciosa y buen servicio.", "create_time": "2026-06-02T00:00:00Z"}],
+                "completo": True,
+            },
         },
         "ads_quality": {
             "data_broken": False, "total_activos": 12, "todos_aprobados": True, "rechazados": [],
@@ -512,9 +519,14 @@ def test_reviews_summary_pendientes_top3():
     from engine.monitor_sections import build_reviews_summary
     reviews = [{"stars": 5, "comment": f"Excelente {i}", "create_time": f"2026-06-{10 + i:02d}T00:00:00Z",
                 "has_reply": False, "reviewer": f"Cliente {i}"} for i in range(5)]
-    reviews.append({"stars": 5, "comment": "ya respondida", "create_time": "2026-06-01T00:00:00Z",
-                    "has_reply": True, "reviewer": "X"})
-    rs = build_reviews_summary({"reviews": {"data_broken": False, "reviews": reviews}}, "2026-06-20T00:00:00Z")
-    assert len(rs["pendientes"]) == 3            # solo 3 en el correo
-    assert rs["pendientes_total"] == 5            # 5 sin responder (la respondida no cuenta)
+    # FUENTE ÚNICA: pendientes (y total) vienen de stats["pendientes"], no se recomputan aquí.
+    pend = [{"review_id": f"p{i}", "stars": 5, "comment": f"Excelente {i}", "reviewer": f"Cliente {i}",
+             "create_time": f"2026-06-{10 + i:02d}T00:00:00Z"} for i in range(5)]
+    stats = {"average_rating": 4.7, "total_reviews": 1204, "distribucion": {5: 5, 4: 0, 3: 0, 2: 0, 1: 0},
+             "pendientes": pend, "completo": True}
+    rs = build_reviews_summary({"reviews": {"data_broken": False, "reviews": reviews, "stats": stats}}, "2026-06-20T00:00:00Z")
+    assert len(rs["pendientes"]) == 3            # top-3 en el correo
+    assert rs["pendientes_total"] == 5            # FUENTE ÚNICA = len(stats["pendientes"])
     assert all(p["estrellas"] == 5 for p in rs["pendientes"])
+    assert rs["promedio_general"] == 4.7          # rating de la API (bug #2)
+    assert rs["total_reviews"] == 1204            # total de la API (bug #3)

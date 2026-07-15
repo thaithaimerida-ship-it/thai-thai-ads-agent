@@ -15,12 +15,18 @@ def _raw_review(stars="FIVE", comment="Rico todo", reply=False):
     return r
 
 
+def _full(reviews, completo=True):
+    """Salida de la FUENTE ÚNICA fetch_reviews_full."""
+    return {"reviews": reviews, "average_rating": 4.7, "total_reviews": 100,
+            "distribucion": {5: 0, 4: 0, 3: 0, 2: 0, 1: 0}, "pendientes": [], "completo": completo}
+
+
 def test_live_arma_ambas_secciones_con_dato(monkeypatch):
     monkeypatch.setattr(gbp_reviews, "fetch_performance_30d_cached",
                         lambda *a, **k: {"BUSINESS_IMPRESSIONS_MOBILE_MAPS": 22173,
                                          "BUSINESS_DIRECTION_REQUESTS": 1284})
-    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached",
-                        lambda *a, **k: [_raw_review(), _raw_review(stars="TWO", comment="meh")])
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_full",
+                        lambda *a, **k: _full([_raw_review(), _raw_review(stars="TWO", comment="meh")]))
     ctx = monitor_sources.load_gbp_context_live()
     assert ctx["gbp"]["data_broken"] is False
     assert ctx["gbp"]["metricas"]["vistas_maps"]["valor"] == 22173
@@ -33,7 +39,7 @@ def test_maps_caido_no_tumba_resenas(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("perf API 500")
     monkeypatch.setattr(gbp_reviews, "fetch_performance_30d_cached", _boom)
-    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", lambda *a, **k: [_raw_review()])
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_full", lambda *a, **k: _full([_raw_review()]))
     ctx = monitor_sources.load_gbp_context_live()
     assert ctx["gbp"]["data_broken"] is True          # Maps cae
     assert ctx["reviews"]["data_broken"] is False      # reseñas sobreviven
@@ -44,7 +50,7 @@ def test_resenas_caidas_no_tumban_maps(monkeypatch):
         raise RuntimeError("reviews API 403")
     monkeypatch.setattr(gbp_reviews, "fetch_performance_30d_cached",
                         lambda *a, **k: {"BUSINESS_IMPRESSIONS_MOBILE_MAPS": 100})
-    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", _boom)
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_full", _boom)
     ctx = monitor_sources.load_gbp_context_live()
     assert ctx["gbp"]["data_broken"] is False          # Maps sobrevive
     assert ctx["reviews"]["data_broken"] is True        # reseñas caen
