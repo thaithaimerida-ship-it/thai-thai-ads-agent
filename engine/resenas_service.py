@@ -12,9 +12,10 @@ from engine import acciones_email, acciones_log, borradores_cache, gbp_reviews, 
 
 
 def cargar_resenas_tanda(offset: int = 0, limit: int = 10) -> dict[str, Any]:
-    """SOLO el contenido de las reseñas (estrellas, autor, texto) — RÁPIDO, sin IA, con caché
-    de reviews. La página lo usa para render server-side inmediato; los borradores llegan aparte."""
-    reviews = gbp_reviews.fetch_reviews_cached()
+    """SOLO el contenido de las reseñas (estrellas, autor, texto) — RÁPIDO, sin IA. La LISTA
+    se lee EN VIVO (no caché): así refleja las ya contestadas (por este sistema o directo en
+    Google). La caché de 1h mostraba respondidas como pendientes hasta expirar/reiniciar."""
+    reviews = gbp_reviews.fetch_reviews()
     pendientes = gbp_reviews.pendientes_5_estrellas(reviews)
     tanda = pendientes[offset:offset + limit]
     return {
@@ -32,6 +33,10 @@ def borrador_para(review_id: str) -> dict[str, Any]:
         cacheado = borradores_cache.get(review_id)
         if cacheado is not None:
             return {**cacheado, "review_id": review_id, "cache": True}
+        # Generación IA per-card: aquí SÍ usamos caché (su propósito real) para no re-paginar
+        # GBP en cada tarjeta. La corrección de "ya contestada" vive en la LISTA (en vivo) +
+        # en el candado de publicación (es_publicable en vivo). La tarjeta solo se pide para
+        # reseñas que la lista en vivo ya mostró como pendientes.
         reviews = gbp_reviews.fetch_reviews_cached()
         pendientes = gbp_reviews.pendientes_5_estrellas(reviews)
         idx = next((i for i, r in enumerate(pendientes) if r["review_id"] == review_id), None)
@@ -57,8 +62,9 @@ def borrador_para(review_id: str) -> dict[str, Any]:
 
 def cargar_borradores_tanda(offset: int = 0, limit: int = 10) -> dict[str, Any]:
     """Trae las pendientes 5★, toma la tanda [offset:offset+limit] y genera sus borradores.
-    Las CON texto → generador + cierre del pool; las SIN texto → banco verbatim."""
-    reviews = gbp_reviews.fetch_reviews_cached()
+    Las CON texto → generador + cierre del pool; las SIN texto → banco verbatim.
+    LISTA en vivo (no caché) para no ofrecer borrador de reseñas ya contestadas."""
+    reviews = gbp_reviews.fetch_reviews()
     pendientes = gbp_reviews.pendientes_5_estrellas(reviews)
     publicadas = gbp_reviews.respuestas_publicadas(reviews, 15)
     tanda = pendientes[offset:offset + limit]

@@ -18,6 +18,32 @@ def client():
     return TestClient(app)
 
 
+def _raw(rid, reply=False):
+    r = {"reviewId": rid, "starRating": "FIVE", "comment": "rico todo",
+         "createTime": "2026-06-10T00:00:00Z", "reviewer": {"displayName": "Cliente " + rid}}
+    if reply:
+        r["reviewReply"] = {"comment": "¡gracias!", "updateTime": "2026-07-15T00:00:00Z"}
+    return r
+
+
+def test_lista_lee_en_vivo_no_cache(monkeypatch):
+    """REGRESIÓN del bug de reseñas ya contestadas: la LISTA de pendientes se lee de
+    fetch_reviews (EN VIVO), NO de fetch_reviews_cached. Una reseña contestada (excluida
+    en vivo) NO debe aparecer aunque la caché stale la muestre como pendiente."""
+    # EN VIVO: r1 pendiente, r2 YA contestada (tiene reviewReply)
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews", lambda *a, **k: [_raw("r1"), _raw("r2", reply=True)])
+    # CACHÉ STALE: mostraría r2 como pendiente (sin reply) — NO debe usarse para la lista
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", lambda *a, **k: [_raw("r1"), _raw("r2", reply=False)])
+
+    out = resenas_service.cargar_resenas_tanda()
+    ids = {it["review_id"] for it in out["items"]}
+    assert "r1" in ids
+    assert "r2" not in ids          # contestada en vivo → excluida (la caché stale la habría mostrado)
+    assert out["total"] == 1
+    # borrador_para SIGUE con caché (generación IA): ya cubierto por test_borrador_para_* (mockean
+    # fetch_reviews_cached). El propósito de la caché — no re-paginar por tarjeta (OpenAI 431) — intacto.
+
+
 # ── token ─────────────────────────────────────────────────────────────────────
 def test_sin_token_403(client, monkeypatch):
     monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
