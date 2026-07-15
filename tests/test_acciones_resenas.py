@@ -3,6 +3,8 @@
 Los 8 del plan: solo 5★ listadas, ≤4★ no publicable, una por request, sin token → 403,
 dry-run no llama a la API, no publicar dos veces.
 """
+import time
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -305,3 +307,150 @@ def test_dry_run_no_consume_resena_pero_real_si(monkeypatch, tmp_path):
     # 3) segunda acción REAL → rechazada
     seg = resenas_service.publicar("r1", "real otra vez")
     assert seg["status"] == "rechazada" and seg["motivo"] == "ya_publicada"
+
+
+# ── caché del escaneo completo (Opción 0+B: mata el doble escaneo, warmer, invalidación) ──
+def _sembrar_cache(reviews):
+    """Siembra _FULL_CACHE con un escaneo 'completo' fresco (como si fetch_reviews_full lo hubiera hecho)."""
+    gbp_reviews._FULL_CACHE["data"] = {
+        "reviews": reviews, "average_rating": 4.7, "total_reviews": len(reviews),
+        "distribucion": {5: 0, 4: 0, 3: 0, 2: 0, 1: 0},
+        "pendientes": gbp_reviews.pendientes_5_estrellas(reviews), "completo": True}
+    gbp_reviews._FULL_CACHE["ts"] = time.time()
+
+
+def _fake_page(reviews):
+    class _R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"reviews": reviews, "averageRating": 4.7, "totalReviewCount": len(reviews)}
+    return _R()
+
+
+def test_full_cachea_un_solo_escaneo(monkeypatch):
+    """Opción 0: la lista, el borrador per-card y una 2ª lectura comparten UN escaneo — no se
+    pagina 1,205 dos veces por apertura (mata el doble escaneo)."""
+    gbp_reviews.clear_reviews_cache()
+    monkeypatch.setattr(gbp_reviews, "get_access_token", lambda: "t")
+    calls = {"n": 0}
+
+    def fake_get(*a, **k):
+        calls["n"] += 1
+        return _fake_page([_raw("a")])  # una sola página (sin nextPageToken)
+    monkeypatch.setattr(gbp_reviews.requests, "get", fake_get)
+
+    a = gbp_reviews.fetch_reviews_full()          # 1er escaneo (paga red)
+    _ = gbp_reviews.fetch_reviews_full()          # caché
+    revs = gbp_reviews.fetch_reviews_cached()     # borrador_para comparte el MISMO escaneo
+    assert calls["n"] == 1                         # UN solo escaneo pese a 3 lecturas
+    assert a["total_reviews"] == 1 and len(revs) == 1
+    gbp_reviews.clear_reviews_cache()
+
+
+def test_escaneo_incompleto_no_se_cachea(monkeypatch):
+    """Un escaneo a medias (completo=False) NUNCA envenena la caché ni oculta pendientes."""
+    gbp_reviews.clear_reviews_cache()
+    monkeypatch.setattr(gbp_reviews, "get_access_token", lambda: "t")
+
+    def boom(*a, **k):
+        raise RuntimeError("red caída a mitad")
+    monkeypatch.setattr(gbp_reviews.requests, "get", boom)
+
+    out = gbp_reviews.fetch_reviews_full()
+    assert out["completo"] is False
+    assert gbp_reviews._FULL_CACHE["data"] is None  # no se guardó el parcial
+    gbp_reviews.clear_reviews_cache()
+
+
+def test_publicacion_real_invalida_cache(monkeypatch):
+    """Bug #1 en versión caché: publicar REAL saca la reseña de la caché al instante (sin re-escanear)."""
+    gbp_reviews.clear_reviews_cache()
+    _sembrar_cache([_raw("r1"), _raw("r2")])
+    assert {p["review_id"] for p in gbp_reviews._FULL_CACHE["data"]["pendientes"]} == {"r1", "r2"}
+
+    monkeypatch.setenv("DRY_RUN_RESENAS", "false")           # publicación REAL
+    monkeypatch.setattr(gbp_reviews, "get_access_token", lambda: "t")
+
+    class _R:
+        def raise_for_status(self):
+            pass
+    monkeypatch.setattr(gbp_reviews.requests, "put", lambda *a, **k: _R())
+
+    res = gbp_reviews.publicar_respuesta("r1", "gracias", token="t")
+    assert res["published"] is True
+    pend = {p["review_id"] for p in gbp_reviews.fetch_reviews_full()["pendientes"]}
+    assert pend == {"r2"}                                     # r1 desapareció al instante
+    gbp_reviews.clear_reviews_cache()
+
+
+def test_dry_run_no_invalida_cache(monkeypatch):
+    """El simulacro (dry-run) NO consume ni saca la reseña de la caché — sigue pendiente (ensayo repetible)."""
+    gbp_reviews.clear_reviews_cache()
+    _sembrar_cache([_raw("r1")])
+    monkeypatch.setenv("DRY_RUN_RESENAS", "true")
+    res = gbp_reviews.publicar_respuesta("r1", "ensayo", token="t")
+    assert res["dry_run"] is True
+    assert {p["review_id"] for p in gbp_reviews._FULL_CACHE["data"]["pendientes"]} == {"r1"}
+    gbp_reviews.clear_reviews_cache()
+
+
+def test_warm_no_op_sin_credenciales(monkeypatch):
+    """El warmer de /health NO toca la red si faltan credenciales GBP (seguro en tests/entornos sin secretos)."""
+    monkeypatch.delenv("GBP_CLIENT_ID", raising=False)
+    gbp_reviews.clear_reviews_cache()
+    gbp_reviews.warm_reviews_cache()
+    assert gbp_reviews._FULL_CACHE["data"] is None
+
+
+def test_warm_puebla_cache_con_credenciales(monkeypatch):
+    """Con credenciales presentes, el warmer puebla la caché (lo que hace /health cada ~5 min)."""
+    gbp_reviews.clear_reviews_cache()
+    monkeypatch.setenv("GBP_CLIENT_ID", "x")
+    monkeypatch.setattr(gbp_reviews, "get_access_token", lambda: "t")
+    monkeypatch.setattr(gbp_reviews.requests, "get", lambda *a, **k: _fake_page([_raw("a")]))
+    gbp_reviews.warm_reviews_cache()
+    assert gbp_reviews._FULL_CACHE["data"] is not None
+    assert gbp_reviews._FULL_CACHE["data"]["total_reviews"] == 1
+    gbp_reviews.clear_reviews_cache()
+
+
+def test_dos_accesos_concurrentes_un_solo_escaneo(monkeypatch):
+    """SINGLE-FLIGHT: si dos accesos piden el escaneo A LA VEZ (p.ej. /health recalentando y abrir
+    la bandeja), UNO escanea y el otro ESPERA su resultado — nunca se pagina 1,205 dos veces por
+    concurrencia. Regresión del doble escaneo reintroducido por carreras (no por el bug de código)."""
+    import threading
+
+    gbp_reviews.clear_reviews_cache()
+    monkeypatch.setattr(gbp_reviews, "get_access_token", lambda: "t")
+    calls = {"n": 0}
+    en_vuelo = threading.Event()   # avisa que el 1er escaneo ya empezó (tiene el lock)
+    soltar = threading.Event()     # mantiene ese escaneo "en vuelo" para forzar el solape
+
+    def fake_get(*a, **k):
+        calls["n"] += 1
+        en_vuelo.set()
+        soltar.wait(3)             # el 1er escaneo se queda dentro del lock hasta que lo soltemos
+        return _fake_page([_raw("a")])
+    monkeypatch.setattr(gbp_reviews.requests, "get", fake_get)
+
+    resultados = []
+
+    def acceso():
+        resultados.append(gbp_reviews.fetch_reviews_full())
+
+    t1 = threading.Thread(target=acceso)
+    t2 = threading.Thread(target=acceso)
+    t1.start()
+    assert en_vuelo.wait(3)        # espera a que t1 tenga el lock y esté escaneando
+    t2.start()                     # t2 llega mientras t1 escanea → debe BLOQUEARSE en el lock
+    time.sleep(0.2)                # dale tiempo a t2 de chocar con el lock (no de re-escanear)
+    soltar.set()                   # libera el escaneo de t1
+    t1.join(5)
+    t2.join(5)
+
+    assert calls["n"] == 1                         # UN solo escaneo pese a 2 accesos simultáneos
+    assert len(resultados) == 2
+    assert all(r["total_reviews"] == 1 for r in resultados)  # ambos reciben el MISMO resultado
+    gbp_reviews.clear_reviews_cache()

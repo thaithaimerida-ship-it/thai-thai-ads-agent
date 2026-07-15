@@ -487,6 +487,16 @@ async def gbp_performance(days: int = Query(30, ge=1, le=90)):
 
 @app.get("/health")
 async def health_check():
+    # Recalienta la caché del escaneo de reseñas para que la bandeja/correo abran con el escaneo
+    # ya fresco (~1-2s en vez de ~34s). Corre en threadpool → no bloquea el event loop de otros
+    # requests; no-op si la caché está fresca o si faltan credenciales GBP. Nunca tumba /health.
+    try:
+        from starlette.concurrency import run_in_threadpool
+
+        from engine import gbp_reviews
+        await run_in_threadpool(gbp_reviews.warm_reviews_cache)
+    except Exception:
+        pass
     return {
         "status": "ok",
         "version": "12.0.0",
