@@ -1,6 +1,21 @@
 import asyncio
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from routes import reservations as R
+
+
+def test_get_reservations_endpoint_eliminado():
+    """SEGURIDAD: el `GET /reservations` (huérfano, filtraba PII: nombre+tel+email sin token)
+    fue ELIMINADO. La función interna list_reservations() SIGUE viva para el monitor."""
+    app = FastAPI()
+    app.include_router(R.router)
+    client = TestClient(app)
+    # El GET ya no existe → 405 (el path solo acepta POST) o 404. Nunca 200 con PII.
+    assert client.get("/reservations").status_code in (404, 405)
+    # La función interna NO se eliminó — el monitor la seguirá usando server-side:
+    assert callable(R.reservas_sheets.list_reservations)
 
 
 def _payload():

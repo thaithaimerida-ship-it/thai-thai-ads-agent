@@ -301,12 +301,8 @@ async def create_reservation(reservation: ReservationRequest):
     }
 
 
-@router.get("/reservations")
-async def get_reservations(limit: int = 50):
-    """Lee las reservas más recientes de la pestaña `Reservas` (Google Sheets)."""
-    try:
-        reservas = reservas_sheets.list_reservations(limit=limit)
-        return {"status": "success", "total": len(reservas), "reservations": reservas}
-    except Exception as e:  # noqa: BLE001
-        print(f"[get_reservations_error] {e}")
-        return {"status": "error", "message": str(e), "reservations": []}
+# NOTA DE SEGURIDAD: se ELIMINÓ el endpoint público `GET /reservations`. Era huérfano (ningún
+# frontend/scheduler lo consumía — solo pokes manuales) y devolvía PII completa de clientes
+# (nombre + teléfono + email) sin token. El monitor NO lo necesita: lee las reservas por la
+# función interna `reservas_sheets.list_reservations()` (server-side), que sigue viva. Si en el
+# futuro se requiere una vista de admin por HTTP, montarla con `Depends(require_token)`.
