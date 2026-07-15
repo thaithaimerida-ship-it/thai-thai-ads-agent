@@ -79,6 +79,11 @@ async def resenas_ui(token: str = "", offset: int = 0, limit: int = 10):
     data = resenas_service.cargar_resenas_tanda(offset=off, limit=lim)
     cards = "".join(_card_html(it) for it in data["items"]) or \
         "<div class='empty'>No hay reseñas 5★ sin responder ahora mismo. 🎉</div>"
+    # Fallo del escaneo completo: NUNCA presentar la lista corta como si fuera completa.
+    if not data.get("scan_completo", True):
+        cards = ("<div style=\"background:#FCEBEB;border:1px solid #E0A0A0;border-radius:8px;"
+                 "padding:12px;margin-bottom:12px;font-size:12.5px;color:#791F1F;font-weight:bold;\">"
+                 "⚠️ El escaneo no se completó, pueden faltar reseñas — recarga la página.</div>") + cards
     dry = "<span class='pill dry'>DRY-RUN: nada se publica de verdad</span>" if data["dry_run"] else ""
     return HTMLResponse(
         _PAGE.replace("__TOKEN__", _esc(token)).replace("__CARDS__", cards).replace("__DRY__", dry)

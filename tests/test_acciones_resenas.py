@@ -26,22 +26,43 @@ def _raw(rid, reply=False):
     return r
 
 
-def test_lista_lee_en_vivo_no_cache(monkeypatch):
-    """REGRESIÓN del bug de reseñas ya contestadas: la LISTA de pendientes se lee de
-    fetch_reviews (EN VIVO), NO de fetch_reviews_cached. Una reseña contestada (excluida
-    en vivo) NO debe aparecer aunque la caché stale la muestre como pendiente."""
-    # EN VIVO: r1 pendiente, r2 YA contestada (tiene reviewReply)
-    monkeypatch.setattr(gbp_reviews, "fetch_reviews", lambda *a, **k: [_raw("r1"), _raw("r2", reply=True)])
-    # CACHÉ STALE: mostraría r2 como pendiente (sin reply) — NO debe usarse para la lista
-    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", lambda *a, **k: [_raw("r1"), _raw("r2", reply=False)])
+def _full(reviews, completo=True):
+    """Simula la salida de la FUENTE ÚNICA fetch_reviews_full."""
+    return {"reviews": reviews, "pendientes": gbp_reviews.pendientes_5_estrellas(reviews),
+            "average_rating": 4.7, "total_reviews": 100,
+            "distribucion": {5: 0, 4: 0, 3: 0, 2: 0, 1: 0}, "completo": completo}
 
+
+def test_lista_lee_en_vivo_no_cache(monkeypatch):
+    """REGRESIÓN del bug de reseñas ya contestadas: la LISTA sale de la FUENTE ÚNICA en vivo
+    (fetch_reviews_full), NO de la caché. Una reseña contestada no aparece aunque la caché la muestre."""
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_full",
+                        lambda *a, **k: _full([_raw("r1"), _raw("r2", reply=True)]))
+    # La caché (para generación) mostraría r2 pendiente — NO se usa para la LISTA:
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", lambda *a, **k: [_raw("r1"), _raw("r2", reply=False)])
     out = resenas_service.cargar_resenas_tanda()
     ids = {it["review_id"] for it in out["items"]}
-    assert "r1" in ids
-    assert "r2" not in ids          # contestada en vivo → excluida (la caché stale la habría mostrado)
-    assert out["total"] == 1
-    # borrador_para SIGUE con caché (generación IA): ya cubierto por test_borrador_para_* (mockean
-    # fetch_reviews_cached). El propósito de la caché — no re-paginar por tarjeta (OpenAI 431) — intacto.
+    assert "r1" in ids and "r2" not in ids
+    assert out["total"] == 1 and out["scan_completo"] is True
+
+
+def test_bandeja_avisa_si_escaneo_incompleto(client, monkeypatch):
+    """Fallo del escaneo completo: la bandeja NUNCA presenta la lista corta como completa —
+    muestra un aviso visible arriba."""
+    monkeypatch.setenv("ACCIONES_TOKEN", "secreto")
+    monkeypatch.setattr(gbp_reviews, "fetch_reviews_full", lambda *a, **k: _full([_raw("r1")], completo=False))
+    r = client.get("/acciones/resenas?token=secreto")
+    assert r.status_code == 200
+    assert "no se completó" in r.text and "recarga" in r.text.lower()
+
+
+def test_pendientes_filtra_por_fecha_2025(monkeypatch):
+    """Regla de negocio: solo 5★ sin reply con createTime >= 2025-01-01. Las viejas NO entran."""
+    reviews = [_raw("nueva"),  # createTime 2026 → entra
+               {"reviewId": "vieja", "starRating": "FIVE", "comment": "buena", "reviewer": {"displayName": "V"},
+                "createTime": "2024-12-31T00:00:00Z"}]  # 2024 → NO entra
+    pend = gbp_reviews.pendientes_5_estrellas(reviews)
+    assert [p["review_id"] for p in pend] == ["nueva"]
 
 
 # ── token ─────────────────────────────────────────────────────────────────────
@@ -60,15 +81,16 @@ def test_token_no_seteado_falla_cerrado(client, monkeypatch):
 
 # ── solo 5★ ───────────────────────────────────────────────────────────────────
 def test_solo_rating_5_listadas():
+    ct = "2026-06-01T00:00:00Z"
     reviews = [
-        {"reviewId": "a", "starRating": "FIVE", "comment": "rico", "reviewer": {"displayName": "A"}},
-        {"reviewId": "b", "starRating": "FOUR", "comment": "ok", "reviewer": {"displayName": "B"}},
-        {"reviewId": "c", "starRating": "FIVE", "reviewReply": {"comment": "ya"}, "reviewer": {"displayName": "C"}},
-        {"reviewId": "d", "starRating": "ONE", "comment": "malo", "reviewer": {"displayName": "D"}},
+        {"reviewId": "a", "starRating": "FIVE", "comment": "rico", "createTime": ct, "reviewer": {"displayName": "A"}},
+        {"reviewId": "b", "starRating": "FOUR", "comment": "ok", "createTime": ct, "reviewer": {"displayName": "B"}},
+        {"reviewId": "c", "starRating": "FIVE", "reviewReply": {"comment": "ya"}, "createTime": ct, "reviewer": {"displayName": "C"}},
+        {"reviewId": "d", "starRating": "ONE", "comment": "malo", "createTime": ct, "reviewer": {"displayName": "D"}},
     ]
     pend = gbp_reviews.pendientes_5_estrellas(reviews)
     ids = [p["review_id"] for p in pend]
-    assert ids == ["a"]  # solo 5★ sin respuesta; ≤4★ jamás
+    assert ids == ["a"]  # solo 5★ sin respuesta, >=2025; ≤4★ jamás
 
 
 def test_pagina_renderiza_tarjetas_server_side(client, monkeypatch):
@@ -166,7 +188,7 @@ def test_borrador_endpoint_per_card(client, monkeypatch):
 def test_borrador_para_genera_y_cachea(monkeypatch, tmp_path):
     from engine import borradores_cache, resenas_ai
     monkeypatch.setattr(borradores_cache, "CACHE_PATH", str(tmp_path / "bc.json"))
-    revs = [{"reviewId": "a", "starRating": "FIVE", "comment": "rico", "reviewer": {"displayName": "Ana"}}]
+    revs = [{"reviewId": "a", "starRating": "FIVE", "comment": "rico", "createTime": "2026-06-01T00:00:00Z", "reviewer": {"displayName": "Ana"}}]
     monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", lambda *a, **k: revs)
     calls = {"n": 0}
 
@@ -197,7 +219,7 @@ def test_borrador_para_sin_texto_usa_rotacion(monkeypatch, tmp_path):
     from engine import borradores_cache, resenas_ai
     monkeypatch.setattr(borradores_cache, "CACHE_PATH", str(tmp_path / "bc.json"))
     monkeypatch.setattr(acciones_log, "LOG_PATH", str(tmp_path / "log.jsonl"))
-    revs = [{"reviewId": "zzz-9", "starRating": "FIVE", "comment": "", "reviewer": {"displayName": "A"}}]
+    revs = [{"reviewId": "zzz-9", "starRating": "FIVE", "comment": "", "createTime": "2026-06-01T00:00:00Z", "reviewer": {"displayName": "A"}}]
     monkeypatch.setattr(gbp_reviews, "fetch_reviews_cached", lambda *a, **k: revs)
     out = resenas_service.borrador_para("zzz-9")
     banco = resenas_ai.cargar_banco_sin_texto()

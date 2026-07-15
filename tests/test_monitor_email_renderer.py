@@ -273,6 +273,52 @@ def test_read_only_footer_present():
         assert "Protegido: marca, términos thai, reservas" in body
 
 
+# ── Reseñas: rating de la API, total, distribución histórica, texto 1★ condicional ──
+def _rs(cuatro=0, tres=0, completo=True, distribucion=None, total=1204, promedio=4.7):
+    return {
+        "data_broken": False, "promedio_general": promedio, "total_reviews": total,
+        "distribucion": distribucion if distribucion is not None else {5: 950, 4: 150, 3: 60, 2: 24, 1: 20},
+        "scan_completo": completo,
+        "nuevas_semana": {"total": cuatro + tres, "cinco": 0, "cuatro": cuatro, "tres_o_menos": tres},
+        "cinco_sin_responder": 0, "requieren_atencion": [], "pendientes": [], "pendientes_total": 0,
+    }
+
+
+def _html_con_reviews(rs):
+    from engine.monitor_email_renderer import render_monitor_email
+    d = _digest()
+    d["reviews_summary"] = rs
+    return render_monitor_email(d)["html_email"]
+
+
+def test_rating_muestra_numero_api_sin_estrellas_dibujadas():
+    html = _html_con_reviews(_rs(promedio=4.7))
+    assert "4.7" in html
+    assert "★★★★½" not in html                 # eliminado el dibujo de estrellas hardcodeado
+    assert "1,204" in html or "1204" in html    # total de la API
+
+
+def test_barras_distribucion_historica():
+    html = _html_con_reviews(_rs(distribucion={5: 950, 4: 150, 3: 60, 2: 24, 1: 20}))
+    assert "Distribución" in html
+    for conteo in ("950", "150", "60", "24", "20"):
+        assert conteo in html                    # conteos reales del histórico
+
+
+def test_escaneo_incompleto_barras_no_disponible():
+    html = _html_con_reviews(_rs(completo=False))
+    assert "no disponible" in html               # barras degradan
+    assert "4.7" in html                          # rating y total siguen saliendo (vienen de pág.1)
+
+
+def test_clausula_1estrella_condicional_tres_casos():
+    assert "respondes tú directo en Google" not in _html_con_reviews(_rs(cuatro=0, tres=0))   # 0 bajas
+    h1 = _html_con_reviews(_rs(cuatro=1, tres=0))                                             # 1 baja
+    assert "La de ≤4★ solo se muestra —" in h1 and "Las de ≤4★" not in h1
+    h2 = _html_con_reviews(_rs(cuatro=1, tres=1))                                             # 2 bajas
+    assert "Las de ≤4★ solo se muestran —" in h2
+
+
 def test_renderer_does_not_call_external_services():
     import engine.monitor_email_renderer as renderer
 

@@ -17,13 +17,17 @@ import requests
 # request de la página/borrador. TTL configurable (default 1h). Las publicadas/banco se
 # derivan de aquí, así que no se paginan 1,144 reseñas por carga.
 _REVIEWS_CACHE: dict[str, Any] = {"ts": 0.0, "reviews": None}
+PENDIENTES_CUTOFF = "2025-01-01"  # regla de negocio: solo se responden 5★ de 2025 en adelante
 
 
-def fetch_reviews_cached(ttl: float = 3600.0, max_pages: int = 8) -> list[dict[str, Any]]:
+def fetch_reviews_cached(ttl: float = 3600.0) -> list[dict[str, Any]]:
+    """Caché en memoria (1h) del escaneo COMPLETO. SOLO para la generación IA per-card
+    (borrador_para): evita re-paginar en cada tarjeta. La LISTA de pendientes NO usa esto —
+    lee en vivo por fetch_reviews_full (corrección del bug de reseñas ya contestadas)."""
     now = time.time()
     if _REVIEWS_CACHE["reviews"] is not None and (now - _REVIEWS_CACHE["ts"]) < ttl:
         return _REVIEWS_CACHE["reviews"]
-    revs = fetch_reviews(max_pages=max_pages)
+    revs = fetch_reviews_full()["reviews"]
     _REVIEWS_CACHE["reviews"] = revs
     _REVIEWS_CACHE["ts"] = now
     return revs
@@ -114,25 +118,52 @@ def fetch_performance_30d_cached(ttl: float = 3600.0) -> dict[str, int]:
     return agg
 
 
-def fetch_reviews(token: str | None = None, max_pages: int = 8) -> list[dict[str, Any]]:
-    """Trae reseñas paginando (read-only). El snapshot del auditor solo trae página 1,
-    por eso aquí paginamos para ver las respuestas en reseñas más viejas."""
+def fetch_reviews_full(token: str | None = None) -> dict[str, Any]:
+    """FUENTE ÚNICA de verdad. Escaneo COMPLETO (sin caché, sin tope) de TODAS las reseñas.
+    Devuelve dict con:
+      reviews         — todas las reseñas crudas
+      average_rating  — averageRating de la API TAL CUAL (sin round/cálculo); el correo lo formatea
+                        a 1 decimal SOLO al mostrar (para verse "4.7" como el perfil, no 4.6999…)
+      total_reviews   — totalReviewCount de la API (~1204); NO se cuenta a mano
+      distribucion    — {5..1: int} conteo histórico real por estrella
+      pendientes      — 5★ + sin reviewReply + createTime >= 2025-01-01 (normalizadas)
+      completo        — True si paginó todo; False si falló a la mitad
+    Usada por la bandeja (al abrir) y el correo (2x/semana): el MISMO conteo de pendientes.
+    Fallo a mitad: 'completo'=False; average_rating/total vienen de la página 1 (ya presentes)."""
     token = token or get_access_token()
     url = _reviews_url()
-    out: list[dict[str, Any]] = []
-    page = None
-    for _ in range(max_pages):
-        params = {"pageSize": 50}
-        if page:
-            params["pageToken"] = page
-        resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=30)
-        resp.raise_for_status()
-        j = resp.json()
-        out.extend(j.get("reviews", []))
-        page = j.get("nextPageToken")
-        if not page:
-            break
-    return out
+    reviews: list[dict[str, Any]] = []
+    page, completo, avg, total = None, True, None, None
+    try:
+        while True:
+            params = {"pageSize": 50}
+            if page:
+                params["pageToken"] = page
+            resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=30)
+            resp.raise_for_status()
+            j = resp.json()
+            if avg is None:
+                avg, total = j.get("averageRating"), j.get("totalReviewCount")
+            reviews.extend(j.get("reviews", []))
+            page = j.get("nextPageToken")
+            if not page:
+                break
+    except Exception as e:  # noqa: BLE001
+        completo = False
+        print(f"[gbp] fetch_reviews_full incompleto: {e}")
+    dist = {5: 0, 4: 0, 3: 0, 2: 0, 1: 0}
+    for r in reviews:
+        s = _stars(r)
+        if s in dist:
+            dist[s] += 1
+    return {
+        "reviews": reviews,
+        "average_rating": avg,   # TAL CUAL de la API (sin round/int); se formatea solo al mostrar
+        "total_reviews": total,
+        "distribucion": dist,
+        "pendientes": pendientes_5_estrellas(reviews),
+        "completo": completo,
+    }
 
 
 def _limpiar_comentario(review: dict[str, Any]) -> str:
@@ -156,9 +187,11 @@ def to_resena(review: dict[str, Any]) -> dict[str, Any]:
 
 
 def pendientes_5_estrellas(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """SOLO rating == 5 sin respuesta previa, de más reciente a más antigua. Las ≤4★
-    JAMÁS entran."""
-    pend = [r for r in reviews if _stars(r) == 5 and not r.get("reviewReply")]
+    """5★ + sin respuesta previa + createTime >= 2025-01-01 (regla de negocio), de más reciente
+    a más antigua. Las ≤4★ JAMÁS entran. Sin filtro de texto: las de solo estrellas SÍ entran."""
+    pend = [r for r in reviews
+            if _stars(r) == 5 and not r.get("reviewReply")
+            and (r.get("createTime") or "") >= PENDIENTES_CUTOFF]
     pend.sort(key=lambda r: r.get("createTime", ""), reverse=True)
     return [to_resena(r) for r in pend]
 

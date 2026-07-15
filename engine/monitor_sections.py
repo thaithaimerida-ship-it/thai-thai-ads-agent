@@ -343,8 +343,8 @@ def build_reviews_summary(context: dict[str, Any] | None, reference_date: str | 
             default=datetime(2026, 1, 1),
         )
 
-    rated = [r for r in reviews if _stars(r)]
-    promedio = round(sum(_stars(r) for r in rated) / len(rated), 1) if rated else None
+    stats = reviews_ctx.get("stats") or {}
+    promedio = stats.get("average_rating")   # 4.7 directo de la API (bug #2); NO se calcula a mano
 
     nuevas = [r for r in reviews if _within_days(r.get("create_time"), reference, 7)]
     cinco = sum(1 for r in nuevas if _stars(r) == 5)
@@ -362,10 +362,9 @@ def build_reviews_summary(context: dict[str, Any] | None, reference_date: str | 
         for r in nuevas if 0 < _stars(r) <= 4
     ]
 
-    # Pendientes = 5★ sin responder (la cola que atiende la bandeja /acciones/resenas), más
-    # recientes primero. El correo muestra 3 + "+N más" y un botón a la bandeja.
-    sin_responder = [r for r in reviews if _stars(r) == 5 and not r.get("has_reply")]
-    sin_responder.sort(key=lambda r: _safe_ts(r.get("create_time")) or datetime(2000, 1, 1), reverse=True)
+    # Pendientes = FUENTE ÚNICA: stats["pendientes"] de fetch_reviews_full (5★ + sin reply +
+    # createTime>=2025). MISMO conteo que la bandeja. El correo muestra 3 + "+N más" y un botón.
+    sin_responder = stats.get("pendientes") or []
     pendientes = []
     for r in sin_responder[:3]:
         c = (r.get("comment") or "").strip()
@@ -377,12 +376,15 @@ def build_reviews_summary(context: dict[str, Any] | None, reference_date: str | 
 
     return {
         "data_broken": False,
-        "promedio_general": promedio,
+        "promedio_general": promedio,                       # 4.7 de la API (bug #2)
+        "total_reviews": stats.get("total_reviews"),        # 1204 de la API (bug #3)
+        "distribucion": stats.get("distribucion"),          # histórica 5★..1★ (bug #3)
+        "scan_completo": stats.get("completo", True),       # manejo de fallo del escaneo
         "nuevas_semana": {"total": len(nuevas), "cinco": cinco, "cuatro": cuatro, "tres_o_menos": tres_menos},
         "cinco_sin_responder": cinco_sin_responder,
         "requieren_atencion": requieren,
         "pendientes": pendientes,
-        "pendientes_total": len(sin_responder),
+        "pendientes_total": len(sin_responder),             # = len(stats["pendientes"]) → FUENTE ÚNICA
         "borradores_ia_disponibles": False,
     }
 
