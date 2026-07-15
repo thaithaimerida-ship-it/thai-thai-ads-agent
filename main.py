@@ -248,25 +248,11 @@ class FixTrackingConfirmRequest(BaseModel):
 # ============================================================================
 
 def init_db():
-    """Crea las tablas necesarias si no existen."""
+    """Crea las tablas necesarias si no existen.
+    (Las reservas ya NO viven aquí: se persisten en Google Sheets vía engine.reservas_sheets.)"""
     import sqlite3
     conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS reservations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            date TEXT NOT NULL,
-            time TEXT NOT NULL,
-            guests TEXT NOT NULL,
-            occasion TEXT,
-            status TEXT DEFAULT 'confirmed',
-            created_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    conn.commit()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS agent_actions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

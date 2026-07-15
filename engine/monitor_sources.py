@@ -14,6 +14,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from engine import reservas_sheets
+
 LANDING_URL = "https://www.thaithaimerida.com/"
 _PSI_ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
 # Search Console: URL-prefix property (the domain property is UNVERIFIED — do not use it).
@@ -35,32 +37,56 @@ def _num(value: Any) -> float:
         return 0.0
 
 
-def _sanitizar_db_error(exc: Exception) -> str:
-    import re
-    msg = f"{type(exc).__name__}: {exc}"
-    msg = re.sub(r"postgres(ql)?://[^@\s]*@", "postgresql://***@", msg)  # nunca filtrar URL/credenciales
-    return msg.strip()[:160]
-
-
-def build_keepalive_db(database_url: str | None = None, timeout: int = 8) -> dict[str, Any]:
-    """Keepalive de la base de reservas (Supabase): un SELECT 1 para que el free-tier no
-    acumule 7 días de inactividad y se pause. READ-ONLY, NO toca el código de reservas.
-    Devuelve {ok, checked, error}; el error va sanitizado (sin credenciales)."""
-    url = database_url if database_url is not None else os.getenv("DATABASE_URL")
-    if not url:
-        return {"ok": False, "checked": True, "error": "DATABASE_URL no configurada"}
+def build_reservas_persist_status() -> dict[str, Any]:
+    """Estado de incidentes de reservas — marcas durables en GCS. READ-ONLY, no toca reservas.
+    Dos señales independientes:
+      persist_failures: reservas que NO se guardaron en Sheets (están en el correo del dueño).
+      unconfirmed: reservas guardadas pero SIN confirmación al cliente (hay que contactarlas) —
+                   se incluye nombre/teléfono/fecha/hora para poder actuar sin ir al Sheet.
+    """
+    out: dict[str, Any] = {
+        "checked": True,
+        "persist_failures": {"count": 0, "ids": []},
+        "unconfirmed": {"count": 0, "items": []},
+        "posible_duplicado": {"count": 0, "items": []},
+    }
     try:
-        import psycopg2
-        conn = psycopg2.connect(url, connect_timeout=timeout)
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        finally:
-            conn.close()
-        return {"ok": True, "checked": True, "error": None}
-    except Exception as exc:
-        return {"ok": False, "checked": True, "error": _sanitizar_db_error(exc)}
+        fails = reservas_sheets.read_persist_failures()
+        out["persist_failures"] = {"count": len(fails), "ids": [f.get("id") for f in fails]}
+    except Exception as e:  # noqa: BLE001
+        print(f"[reservas_persist_status] persist_failures error: {e}")
+        out["checked"] = False
+    try:
+        unconf = reservas_sheets.read_unconfirmed()
+        items = []
+        for u in unconf:
+            d = u.get("data") or {}
+            items.append({
+                "nombre": d.get("name", ""),
+                "telefono": d.get("phone", ""),
+                "fecha": d.get("date", ""),
+                "hora": d.get("time", ""),
+            })
+        out["unconfirmed"] = {"count": len(unconf), "items": items}
+    except Exception as e:  # noqa: BLE001
+        print(f"[reservas_persist_status] unconfirmed error: {e}")
+        out["checked"] = False
+    try:
+        dups = reservas_sheets.read_posible_duplicados()
+        items = []
+        for u in dups:
+            d = u.get("data") or {}
+            items.append({
+                "nombre_nuevo": u.get("nombre_nuevo", ""),
+                "nombres_existentes": u.get("nombres_existentes", []),
+                "fecha": d.get("date", ""),
+                "hora": d.get("time", ""),
+            })
+        out["posible_duplicado"] = {"count": len(dups), "items": items}
+    except Exception as e:  # noqa: BLE001
+        print(f"[reservas_persist_status] posible_duplicado error: {e}")
+        out["checked"] = False
+    return out
 
 
 def build_gbp_context(audit: dict[str, Any]) -> dict[str, Any]:
