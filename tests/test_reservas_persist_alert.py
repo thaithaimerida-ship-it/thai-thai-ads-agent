@@ -1,7 +1,7 @@
 """Task 4 — el monitor renderea DOS alertas de reservas leyendo las marcas de GCS:
   1) persist_failures: reservas NO guardadas en Sheets (están en el correo del dueño).
   2) unconfirmed: reservas guardadas pero SIN confirmar al cliente → listar nombre/tel/fecha/hora.
-Reemplaza al viejo keepalive de Supabase.
+Reemplaza al viejo keepalive de la base de datos de reservas.
 """
 from engine import monitor_sources
 from engine.monitor_email_renderer import render_monitor_email
