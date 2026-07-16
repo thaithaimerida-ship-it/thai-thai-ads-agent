@@ -147,3 +147,39 @@ class TestGloriaFoodOrdersQuery:
         count, total = 0, 0.0
         ticket = round(total / count, 0) if count > 0 else 0.0
         assert ticket == 0.0
+
+
+# ── SEGURIDAD: los 4 GET que mutaban Google Ads sin auth fueron eliminados ──────
+_ELIMINADOS = [
+    "/webhook/gloriafood/retry",
+    "/webhook/gloriafood/create-conversion-action",
+    "/webhook/gloriafood/reactivate-conversion",
+    "/webhook/gloriafood/set-goal-biddable",
+]
+
+
+def test_endpoints_mutantes_sin_auth_eliminados():
+    """Los 4 GET (3 mutaban Google Ads sin auth, 1 read-only mal nombrado) ya no existen como ruta.
+    Se conservan: el POST principal (protegido), los diagnósticos read-only, y la función compartida
+    _send_google_ads_conversion (la usa el webhook vivo)."""
+    from routes.gloriafood_webhook import router, _send_google_ads_conversion
+    paths = {r.path for r in router.routes}
+    for p in _ELIMINADOS:
+        assert p not in paths, f"{p} debía estar eliminado"
+    # conservados:
+    assert "/webhook/gloriafood" in paths                       # webhook principal (POST protegido)
+    for p in ("/webhook/gloriafood/stats", "/webhook/gloriafood/debug-fields",
+              "/webhook/gloriafood/conversion-tag-info"):
+        assert p in paths                                        # diagnósticos read-only intactos
+    assert callable(_send_google_ads_conversion)                # función compartida sigue viva
+
+
+def test_get_eliminado_responde_404():
+    """End-to-end: pegar a los endpoints eliminados devuelve 404 (ruta inexistente), no ejecuta mutación."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes.gloriafood_webhook import router
+    app = FastAPI(); app.include_router(router)
+    client = TestClient(app)
+    for p in _ELIMINADOS:
+        assert client.get(p).status_code == 404, f"{p} debía dar 404"
