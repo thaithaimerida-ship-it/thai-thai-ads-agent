@@ -390,53 +390,6 @@ async def gloriafood_stats():
         return {"status": "error", "message": str(e)}
 
 
-@router.get("/webhook/gloriafood/retry")
-async def gloriafood_retry_conversions():
-    """Reintenta enviar conversiones pendientes (conversion_sent=0) — LIMIT 10."""
-    try:
-        from engine.memory import get_db_path
-        import sqlite3
-        db_path = get_db_path()
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT gloriafood_order_id, total_price_mxn, order_type, payment_method,
-                   client_name, client_phone, client_email, items_json, accepted_at
-            FROM gloriafood_orders
-            WHERE conversion_sent = 0
-            AND (client_email != '' OR client_phone != '')
-            ORDER BY id DESC
-            LIMIT 10
-        """)
-        rows = cursor.fetchall()
-        conn.close()
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-    if not rows:
-        return {"status": "ok", "message": "No hay conversiones pendientes", "retried": 0}
-
-    results = []
-    for row in rows:
-        parsed = {
-            "gloriafood_order_id": row[0],
-            "total_price_mxn": row[1],
-            "order_type": row[2],
-            "payment_method": row[3],
-            "client_name": row[4],
-            "client_phone": row[5],
-            "client_email": row[6],
-            "items": json.loads(row[7] or "[]"),
-            "accepted_at": row[8],
-        }
-        ok = _send_google_ads_conversion(parsed)
-        results.append({"order_id": row[0], "success": ok})
-        logger.info("[RETRY] order=%s result=%s", row[0], ok)
-
-    sent = sum(1 for r in results if r["success"])
-    return {"status": "ok", "retried": len(results), "sent": sent, "results": results}
-
-
 @router.get("/webhook/gloriafood/debug-fields")
 async def gloriafood_debug_fields():
     """Muestra qué campos tienen datos en el último pedido (sin valores personales)."""
@@ -475,39 +428,6 @@ async def gloriafood_debug_fields():
         return {"error": str(e)}
 
 
-@router.get("/webhook/gloriafood/create-conversion-action")
-async def create_offline_conversion_action():
-    """Crea la conversion action tipo UPLOAD_CLICKS para recibir Enhanced Conversions."""
-    try:
-        import os
-        from engine.ads_client import get_ads_client
-        customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
-        client = get_ads_client()
-
-        conversion_action_service = client.get_service("ConversionActionService")
-        conversion_action_operation = client.get_type("ConversionActionOperation")
-        conversion_action = conversion_action_operation.create
-
-        conversion_action.name = "Pedido GloriaFood Online"
-        conversion_action.category = client.enums.ConversionActionCategoryEnum.PURCHASE
-        conversion_action.type_ = client.enums.ConversionActionTypeEnum.UPLOAD_CLICKS
-        conversion_action.status = client.enums.ConversionActionStatusEnum.ENABLED
-        conversion_action.value_settings.default_value = 450.0
-        conversion_action.value_settings.default_currency_code = "MXN"
-        conversion_action.value_settings.always_use_default_value = False
-
-        response = conversion_action_service.mutate_conversion_actions(
-            customer_id=customer_id,
-            operations=[conversion_action_operation],
-        )
-
-        new_rn = response.results[0].resource_name
-        return {"status": "ok", "resource_name": new_rn, "name": "Pedido GloriaFood Online"}
-    except Exception as e:
-        import traceback
-        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
-
-
 @router.get("/webhook/gloriafood/conversion-tag-info")
 async def get_conversion_tag_info():
     """Consulta tag_snippets de todas las conversion actions."""
@@ -542,65 +462,3 @@ async def get_conversion_tag_info():
     except Exception as e:
         import traceback
         return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
-
-
-@router.get("/webhook/gloriafood/reactivate-conversion")
-async def reactivate_conversion():
-    """Reactiva Pedido GloriaFood Online cambiando status de REMOVED a ENABLED."""
-    import os
-    from engine.ads_client import get_ads_client
-    customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
-    client = get_ads_client()
-
-    conversion_action_service = client.get_service("ConversionActionService")
-
-    # Resource name conocido
-    resource_name = f"customers/{customer_id}/conversionActions/7572944047"
-
-    op = client.get_type("ConversionActionOperation")
-    op.update.resource_name = resource_name
-    op.update.status = client.enums.ConversionActionStatusEnum.ENABLED
-
-    from google.protobuf import field_mask_pb2
-    op.update_mask = field_mask_pb2.FieldMask(paths=["status"])
-
-    try:
-        response = conversion_action_service.mutate_conversion_actions(
-            customer_id=customer_id,
-            operations=[op],
-        )
-        return {"status": "ok", "result": str(response.results[0].resource_name)}
-    except Exception as e:
-        import traceback
-        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
-
-
-@router.get("/webhook/gloriafood/set-goal-biddable")
-async def set_goal_biddable():
-    """Lista todos los CustomerConversionGoals para diagnóstico."""
-    import os
-    from engine.ads_client import get_ads_client
-    customer_id = os.getenv("GOOGLE_ADS_TARGET_CUSTOMER_ID", "").replace("-", "")
-    client = get_ads_client()
-
-    ga_service = client.get_service("GoogleAdsService")
-    query = """
-        SELECT customer_conversion_goal.category,
-               customer_conversion_goal.origin,
-               customer_conversion_goal.biddable,
-               customer_conversion_goal.resource_name
-        FROM customer_conversion_goal
-    """
-    results = list(ga_service.search(customer_id=customer_id, query=query))
-
-    goals = []
-    for row in results:
-        g = row.customer_conversion_goal
-        goals.append({
-            "resource_name": g.resource_name,
-            "category": g.category.name if hasattr(g.category, 'name') else str(g.category),
-            "origin": g.origin.name if hasattr(g.origin, 'name') else str(g.origin),
-            "biddable": g.biddable
-        })
-
-    return {"status": "ok", "total": len(goals), "goals": goals}
