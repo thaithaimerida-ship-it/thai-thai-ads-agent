@@ -13,6 +13,10 @@ from __future__ import annotations
 import unicodedata
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
+
+_MERIDA = ZoneInfo("America/Merida")
+_UTC = ZoneInfo("UTC")
 
 
 # CPA targets (MXN) per objective — from CLAUDE.md.
@@ -474,6 +478,78 @@ def build_ads_quality_from_list(ads: list[dict[str, Any]], dias: int = 7) -> dic
         "caballos_de_batalla": caballos,
         "pobres_sin_impresiones": pobres_block,
         "necesitan_trabajo": necesitan_trabajo,
+    }
+
+
+def _fecha_creacion_a_merida(fecha_creacion: Any, origen: Any) -> datetime | None:
+    """`fecha_creacion` → datetime AWARE en hora de Mérida, para agrupar por día sin sesgo de zona.
+    Tolera hora sin zero-padding ('2026-04-01 2:38:28') y fecha sola. Heurística de zona: las de
+    origen 'landing' las escribe el backend en Mérida (naive local); las migradas (Supabase) vienen
+    en UTC. Devuelve None si no parsea (nunca lanza)."""
+    s = str(fecha_creacion or "").strip()
+    if not s:
+        return None
+    dt = None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            break
+        except ValueError:
+            continue
+    if dt is None:
+        return None
+    if str(origen or "").strip().lower() == "landing":
+        return dt.replace(tzinfo=_MERIDA)                 # ya en hora de Mérida
+    return dt.replace(tzinfo=_UTC).astimezone(_MERIDA)    # migradas: UTC → Mérida
+
+
+def build_reservas_summary(context: dict[str, Any] | None, ahora: datetime | None = None,
+                           dias: int = 7) -> dict[str, Any]:
+    """Resumen de reservas HECHAS en los últimos `dias` (por fecha_creacion, hora de Mérida) —
+    la MISMA ventana LAST_7_DAYS del reporte. Transform puro sobre context['reservas'] (que se
+    carga server-side por list_reservations()). Degrada con gracia: si la fuente falta o vino rota,
+    data_broken=True y el correo muestra 'no disponible esta vez'. SIN PII: solo nombre,
+    fecha_reserva (para cuándo viene) y personas — NUNCA teléfono ni email (/monitor/digest es
+    público). Es correcto que salga en 0 si no hubo altas nuevas en la ventana."""
+    rz = (context or {}).get("reservas") or {}
+    if rz.get("data_broken") or "items" not in rz:
+        return {"data_broken": True}
+    ahora = ahora or datetime.now(_MERIDA)
+    if ahora.tzinfo is None:
+        ahora = ahora.replace(tzinfo=_MERIDA)
+    cutoff = ahora - timedelta(days=dias)
+
+    en_ventana: list[tuple[datetime, dict[str, Any]]] = []
+    for r in rz.get("items") or []:
+        fc = _fecha_creacion_a_merida(r.get("fecha_creacion"), r.get("origen"))
+        if fc is not None and cutoff <= fc <= ahora:
+            en_ventana.append((fc, r))
+
+    total_reservas = len(en_ventana)
+    total_comensales = sum(_int(r.get("personas")) for _, r in en_ventana)
+
+    por_dia: dict[str, list[tuple[datetime, dict[str, Any]]]] = {}
+    for fc, r in en_ventana:
+        por_dia.setdefault(fc.date().isoformat(), []).append((fc, r))
+
+    grupos = []
+    for clave in sorted(por_dia.keys(), reverse=True):      # día más reciente primero
+        reservas_dia = sorted(por_dia[clave], key=lambda t: t[0], reverse=True)
+        grupos.append({
+            "dia": clave,   # ISO; el renderer lo formatea a corto español (Jue 17 jul)
+            "reservas": [{
+                "nombre": " ".join(str(r.get("nombre") or "").split()) or "(sin nombre)",
+                "fecha_reserva": str(r.get("fecha_reserva") or ""),   # para cuándo viene la reserva
+                "personas": _int(r.get("personas")),
+            } for _, r in reservas_dia],
+        })
+
+    return {
+        "data_broken": False,
+        "dias": dias,
+        "total_reservas": total_reservas,
+        "total_comensales": total_comensales,
+        "grupos": grupos,
     }
 
 

@@ -131,6 +131,16 @@ def _ctx_reservas_persist() -> dict:
                                      "unconfirmed": {"count": 0, "items": []}}}
 
 
+def _ctx_reservas() -> dict:
+    # Reservas del libro (server-side, por list_reservations) para el resumen "hechas esta semana".
+    # Degrada con gracia: si Sheets falla → data_broken=True y la sección sale "no disponible".
+    try:
+        from engine import reservas_sheets
+        return {"reservas": {"data_broken": False, "items": reservas_sheets.list_reservations(limit=1000)}}
+    except Exception:
+        return {"reservas": {"data_broken": True, "items": []}}
+
+
 def _build_context(date_range: str, mode: str) -> dict:
     """Assemble the read-only enrichment context. Never raises — missing sources degrade
     to data_broken / search-term fallback. Las 6 fuentes (GBP, GloriaFood, SEO, Search
@@ -144,7 +154,7 @@ def _build_context(date_range: str, mode: str) -> dict:
         "links": _links(),
     }
     tareas = [_ctx_gbp, _ctx_gloriafood, _ctx_seo, _ctx_search_console, _ctx_reservas_persist,
-              lambda: _ctx_ads(date_range)]
+              _ctx_reservas, lambda: _ctx_ads(date_range)]
     with _cf.ThreadPoolExecutor(max_workers=len(tareas)) as ex:
         for fut in [ex.submit(t) for t in tareas]:
             try:
