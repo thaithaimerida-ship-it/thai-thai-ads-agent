@@ -9,7 +9,22 @@ Action buttons are links to the protected Part-B pages (no mailto).
 from __future__ import annotations
 
 import html
+from datetime import date
 from typing import Any
+
+
+_DIAS_ABBR_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+_MESES_ABBR_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+
+
+def _fecha_corta_es(iso: Any, con_dia: bool = False) -> str:
+    """'2026-07-17' → '17 jul' (o 'Jue 17 jul' con con_dia). Fallback: el valor crudo si no parsea."""
+    try:
+        d = date.fromisoformat(str(iso or "").strip()[:10])
+    except (ValueError, TypeError):
+        return _text(iso, "")
+    corto = f"{d.day} {_MESES_ABBR_ES[d.month - 1]}"
+    return f"{_DIAS_ABBR_ES[d.weekday()]} {corto}" if con_dia else corto
 
 
 MAX_RENDERED_DECISIONS = 5
@@ -636,11 +651,61 @@ def _reservas_persist_alert(digest: dict[str, Any], text: list[str]) -> str:
     return "".join(bloques)
 
 
+def _reservas(digest: dict[str, Any], text: list[str]) -> str:
+    """Sección '📅 Reservas': reservas HECHAS esta semana (por fecha_creacion). Total de reservas
+    + comensales, y desglose por día con nombre · fecha_reserva · personas. SIN PII (ni tel ni
+    email — /monitor/digest es público). Degrada: si Sheets falló, 'no disponible esta vez'."""
+    rz = digest.get("reservas_summary") or {}
+    if rz.get("data_broken") or not rz:
+        text.append("Reservas: no disponible esta vez")
+        return _section("📅 Reservas", _repair_block("Reservas: no disponible esta vez."))
+
+    total_r = int(_number(rz.get("total_reservas")))
+    total_c = int(_number(rz.get("total_comensales")))
+    r_txt = "reserva" if total_r == 1 else "reservas"
+    nueva_txt = "nueva" if total_r == 1 else "nuevas"
+    c_txt = "comensal" if total_c == 1 else "comensales"
+    text.append(f"Reservas (hechas esta semana): {total_r} {r_txt} {nueva_txt} · {total_c} {c_txt}")
+
+    inner = [
+        "<div style=\"background:#eef6ee;border-radius:8px;padding:12px;\">"
+        f"<p style=\"font-size:12px;margin:0;color:#245a24;\"><b>{_int_text(total_r)}</b> {r_txt} "
+        f"{nueva_txt} esta semana · <b>{_int_text(total_c)}</b> {c_txt}</p></div>"
+    ]
+    if total_r == 0:
+        inner.append("<p style=\"font-size:11.5px;color:#777;margin:10px 0 0;\">"
+                     "Sin reservas nuevas registradas en el libro esta semana.</p>")
+    else:
+        for g in rz.get("grupos") or []:
+            reservas = g.get("reservas") or []
+            n_r = len(reservas)
+            n_p = sum(int(_number(x.get("personas"))) for x in reservas)
+            dia_hdr = _fecha_corta_es(g.get("dia"), con_dia=True)           # 'Jue 17 jul'
+            rd_txt = "reserva" if n_r == 1 else "reservas"
+            pd_txt = "persona" if n_p == 1 else "personas"
+            inner.append(f"<p style=\"font-size:11.5px;color:#245a24;font-weight:bold;margin:12px 0 4px;\">"
+                         f"{_escape(dia_hdr)} <span style=\"color:#4c8a4c;font-weight:normal;\">→ "
+                         f"{n_r} {rd_txt} · {n_p} {pd_txt}</span></p>")
+            text.append(f"  {dia_hdr} → {n_r} {rd_txt} · {n_p} {pd_txt}")
+            filas = []
+            for r in reservas:
+                pers = int(_number(r.get("personas")))
+                p_txt = "persona" if pers == 1 else "personas"
+                fr = _fecha_corta_es(r.get("fecha_reserva"))               # '25 jul'
+                filas.append(f"<li style=\"margin:2px 0;\"><b>{_escape(r.get('nombre'))}</b> · "
+                             f"para {_escape(fr)} · {_int_text(pers)} {p_txt}</li>")
+                text.append(f"     • {r.get('nombre', '')} · para {fr} · {pers} {p_txt}")
+            inner.append(f"<ul style=\"font-size:11.5px;color:#333;margin:0 0 4px;padding-left:18px;\">"
+                         f"{''.join(filas)}</ul>")
+    return _section("📅 Reservas", "".join(inner))
+
+
 def _render_full_html(digest: dict[str, Any]) -> tuple[str, list[str]]:
     text: list[str] = []
     body = (_header(digest, text) + _reservas_persist_alert(digest, text) + _posibles_bloqueos(digest, text)
             + _campaigns(digest, text)
             + _busquedas(digest, text) + _resenas(digest, text) + _maps(digest, text)
+            + _reservas(digest, text)
             + _anuncios(digest, text) + _seo(digest, text) + _search_console(digest, text))
     return body, text
 
