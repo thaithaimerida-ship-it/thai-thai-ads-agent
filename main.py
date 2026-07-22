@@ -487,16 +487,11 @@ async def gbp_performance(days: int = Query(30, ge=1, le=90)):
 
 @app.get("/health")
 async def health_check():
-    # Recalienta la caché del escaneo de reseñas para que la bandeja/correo abran con el escaneo
-    # ya fresco (~1-2s en vez de ~34s). Corre en threadpool → no bloquea el event loop de otros
-    # requests; no-op si la caché está fresca o si faltan credenciales GBP. Nunca tumba /health.
-    try:
-        from starlette.concurrency import run_in_threadpool
-
-        from engine import gbp_reviews
-        await run_in_threadpool(gbp_reviews.warm_reviews_cache)
-    except Exception:
-        pass
+    # Health check LIVIANO: responde en milisegundos y solo indica liveness ("estoy vivo").
+    # No hace trabajo pesado de red — el warm de la caché de reseñas se movió a
+    # POST /cron/warm-reviews (disparado por Cloud Scheduler ~cada 5-10 min). Antes este endpoint
+    # recalentaba la caché GBP (scan de ~1,205 reseñas, 20-78s) y hacía timeout al uptime-check de
+    # 60s → falsos positivos de la alerta. Un health check nunca debe bloquear.
     return {
         "status": "ok",
         "version": "12.0.0",
@@ -510,6 +505,20 @@ async def health_check():
             "ad-performance-optimizer"
         ]
     }
+
+
+@app.post("/cron/warm-reviews", dependencies=[Depends(require_token)])
+async def cron_warm_reviews():
+    """Recalienta la caché del escaneo completo de reseñas GBP para que la bandeja/correo abran con
+    el escaneo ya fresco (~1-2s en vez de ~34s). Lo dispara Cloud Scheduler (~cada 5-10 min) con
+    X-API-Token, en lugar del uptime-check /health (que debe ser barato). warm_reviews_cache es
+    single-flight, no-op sin credenciales GBP y nunca lanza; corre en threadpool para no bloquear el
+    event loop de otros requests."""
+    from starlette.concurrency import run_in_threadpool
+
+    from engine import gbp_reviews
+    await run_in_threadpool(gbp_reviews.warm_reviews_cache)
+    return {"status": "ok", "warmed": True}
 
 @app.get("/debug/gcs-snapshot-test")
 async def debug_gcs_snapshot_test():
