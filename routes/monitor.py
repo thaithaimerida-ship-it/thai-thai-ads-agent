@@ -164,6 +164,35 @@ def _build_context(date_range: str, mode: str) -> dict:
     return context
 
 
+def _degraded_search_terms_payload(date_range: str) -> dict:
+    """Payload 'success' vacío para cuando Google Ads no responde (token revocado, timeout, etc.).
+    Mantiene status='success' para que build_monitor_digest arme un correo VÁLIDO con las
+    secciones NO-Ads; el banner de aviso lo dispara aparte context['ads_error']. Misma forma
+    que el payload real de _build_search_terms_payload pero con 0 términos."""
+    return {
+        "status": "success",
+        "date_range": _normalize_date_range(date_range),
+        "total": 0,
+        "counts": {"rojo": 0, "amarillo": 0, "verde": 0, "blanco": 0},
+        "negative_candidates": 0,
+        "competitor_terms": 0,
+        "search_terms": [],
+        "accumulated_reds": [],
+    }
+
+
+def _is_ads_failure(exc: Exception) -> bool:
+    """True si la excepción es un fallo IDENTIFICABLE de Google Ads/auth/red (token revocado,
+    timeout, cuota, error de la API) — vs. un bug inesperado. Decide qué banner mostrar."""
+    from engine.ads_auth_alert import es_fallo_auth
+    if es_fallo_auth(str(exc)):
+        return True
+    return type(exc).__name__ in {
+        "GoogleAdsException", "RefreshError", "TransportError", "HttpError",
+        "ConnectionError", "Timeout", "ReadTimeout", "ConnectTimeout", "GatewayTimeout",
+    }
+
+
 @router.get("/monitor/digest")
 async def monitor_digest(date_range: str = "LAST_7_DAYS", mode: str = "monday"):
     """Monitor Digest V3: read-only summary + rendered email for the weekly digest.
@@ -236,9 +265,26 @@ async def monitor_send(token: str = "", tipo: str = "", force: bool = False, mar
     if not force and acciones_log.monitor_ya_enviado_hoy(fecha):
         return JSONResponse({"status": "already_sent", "fecha": fecha, "modo": modo})
 
-    payload = _build_search_terms_payload(date_range)
+    try:
+        payload = _build_search_terms_payload(date_range)
+        ads_error = None
+    except Exception as exc:
+        # Google Ads caído NO debe dejar sin correo → reporte degradado + banner arriba.
+        # Se distingue un fallo IDENTIFICABLE de Ads/auth/red (token revocado, timeout, cuota)
+        # de una excepción INESPERADA (probable bug): el banner y el asunto cambian, para no
+        # enmascarar un bug de código como si fuera un token muerto.
+        exc_type = type(exc).__name__
+        if _is_ads_failure(exc):
+            logger.warning("monitor_send: Google Ads no disponible (%s), reporte degradado — %s", exc_type, exc)
+            ads_error = {"kind": "ads", "exc_type": exc_type}
+        else:
+            logger.warning("monitor_send: excepción INESPERADA (%s) al construir search terms, reporte degradado — %s", exc_type, exc)
+            ads_error = {"kind": "unexpected", "exc_type": exc_type}
+        payload = _degraded_search_terms_payload(date_range)
     context = _build_context(date_range, modo)
     context["generated_date"] = _fecha_humana()  # fecha de envío → asunto y encabezado
+    if ads_error:
+        context["ads_error"] = ads_error
     digest = build_monitor_digest(payload, context)
     subject = digest.get("subject_email")
     if marca.strip():
