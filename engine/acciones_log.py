@@ -77,6 +77,15 @@ def monitor_ya_enviado_hoy(fecha: str, path: str | None = None) -> bool:
     )
 
 
+def evento_ya_registrado_hoy(accion: str, fecha: str, path: str | None = None) -> bool:
+    """True si ya hay un evento (accion, fecha) con resultado 'ok' — dedupe genérico de avisos
+    (p. ej. alerta diaria de 'ads_auth_alert' para no mandar más de un correo por día)."""
+    return any(
+        r.get("accion") == accion and r.get("fecha") == fecha and r.get("resultado") == "ok"
+        for r in _leer(path)
+    )
+
+
 def terminos_dejados(path: str | None = None) -> list[str]:
     """Términos descartados con 'Dejar' (accion='dejar'). El log es la fuente writable en
     Cloud Run (el diccionario committeado es read-only). Sirve para no re-ofrecerlos."""

@@ -469,6 +469,9 @@ def build_monitor_digest(
         "status": "success",
         "source": "monitor_digest_v3",
         "read_only": True,
+        # Cuando Google Ads no responde, el endpoint pasa context['ads_error']; el renderer
+        # lo usa para pintar un banner de aviso arriba del correo (reporte degradado).
+        "ads_error": context.get("ads_error"),
         "date_range": search_terms_payload.get("date_range"),
         "generated_date": context.get("generated_date"),
         "links": context.get("links") or {},

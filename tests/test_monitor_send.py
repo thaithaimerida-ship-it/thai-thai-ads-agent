@@ -66,3 +66,29 @@ def test_send_marca_sufijo_asunto(client, setup):
     assert setup["subject"] == "S"                                  # sin marca → asunto tal cual
     client.post("/monitor/send?token=sec&force=true&marca=prueba%2014:32")
     assert setup["subject"] == "S · prueba 14:32"                   # marca → sufijo al asunto
+
+
+def test_send_degradado_cuando_ads_falla(client, setup, monkeypatch):
+    # Token de Google Ads muerto → el endpoint NO da 500: manda reporte degradado con ads_error.
+    cap = {}
+    def _raise(dr):
+        raise RuntimeError("No hay credenciales de Google Ads disponibles (env vars ni yaml)")
+    monkeypatch.setattr(M, "_build_search_terms_payload", _raise)
+    monkeypatch.setattr(M, "build_monitor_digest",
+                        lambda p, c: cap.update(c) or {"subject_email": "S", "html_email": "H", "text_email": "T"})
+    r = client.post("/monitor/send?token=sec&force=true")
+    assert r.status_code == 200 and r.json()["status"] == "sent"   # correo sale igual
+    assert cap.get("ads_error") == {"kind": "ads", "exc_type": "RuntimeError"}
+
+
+def test_send_degradado_excepcion_inesperada(client, setup, monkeypatch):
+    # Excepción NO de Ads (bug) → también degrada, pero marcada 'unexpected' (banner distinto).
+    cap = {}
+    def _raise(dr):
+        raise TypeError("boom: bug interno no relacionado con Ads")
+    monkeypatch.setattr(M, "_build_search_terms_payload", _raise)
+    monkeypatch.setattr(M, "build_monitor_digest",
+                        lambda p, c: cap.update(c) or {"subject_email": "S", "html_email": "H", "text_email": "T"})
+    r = client.post("/monitor/send?token=sec&force=true")
+    assert r.status_code == 200 and r.json()["status"] == "sent"
+    assert cap.get("ads_error") == {"kind": "unexpected", "exc_type": "TypeError"}

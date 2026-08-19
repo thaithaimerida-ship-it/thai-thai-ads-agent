@@ -532,6 +532,13 @@ async def snapshot_search_terms() -> dict:
         }
     except Exception as e:
         logger.error("snapshot-search-terms fallo: %s", e)
+        # Alerta proactiva: si el fallo es de auth de Google Ads (token revocado), avisar 1x/día.
+        # Nunca rompe el endpoint (alertar_si_auth_fallo se traga sus propias excepciones).
+        try:
+            from engine import ads_auth_alert
+            ads_auth_alert.alertar_si_auth_fallo(str(e))
+        except Exception:
+            pass
         return {"status": "error", "message": str(e), "snapshot_date": _yesterday}
 
 

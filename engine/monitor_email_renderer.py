@@ -730,10 +730,70 @@ def _html_document(title: str, body: str) -> str:
     )
 
 
+def _ads_error_banner_html() -> str:
+    """Banner rojo, ancho completo, ARRIBA del correo: reporte degradado por Google Ads caído."""
+    return (
+        '<div style="background:#7f1d1d;color:#ffffff;padding:16px 20px;border-radius:8px;'
+        'margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;line-height:1.5;">'
+        '<div style="font-size:16px;font-weight:bold;margin-bottom:4px;">'
+        '&#9888;&#65039; Google Ads no respondió — reporte incompleto</div>'
+        '<div style="font-size:14px;">Se omitieron las secciones de Google Ads '
+        '(campañas, términos de búsqueda, calidad de anuncios). El resto del reporte es válido.<br>'
+        '<strong>Acción:</strong> revisar el token de Google Ads (posible credencial revocada).</div>'
+        '</div>'
+    )
+
+
+def _ads_error_banner_text() -> str:
+    return (
+        "========================================\n"
+        "⚠️  GOOGLE ADS NO RESPONDIÓ — REPORTE INCOMPLETO\n"
+        "Se omitieron las secciones de Google Ads.\n"
+        "Acción: revisar el token de Google Ads (posible credencial revocada).\n"
+        "========================================"
+    )
+
+
+def _ads_unexpected_banner_html(exc_type: str) -> str:
+    """Banner naranja para una excepción INESPERADA (probable bug) — NO un token caído."""
+    tipo = exc_type or "desconocido"
+    return (
+        '<div style="background:#78350f;color:#ffffff;padding:16px 20px;border-radius:8px;'
+        'margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;line-height:1.5;">'
+        '<div style="font-size:16px;font-weight:bold;margin-bottom:4px;">'
+        f'&#9888;&#65039; Error inesperado al generar la sección de Ads: {tipo}</div>'
+        '<div style="font-size:14px;">Esto <strong>NO</strong> es un token caído — es una '
+        'excepción no prevista. Revisar el log del servicio (posible bug), no solo el token.</div>'
+        '</div>'
+    )
+
+
+def _ads_unexpected_banner_text(exc_type: str) -> str:
+    return (
+        "========================================\n"
+        f"⚠️  ERROR INESPERADO EN LA SECCIÓN DE ADS: {exc_type or 'desconocido'}\n"
+        "NO es un token caído — revisar el log del servicio (posible bug).\n"
+        "========================================"
+    )
+
+
 def render_monitor_email(digest: dict[str, Any], mode: str = "monday") -> dict[str, str]:
     # Contrato v6.2 (2026-06-12): un solo formato completo para lunes y viernes. El parámetro
     # `mode` se conserva por compatibilidad de firma pero ya no cambia el render.
     subject = build_subject_email(digest)
     body, text_lines = _render_full_html(digest)
+    # Reporte degradado: Google Ads caído → banner de aviso ARRIBA del todo + asunto inequívoco.
+    # Dos variantes: fallo identificable de Ads/auth vs. excepción inesperada (probable bug).
+    ads_error = digest.get("ads_error")
+    if ads_error:
+        exc_type = ads_error.get("exc_type", "") if isinstance(ads_error, dict) else ""
+        if isinstance(ads_error, dict) and ads_error.get("kind") == "unexpected":
+            subject = f"⚠️ {subject} · Error inesperado (Ads)"
+            body = _ads_unexpected_banner_html(exc_type) + body
+            text_lines = [_ads_unexpected_banner_text(exc_type), ""] + text_lines
+        else:
+            subject = f"⚠️ {subject} · Google Ads sin datos"
+            body = _ads_error_banner_html() + body
+            text_lines = [_ads_error_banner_text(), ""] + text_lines
     text_lines.append(FOOTER)
     return {"subject_email": subject, "html_email": _html_document(BRAND_TITLE, body), "text_email": "\n".join(text_lines)}
