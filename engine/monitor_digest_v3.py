@@ -475,7 +475,7 @@ def build_monitor_digest(
         "date_range": search_terms_payload.get("date_range"),
         "generated_date": context.get("generated_date"),
         "links": context.get("links") or {},
-        "pedidos_gloriafood_interno": context.get("pedidos_gloriafood_interno"),
+        "ventas_woocommerce": context.get("ventas_woocommerce"),
         "reservas_persist": context.get("reservas_persist"),
         "max_decisions": MAX_DECISIONS,
         "summary": summary,

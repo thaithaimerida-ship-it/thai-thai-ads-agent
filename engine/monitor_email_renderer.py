@@ -152,6 +152,41 @@ def _repair_block(message: str) -> str:
             f"padding:10px;font-size:12px;color:#8a5a1f;\">🔧 {_escape(message)}</div>")
 
 
+def _ventas_block(v: dict[str, Any], text: list[str]) -> str:
+    """Bloque '🛒 Ventas de la tienda' (WooCommerce): pedidos+total, ticket, semáforo,
+    desglose pago/tipo, comparativa semana previa y cancelados. Solo agregados (sin PII)."""
+    if v.get("data_broken"):
+        text.append("🛒 Ventas de la tienda: no disponible esta semana (fuente WooCommerce sin respuesta).")
+        return ("<div style=\"background:#E7F0FA;border-radius:6px;padding:8px 10px;margin-top:10px;\">"
+                "<div style=\"font-size:12px;color:#185FA5;\">🛒 Ventas de la tienda: no disponible esta "
+                "semana (fuente WooCommerce sin respuesta).</div></div>")
+    cur = v.get("semana_actual", {}) or {}
+    prev = v.get("semana_previa", {}) or {}
+    rango = v.get("rango", {}) or {}
+    n = int(cur.get("pedidos", 0)); pn = int(prev.get("pedidos", 0))
+    delta = n - pn
+    delta_txt = f"▲ +{delta}" if delta > 0 else (f"▼ {delta}" if delta < 0 else "= igual")
+    pago = " · ".join(f"{_escape(b['label'])} {b['n']}/{_money(b['total'])}" for b in cur.get("pago", [])) or "—"
+    tipo = " · ".join(f"{_escape(b['label'])} {b['n']}/{_money(b['total'])}" for b in cur.get("tipo", [])) or "—"
+    canc = int(cur.get("cancelados", 0))
+    titulo = f"🛒 Ventas de la tienda · últimos 7 días ({_text(rango.get('desde'))}–{_text(rango.get('hasta'))})"
+    linea1 = f"{v.get('semaforo','')} {n} pedidos · {_money_mxn(cur.get('total_mxn'))} · ticket {_money2(cur.get('ticket_mxn'))}"
+    linea2 = f"vs. semana previa: {pn} pedidos · {_money(prev.get('total_mxn'))} ({delta_txt} pedidos)"
+    text.extend([titulo, linea1, linea2, f"Pago: {pago}", f"Tipo: {tipo}"])
+    if canc:
+        text.append(f"Cancelados/reembolsados: {canc}")
+    return (
+        "<div style=\"background:#E7F0FA;border-radius:6px;padding:10px 12px;margin-top:10px;\">"
+        f"<div style=\"font-size:11px;color:#185FA5;font-weight:bold;\">{_escape(titulo)}</div>"
+        f"<div style=\"font-size:15px;font-weight:bold;color:#114277;margin-top:2px;\">{_escape(linea1)}</div>"
+        f"<div style=\"font-size:11.5px;color:#185FA5;margin-top:2px;\">{_escape(linea2)}</div>"
+        f"<div style=\"font-size:11.5px;color:#333;margin-top:6px;\">💵 Pago: {pago}</div>"
+        f"<div style=\"font-size:11.5px;color:#333;\">🛵 Tipo: {tipo}</div>"
+        + (f"<div style=\"font-size:11.5px;color:#b00020;margin-top:2px;\">✖ Cancelados/reembolsados: {canc}</div>" if canc else "")
+        + "</div>"
+    )
+
+
 # ── A1 header ────────────────────────────────────────────────────────────────
 def _header(digest: dict[str, Any], text: list[str]) -> str:
     period = _human_range(digest.get("date_range"))
@@ -160,17 +195,9 @@ def _header(digest: dict[str, Any], text: list[str]) -> str:
              f"<p style=\"font-size:12px;color:#777;margin:0;\">{_escape(TAGLINE)}</p>",
              f"<p style=\"font-size:10.5px;color:#999;margin:4px 0 0;\">{_escape(fecha)} · 3 min</p>"]
     text.extend([BRAND_TITLE, TAGLINE, f"{fecha} · 3 min", ""])
-    interno = digest.get("pedidos_gloriafood_interno")
-    if interno:
-        ventas = f"💰 Ventas registradas: {_int_text(interno.get('pedidos_7d'))} pedidos · {_money_mxn(interno.get('monto_mxn_7d'))}"
-        if interno.get("pedido_real_mxn") is not None:
-            ventas += f" · {_money(interno.get('pedido_real_mxn'))} por pedido real"
-        parts.append(
-            "<div style=\"background:#E7F0FA;border-radius:6px;padding:8px 10px;margin-top:10px;\">"
-            f"<div style=\"font-size:13px;font-weight:bold;color:#114277;\">{_escape(ventas)}</div>"
-            "<div style=\"font-size:11px;color:#185FA5;\">Registro interno GloriaFood, últimos 7 días</div></div>"
-        )
-        text.append(f"{ventas} (registro interno GloriaFood, últimos 7 días)")
+    ventas = digest.get("ventas_woocommerce")
+    if ventas:
+        parts.append(_ventas_block(ventas, text))
     parts.append("</div>")
     text.append("")
     return "".join(parts)
@@ -277,9 +304,6 @@ def _campaign_card(row: dict[str, Any]) -> str:
         f"<b style=\"color:#534AB7;\">📍 {_int_text(row.get('senales_locales'))} señales</b> "
         "<span style=\"font-size:10.5px;color:#999;\">(rutas, llamadas, menú)</span></p>"
     )
-    # CAMBIO 2: el bloque de pedidos vive en el header; aquí solo una línea tiny.
-    if row.get("pedidos_gloriafood_interno"):
-        parts.append("<p style=\"font-size:10.5px;color:#999;margin:6px 0 0;\">Pedidos no atribuibles por Google (GloriaFood) — ver ventas registradas arriba.</p>")
     sug_text, sug_kind = _suggestion(row)
     presupuesto = row.get("presupuesto_diario_mxn")
     presupuesto_txt = (_money(presupuesto) + "/día") if presupuesto is not None else "presupuesto sin dato"
