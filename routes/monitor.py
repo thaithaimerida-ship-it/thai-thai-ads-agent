@@ -18,7 +18,6 @@ from engine.monitor_sources import (
     build_search_console_context,
     build_seo_context,
     load_gbp_context_live,
-    load_gloriafood_internal,
 )
 from routes.analysis import VALID_DATE_RANGES, _build_search_terms_payload, _normalize_date_range
 
@@ -75,12 +74,15 @@ def _ctx_gbp() -> dict:
         return {"gbp": {"data_broken": True}, "reviews": {"data_broken": True}}
 
 
-def _ctx_gloriafood() -> dict:
+def _ctx_woocommerce() -> dict:
+    """Ventas reales de la tienda WooCommerce (read-only). Degrada con gracia: token/red caído
+    → data_broken y la sección sale 'no disponible' sin tumbar el correo. NUNCA loguea creds."""
     try:
-        interno = load_gloriafood_internal()
-        return {"pedidos_gloriafood_interno": interno} if interno else {}
-    except Exception:
-        return {}
+        from engine.woocommerce_sales import build_weekly_sales
+        return {"ventas_woocommerce": build_weekly_sales()}
+    except Exception as exc:
+        logger.warning("monitor context: ventas WooCommerce no disponibles — %s", type(exc).__name__)
+        return {"ventas_woocommerce": {"data_broken": True}}
 
 
 def _ctx_seo() -> dict:
@@ -153,7 +155,7 @@ def _build_context(date_range: str, mode: str) -> dict:
         "mode": "friday" if str(mode).strip().lower() == "friday" else "monday",
         "links": _links(),
     }
-    tareas = [_ctx_gbp, _ctx_gloriafood, _ctx_seo, _ctx_search_console, _ctx_reservas_persist,
+    tareas = [_ctx_gbp, _ctx_woocommerce, _ctx_seo, _ctx_search_console, _ctx_reservas_persist,
               _ctx_reservas, lambda: _ctx_ads(date_range)]
     with _cf.ThreadPoolExecutor(max_workers=len(tareas)) as ex:
         for fut in [ex.submit(t) for t in tareas]:

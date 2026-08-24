@@ -252,7 +252,8 @@ def test_load_gloriafood_internal_cuenta_7d(tmp_path):
     assert r["fuente"] == "registro interno (DB webhook)"
 
 
-def test_pedidos_gloriafood_interno_en_tarjeta_delivery():
+def test_ventas_woocommerce_reemplaza_gloriafood_en_header():
+    # Retirado GloriaFood del monitor (ago 2026): el header ahora muestra ventas de WooCommerce.
     ctx = _rich_context()
     ctx["campaign_metrics"] = [
         {"name": "Thai Mérida - Delivery", "spend_mxn": 485.0, "money_conversions": 0.0,
@@ -260,19 +261,24 @@ def test_pedidos_gloriafood_interno_en_tarjeta_delivery():
         {"name": "Thai Mérida - Local", "spend_mxn": 1230.0, "money_conversions": 0.0,
          "local_signals": 1593.0, "clicks": 200, "impressions": 8000, "daily_budget_mxn": 158.0},
     ]
-    ctx["pedidos_gloriafood_interno"] = {"pedidos_7d": 13, "monto_mxn_7d": 6910.0, "fuente": "registro interno (DB webhook)"}
+    ctx["ventas_woocommerce"] = {
+        "semana_actual": {"pedidos": 6, "total_mxn": 3734.0, "ticket_mxn": 622.33, "cancelados": 0,
+                          "pago": [{"label": "Efectivo", "n": 5, "total": 3266.0},
+                                   {"label": "PayPal", "n": 1, "total": 468.0}],
+                          "tipo": [{"label": "Domicilio", "n": 4, "total": 2283.0},
+                                   {"label": "Recoger", "n": 2, "total": 1451.0}]},
+        "semana_previa": {"pedidos": 4, "total_mxn": 3632.0},
+        "semaforo": "🔴", "meta_semana": 21, "rango": {"desde": "17/08", "hasta": "23/08"},
+    }
     digest = build_monitor_digest(_payload([_term(query="bankok casa thai", cost=44.0, clicks=35)]), ctx)
-    assert digest["pedidos_gloriafood_interno"]["pedidos_7d"] == 13
+    # El digest ya NO lleva la clave interna de GloriaFood; ahora lleva ventas_woocommerce.
+    assert "pedidos_gloriafood_interno" not in digest
+    assert digest["ventas_woocommerce"]["semana_actual"]["pedidos"] == 6
     html = digest["html_email"]
-    # CAMBIO 2: el $/pedido real vive en el header; el bloque azul de la tarjeta se eliminó.
-    assert "Ventas registradas: 13 pedidos · $6,910 MXN · $37 por pedido real" in html
-    assert "Pedidos no atribuibles por Google (GloriaFood) — ver ventas registradas arriba." in html
-    assert "Pedidos reales: 13" not in html  # bloque duplicado eliminado
-    # Internal register sits on the Delivery (Smart) card, not on Local.
-    delivery = [r for r in digest["campaign_rows"] if r["campaign_name"] == "Thai Mérida - Delivery"][0]
-    assert delivery["pedido_real_mxn"] == round(485.0 / 13, 2)  # gasto ÷ pedidos
-    local = [r for r in digest["campaign_rows"] if "Local" in r["campaign_name"]][0]
-    assert "pedidos_gloriafood_interno" not in local
+    assert "🛒 Ventas de la tienda" in html and "6 pedidos" in html and "🔴" in html
+    assert "Efectivo 5" in html and "Domicilio 4" in html
+    assert "vs. semana previa: 4 pedidos" in html
+    assert "GloriaFood" not in html  # renglón viejo jubilado
 
 
 def test_search_console_render_con_datos():

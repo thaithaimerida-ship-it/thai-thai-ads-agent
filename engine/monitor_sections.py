@@ -155,7 +155,6 @@ def enrich_campaign_rows(rows: list[dict[str, Any]], context: dict[str, Any] | N
     """Add the v6.2 campaign fields to already-built rows (additive, superset)."""
     context = context or {}
     budgets = context.get("campaign_budgets") or {}
-    interno = context.get("pedidos_gloriafood_interno")
     for row in rows:
         name = row.get("campaign_name") or ""
         meta = classify_campaign(name)
@@ -200,14 +199,6 @@ def enrich_campaign_rows(rows: list[dict[str, Any]], context: dict[str, Any] | N
             "nota_vigilancia": _watch_note(meta, money_conv, local, spend),
             "link_ads": (context.get("links") or {}).get("ads"),
         })
-        # GloriaFood internal register on the Delivery (Smart) card; $/pedido real
-        # se calcula desde su gasto y se expone también en el dict del header (CAMBIO 2).
-        if interno and meta["tipo"] == "smart" and meta["etiqueta_conversion"] == "pedidos":
-            row["pedidos_gloriafood_interno"] = interno
-            pedidos = _num(interno.get("pedidos_7d"))
-            pedido_real = round(spend / pedidos, 2) if pedidos > 0 else None
-            row["pedido_real_mxn"] = pedido_real
-            interno["pedido_real_mxn"] = pedido_real
     return rows
 
 
